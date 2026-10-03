@@ -14,6 +14,7 @@
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -b",
     "test": "npm run build && node --test tests/*.test.mjs",
+    "test:browser": "playwright test",
     "cf:types": "wrangler types"
   },
   "dependencies": {

@@ -1031,6 +1031,8 @@ kbd {
 }
 
 .bin-card {
+  text-align: left;
+  cursor: pointer;
   min-height: 190px;
   border: 1px solid var(--border);
   border-radius: 13px;
@@ -1038,6 +1040,59 @@ kbd {
   padding: 17px;
   box-shadow: var(--shadow);
   transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.bin-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.bin-detail { min-width: 0; }
+.detail-actions, .detail-badges, .detail-info, .detail-id, .editor-toolbar, .detail-footer {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.detail-actions { justify-content: space-between; margin-bottom: 24px; }
+.detail-heading { display: flex; justify-content: space-between; gap: 20px; }
+.detail-heading h1 { margin: 8px 0; font-size: 28px; overflow-wrap: anywhere; }
+.detail-heading p, .detail-info, .detail-footer p, .detail-form p, .bin-api p { color: var(--muted); font-size: 13px; }
+.detail-info { margin: 12px 0; }
+.detail-id { margin-bottom: 24px; }
+.detail-id code { overflow-wrap: anywhere; font-size: 12px; }
+.dirty-badge { border-radius: 99px; background: var(--accent-soft); color: var(--accent-text); padding: 5px 9px; font-size: 12px; }
+.detail-tabs { display: flex; gap: 6px; margin-top: 20px; overflow-x: auto; }
+.detail-tabs button { flex-shrink: 0; border: 0; background: transparent; padding: 12px 14px; cursor: pointer; border-bottom: 2px solid transparent; font-size: 13px; }
+.detail-tabs button[aria-selected="true"] { color: var(--accent-text); border-color: var(--accent); }
+.detail-tabs small { display: block; font-size: 9px; color: var(--muted); }
+.detail-tabs button:disabled { cursor: default; opacity: .5; }
+.detail-panel { margin-top: 12px; overflow: hidden; }
+.editor-toolbar { padding: 14px; border-bottom: 1px solid var(--border); }
+.editor-toolbar > span { margin-right: auto; font-size: 13px; font-weight: 600; }
+.detail-notice, .detail-error { padding: 12px 16px; border-radius: 8px; font-size: 13px; }
+.detail-notice { color: var(--success); background: var(--success-soft); }
+.detail-error { color: #c63d50; border: 1px solid currentColor; overflow-wrap: anywhere; }
+.detail-error button { margin-left: 12px; }
+.detail-form { display: grid; gap: 18px; max-width: 680px; padding: 24px; }
+.detail-form label { display: grid; gap: 8px; font-size: 13px; }
+.detail-form input, .detail-form textarea, .detail-form select {
+  width: 100%; border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px;
+  font: inherit; color: var(--text); background: var(--panel-solid);
+}
+.detail-form textarea { min-height: 88px; resize: vertical; }
+.detail-form input:focus, .detail-form textarea:focus, .detail-form select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.detail-form .primary-button { justify-self: start; }
+.detail-footer { margin-top: 24px; justify-content: space-between; }
+.danger-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid #c63d50; color: #c63d50; background: transparent; border-radius: 8px; padding: 10px 14px; cursor: pointer; font-size: 13px; }
+.danger-button:disabled, .primary-button:disabled, .secondary-button:disabled { opacity: .5; cursor: not-allowed; }
+.bin-api { padding: 24px; min-width: 0; }
+.bin-api pre { overflow-x: auto; background: var(--bg); padding: 16px; border-radius: 8px; font-size: 12px; }
+.detail-empty { padding: 24px; }
+.delete-dialog h2 { margin: 0 0 16px; }
+.delete-dialog p { line-height: 1.6; overflow-wrap: anywhere; }
+@media (max-width: 680px) {
+  .detail-heading { flex-direction: column; gap: 8px; }
+  .detail-heading h1 { font-size: 24px; }
+  .detail-form, .bin-api { padding: 16px; }
+  .detail-info { font-size: 11px; gap: 8px; }
+  .detail-id { gap: 8px; }
+  .detail-id code { flex-basis: 100%; }
+  .detail-tabs button { padding: 10px 9px; }
 }
 
 .bin-card:not(.skeleton):hover {

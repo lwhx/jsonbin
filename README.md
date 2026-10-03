@@ -34,7 +34,7 @@ The `main` branch currently has a deployable Cloudflare-native v3 foundation wit
 - GitHub Actions typecheck + production build
 - Cloudflare automatic deployment
 
-The next development target is the Bin detail page and JSON editor.
+The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. Local acceptance passes; CI and production deployment of these changes are pending. After P1 production acceptance, the next target is P2 version history, diff and restore.
 
 ## Local development
 
@@ -106,7 +106,15 @@ Local verification:
 ```bash
 npm run typecheck
 npm run build
+npm test
+npm run test:browser
 ```
+
+Browser tests start an isolated local Worker with disposable R2/KV and in-memory test credentials. They use system Chromium when available; otherwise install it with `npx playwright install chromium`. No Cloudflare production credentials or resources are used.
+
+In the cloud workspace, export `XDG_CONFIG_HOME=/workspace/.cloud-config` and `WRANGLER_SEND_METRICS=false` before Wrangler/Vite commands so tool state stays in a writable directory.
+
+Bin metadata is updated through `PATCH /api/v1/bins/:id/meta` with `If-Match` and a JSON object containing `name`, `description`, and/or `visibility`. Metadata updates preserve the JSON version. JSON saves use `PUT /api/v1/bins/:id`, reserve immutable version objects, and conditionally update canonical metadata; conflicts return 412. Orphan versions from failed concurrent writes are retained and their numbers are skipped on subsequent saves.
 
 ## Documentation
 

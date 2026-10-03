@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { BinDetailPage } from "./features/bins/BinDetailPage";
+import { binHash, binIdFromHash } from "./features/bins/navigation";
 
 type Health = {
   ok: boolean;
@@ -153,6 +155,8 @@ function App() {
       return data.authenticated ? data.user : null;
     },
     retry: false,
+    // A reconnect must not unmount an editor containing unsaved work.
+    refetchOnReconnect: false,
   });
 
   if (auth.isLoading) {
@@ -333,8 +337,26 @@ function AuthenticatedApp({
   onToggleTheme: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [section, setSection] = useState<Section>("Overview");
+  const [route, setRoute] = useState(() => window.location.hash);
+  const [detailDirty, setDetailDirty] = useState(false);
+  const section: Section = route.startsWith("#/bins") ? "Bins" : "Overview";
+  const binId = binIdFromHash(route);
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
+
+  useEffect(() => {
+    function changed() {
+      const next = window.location.hash;
+      if (next === route) return;
+      if (detailDirty && !window.confirm("还有未保存的内容，是否放弃修改并离开？")) {
+        window.history.replaceState(null, "", route || window.location.pathname);
+        return;
+      }
+      setDetailDirty(false); setRoute(next);
+    }
+    window.addEventListener("hashchange", changed);
+    return () => window.removeEventListener("hashchange", changed);
+  }, [route, detailDirty]);
 
   const health = useQuery({
     queryKey: ["system-health"],
@@ -367,12 +389,14 @@ function AuthenticatedApp({
   }, [health.data]);
 
   async function logout() {
+    if (detailDirty && !window.confirm("退出登录将丢弃未保存的修改，是否继续？")) return;
     await fetch("/api/v1/auth/logout", {
       method: "POST",
       credentials: "include",
     });
     queryClient.setQueryData(["auth-me"], null);
     queryClient.removeQueries({ queryKey: ["bins"] });
+    queryClient.removeQueries({ queryKey: ["bin"] });
   }
 
   const totalStorage =
@@ -474,7 +498,15 @@ function AuthenticatedApp({
         </header>
 
         <div className="content">
-          {section === "Overview" ? (
+          {binId ? (
+            <BinDetailPage key={binId} id={binId} dark={dark} onDirtyChange={setDetailDirty}
+              onBack={() => setSection("Bins")}
+              onDeleted={() => {
+                setDetailDirty(false);
+                window.history.pushState(null, "", "#/bins");
+                setRoute("#/bins");
+              }} />
+          ) : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
               binsLoading={bins.isLoading}
@@ -490,6 +522,7 @@ function AuthenticatedApp({
               loading={bins.isLoading}
               error={bins.isError}
               onCreate={() => setCreateOpen(true)}
+              onOpen={id => { window.location.hash = binHash(id); }}
             />
           )}
         </div>
@@ -498,10 +531,10 @@ function AuthenticatedApp({
       {createOpen && (
         <CreateBinDialog
           onClose={() => setCreateOpen(false)}
-          onCreated={async () => {
+          onCreated={async (id) => {
             setCreateOpen(false);
             await queryClient.invalidateQueries({ queryKey: ["bins"] });
-            setSection("Bins");
+            window.location.hash = binHash(id);
           }}
         />
       )}
@@ -644,11 +677,13 @@ function BinsPage({
   loading,
   error,
   onCreate,
+  onOpen,
 }: {
   bins: BinMeta[];
   loading: boolean;
   error: boolean;
   onCreate: () => void;
+  onOpen: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const filtered = bins.filter((bin) => {
@@ -703,7 +738,7 @@ function BinsPage({
       ) : filtered.length ? (
         <div className="bin-grid">
           {filtered.map((bin) => (
-            <article className="bin-card" key={bin.id}>
+            <button type="button" className="bin-card" key={bin.id} onClick={() => onOpen(bin.id)} aria-label={`打开数据仓 ${bin.name}`}>
               <div className="bin-card-top">
                 <div className="file-icon large">
                   <FileJson2 size={19} />
@@ -724,7 +759,7 @@ function BinsPage({
               </div>
 
               <div className="bin-id">{bin.id}</div>
-            </article>
+            </button>
           ))}
         </div>
       ) : (
@@ -750,7 +785,7 @@ function CreateBinDialog({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (id: string) => void;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -796,7 +831,8 @@ function CreateBinDialog({
         return;
       }
 
-      onCreated();
+      const created = await response.json() as { meta: BinMeta };
+      onCreated(created.meta.id);
     } catch {
       setError("无法连接 Worker API。");
     } finally {
@@ -876,7 +912,7 @@ function CreateBinDialog({
             </button>
             <button className="primary-button" type="submit" disabled={saving}>
               <Plus size={16} />
-              {saving ? "Creating…" : "新建数据仓"}
+              {saving ? "正在创建…" : "新建数据仓"}
             </button>
           </div>
         </form>
