@@ -8,6 +8,9 @@ import {
   listBins,
   updateBin,
   updateBinMetadata,
+  listBinVersions,
+  getBinVersion,
+  restoreBinVersion,
 } from "../storage/bins";
 
 type Variables = {
@@ -38,6 +41,46 @@ const metadataSchema = z.object({
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
 }).strict().refine((input) => Object.keys(input).length > 0);
+
+function parseVersion(value: string) {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const version = Number(value);
+  return Number.isSafeInteger(version) ? version : null;
+}
+
+app.get("/:id/versions", async (c) => {
+  const versions = await listBinVersions(c.env, c.req.param("id"));
+  if (!versions) return c.json({ error: "not_found" }, 404);
+  return c.json(versions);
+});
+
+app.get("/:id/versions/:version", async (c) => {
+  const version = parseVersion(c.req.param("version"));
+  if (version === null) return c.json({ error: "invalid_version" }, 422);
+  const record = await getBinVersion(c.env, c.req.param("id"), version);
+  if (!record) return c.json({ error: "not_found" }, 404);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(version));
+  return c.json(record);
+});
+
+app.post("/:id/versions/:version/restore", async (c) => {
+  const version = parseVersion(c.req.param("version"));
+  if (version === null) return c.json({ error: "invalid_version" }, 422);
+  const expectedEtag = c.req.header("If-Match");
+  if (!expectedEtag?.trim()) return c.json({ error: "precondition_required" }, 428);
+  try {
+    const record = await restoreBinVersion(c.env, c.req.param("id"), version, expectedEtag);
+    if (!record) return c.json({ error: "not_found" }, 404);
+    c.header("ETag", record.etag);
+    c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    return c.json(record);
+  } catch (error) {
+    if (error instanceof Error && error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
+    if (error instanceof Error && error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    throw error;
+  }
+});
 
 app.get("/", async (c) => {
   const items = await listBins(c.env);

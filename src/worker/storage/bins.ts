@@ -22,6 +22,17 @@ export type BinRecord = {
   etag: string;
 };
 
+export type BinVersionSummary = {
+  version: number;
+  createdAt: string;
+  size: number;
+};
+export type BinVersionRecord = BinVersionSummary & {
+  id: string;
+  value: unknown;
+  etag: string;
+};
+
 function metaKey(id: string) {
   return `bins/${id}/meta.json`;
 }
@@ -153,6 +164,43 @@ export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
     value: valueObject.value,
     etag: metaObject.etag,
   };
+}
+
+export async function listBinVersions(env: Env, id: string) {
+  const bucket = requireDataBucket(env);
+  const current = await getJson<BinMeta>(bucket, metaKey(id));
+  if (!current) return null;
+  const items: BinVersionSummary[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor });
+    for (const object of page.objects) {
+      const filename = object.key.split("/").pop()!;
+      if (!/^\d{6,}\.json$/.test(filename)) continue;
+      const version = Number(filename.slice(0, -5));
+      if (!Number.isSafeInteger(version) || version < 1 || object.key !== versionKey(id, version)) continue;
+      items.push({ version, createdAt: object.uploaded.toISOString(), size: object.size });
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return { items: items.sort((a, b) => b.version - a.version), currentVersion: current.value.currentVersion, total: items.length };
+}
+
+export async function getBinVersion(env: Env, id: string, version: number): Promise<BinVersionRecord | null> {
+  const bucket = requireDataBucket(env);
+  // Retained files of a deleted Bin are only accessible through future trash APIs.
+  if (!await bucket.head(metaKey(id))) return null;
+  const object = await bucket.get(versionKey(id, version));
+  if (!object) return null;
+  return { id, version, createdAt: object.uploaded.toISOString(), size: object.size,
+    value: await object.json(), etag: object.httpEtag };
+}
+
+export async function restoreBinVersion(env: Env, id: string, version: number, expectedEtag: string) {
+  const historical = await getBinVersion(env, id, version);
+  if (!historical) return null;
+  // Reuse conditional append and metadata CAS; restoration never overwrites history.
+  return updateBin(env, id, historical.value, expectedEtag);
 }
 
 export async function updateBin(

@@ -24,6 +24,55 @@ async function edit(page: Page, text: string) {
   await page.keyboard.press("ControlOrMeta+v");
 }
 
+test("删除确认限制键盘焦点，取消后恢复焦点，删除中保持弹窗", async ({ page }) => {
+  const record = await create(page);
+  const trigger = page.getByRole("button", { name: "删除数据仓", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "删除数据仓？" });
+  const cancel = dialog.getByRole("button", { name: "取消", exact: true });
+  const confirm = dialog.getByRole("button", { name: "确认删除", exact: true });
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(confirm).toBeFocused();
+  await page.getByRole("button", { name: "返回数据仓", exact: true }).evaluate(element => element.focus());
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await cancel.click();
+  await expect(trigger).toBeFocused();
+
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/v1/bins/${record.meta.id}`, async route => {
+    if (route.request().method() !== "DELETE") { await route.continue(); return; }
+    await gate;
+    await route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"internal_server_error"}' });
+  });
+  try {
+    await trigger.click();
+    await confirm.click();
+    await expect(dialog.getByRole("button", { name: "正在删除…" })).toBeDisabled();
+    await expect(dialog).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(dialog).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(dialog).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+  } finally { release(); }
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await expect(page.locator(".detail-error[role=alert]")).toBeVisible();
+  await page.unroute(`**/api/v1/bins/${record.meta.id}`);
+  expect((await page.request.delete(`/api/v1/bins/${record.meta.id}`)).status()).toBe(200);
+});
+
 test("详情页支持编辑、保存、刷新和元数据修改", async ({ page }) => {
   const record = await create(page);
   await edit(page, '{"saved":true}');
@@ -190,4 +239,109 @@ test("离开页面后完成的删除不能带走另一数据仓的草稿", async
   await expect(page).toHaveURL(new RegExp(second.meta.id));
   await expect(page.getByLabel("名称", { exact: true })).toHaveValue("保留第二份草稿");
   await expect(page.getByText("未保存", { exact: true })).toBeVisible();
+});
+
+test("历史版本支持查看、任意两版 Diff 和追加式恢复", async ({ page }) => {
+  const first = await create(page);
+  const path = `/api/v1/bins/${first.meta.id}`;
+  const secondResponse = await page.request.put(path, { headers: { "If-Match": first.etag }, data: { value: { changed: "second", added: true } } });
+  expect(secondResponse.status()).toBe(200);
+  const second = await secondResponse.json();
+  expect((await page.request.put(path, { headers: { "If-Match": second.etag }, data: { value: 0 } })).status()).toBe(200);
+  await page.reload();
+  await page.getByRole("tab", { name: "历史版本", exact: true }).click();
+  await expect(page.getByText("共 3 个版本 · 当前 v3", { exact: true })).toBeVisible();
+  const table = page.getByRole("table", { name: "已保存的版本" });
+  await expect(table.getByRole("row")).toHaveCount(4);
+  await expect(table).toContainText("B");
+  await page.getByLabel("原始版本", { exact: true }).selectOption("1");
+  await page.getByLabel("对比版本", { exact: true }).selectOption("2");
+  await page.getByText("查看 v1 的 JSON 内容", { exact: true }).click();
+  await expect(page.getByLabel("历史版本内容", { exact: true })).toContainText('"initial": true');
+  await expect(page.locator(".monaco-diff-editor")).toBeVisible();
+  await expect(page.locator(".monaco-diff-editor .view-lines")).toContainText(["initial", "changed"]);
+  await expect(page.locator(".monaco-diff-editor .line-delete, .monaco-diff-editor .char-delete").first()).toBeVisible();
+  await expect(page.locator(".monaco-diff-editor .line-insert, .monaco-diff-editor .char-insert").first()).toBeVisible();
+  await page.getByLabel("原始版本", { exact: true }).selectOption("3");
+  await expect(page.getByLabel("历史版本内容", { exact: true })).toHaveText("0");
+  await page.getByLabel("原始版本", { exact: true }).selectOption("1");
+  await page.getByLabel("对比版本", { exact: true }).selectOption("current");
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "恢复 v1", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("生成新版本 v4");
+  await expect(page.getByText("共 4 个版本 · 当前 v4", { exact: true })).toBeVisible();
+  const restored = await (await page.request.get(path)).json();
+  expect(restored.meta.currentVersion).toBe(4); expect(restored.value).toEqual(first.value);
+  expect((await (await page.request.get(path + '/versions/1')).json()).value).toEqual(first.value);
+  expect((await (await page.request.get(path + '/versions/2')).json()).value).toEqual(second.value);
+  await page.reload();
+  await page.getByRole("tab", { name: "历史版本", exact: true }).click();
+  await expect(page.getByText("共 4 个版本 · 当前 v4", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "切换明暗主题" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await expect(page.locator(".monaco-diff-editor")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await page.request.delete(path)).status()).toBe(200);
+});
+
+test("恢复取消和并发冲突保留草稿，确认后恢复为新版本", async ({ page }) => {
+  const first = await create(page);
+  const path = `/api/v1/bins/${first.meta.id}`;
+  await edit(page, '{"draft":true}');
+  await page.getByRole("tab", { name: "历史版本", exact: true }).click();
+  const restore = page.getByRole("button", { name: "恢复 v1", exact: true });
+  await expect(restore).toBeEnabled();
+  page.once("dialog", async dialog => { expect(dialog.message()).toContain("未保存"); await dialog.dismiss(); });
+  await restore.click();
+  expect((await (await page.request.get(path + '/versions')).json()).total).toBe(1);
+  const remote = await page.request.put(path, { headers: { "If-Match": first.etag }, data: { value: { remote: true } } });
+  expect(remote.status()).toBe(200);
+  page.once("dialog", dialog => dialog.accept());
+  await restore.click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("其他请求修改");
+  await expect(page.getByText("未保存", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("draft");
+  expect((await (await page.request.get(path)).json()).value).toEqual({ remote: true });
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "重新加载", exact: true }).click();
+  await expect(page.getByText("未保存", { exact: true })).not.toBeVisible();
+  await edit(page, '{"discard":true}');
+  await page.getByRole("tab", { name: "历史版本", exact: true }).click();
+  page.once("dialog", async dialog => { expect(dialog.message()).toContain("未保存"); await dialog.accept(); });
+  await restore.click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("生成新版本 v3");
+  await expect(page.getByText("未保存", { exact: true })).not.toBeVisible();
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("initial");
+  expect((await page.request.delete(path)).status()).toBe(200);
+});
+
+test("历史加载可重试，恢复网络失败、锁定和登录过期不丢弃草稿", async ({ page }) => {
+  const first = await create(page);
+  const path = `/api/v1/bins/${first.meta.id}`;
+  await edit(page, '{"draft":true}');
+  await page.route(`**${path}/versions`, route => route.abort("connectionfailed"));
+  await page.getByRole("tab", { name: "历史版本", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "历史版本" }).getByRole("alert")).toContainText("无法连接");
+  await page.unroute(`**${path}/versions`);
+  await page.getByRole("button", { name: "重试版本历史", exact: true }).click();
+  const restore = page.getByRole("button", { name: "恢复 v1", exact: true });
+  await expect(restore).toBeEnabled();
+  const restoreUrl = `**${path}/versions/1/restore`;
+  await page.route(restoreUrl, route => route.abort("connectionfailed"));
+  page.once("dialog", dialog => dialog.accept()); await restore.click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("无法连接");
+  await page.unroute(restoreUrl);
+  await page.route(restoreUrl, route => route.fulfill({ status: 423, contentType: "application/json", body: '{"error":"bin_locked"}' }));
+  page.once("dialog", dialog => dialog.accept()); await restore.click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("已锁定");
+  await page.unroute(restoreUrl);
+  await page.request.post("/api/v1/auth/logout");
+  page.once("dialog", dialog => dialog.accept()); await restore.click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("登录已过期");
+  await expect(page.getByText("未保存", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("draft");
 });

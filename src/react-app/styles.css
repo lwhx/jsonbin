@@ -1083,6 +1083,30 @@ kbd {
 .bin-api { padding: 24px; min-width: 0; }
 .bin-api pre { overflow-x: auto; background: var(--bg); padding: 16px; border-radius: 8px; font-size: 12px; }
 .detail-empty { padding: 24px; }
+.bin-history { padding: 20px; min-width: 0; }
+.history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.history-heading h2 { margin: 0; font-size: 18px; }
+.history-heading > span, .history-hint { color: var(--muted); font-size: 13px; }
+.history-table-wrap { overflow-x: auto; margin: 16px 0; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.history-table caption { text-align: left; padding-bottom: 8px; color: var(--muted); }
+.history-table th, .history-table td { padding: 10px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.history-table th span { color: var(--muted); font-weight: normal; }
+.history-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0; }
+.history-controls label { display: grid; gap: 6px; font-size: 13px; }
+.history-controls select { max-width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-solid); color: var(--text); }
+.history-controls select:focus { outline: 2px solid var(--accent); }
+.history-content { margin-bottom: 12px; font-size: 13px; }
+.history-content summary { cursor: pointer; padding: 10px 0; }
+.history-content pre { max-height: 320px; overflow: auto; padding: 12px; background: var(--bg); border-radius: 8px; }
+.history-diff-labels { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+.history-message { padding: 20px; }
+@media (max-width: 680px) {
+  .bin-history { padding: 12px; }
+  .history-controls label { flex: 1; min-width: 0; }
+  .history-controls select { width: 100%; }
+  .history-controls .primary-button { flex-basis: 100%; }
+}
 .delete-dialog h2 { margin: 0 0 16px; }
 .delete-dialog p { line-height: 1.6; overflow-wrap: anywhere; }
 @media (max-width: 680px) {

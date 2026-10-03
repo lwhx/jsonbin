@@ -1,13 +1,14 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, Save, Trash2, Braces, RefreshCw } from "lucide-react";
-import { BinApiError, getBin, removeBin, saveBin, saveBinMetadata } from "./api";
+import { BinApiError, getBin, removeBin, saveBin, saveBinMetadata, restoreBinVersion } from "./api";
 import { createDraft, isDirty, parseJson, receiveRecord, savedDraft } from "./editor-state";
 import type { Draft } from "./editor-state";
 import type { BinRecord, MetadataInput } from "./types";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
-type Tab = "编辑器" | "API" | "设置";
+const BinHistory = lazy(() => import("./BinHistory"));
+type Tab = "编辑器" | "历史版本" | "API" | "设置";
 function metadataOf(record: BinRecord): MetadataInput {
   const { name, description, visibility } = record.meta;
   return { name, description, visibility };
@@ -24,10 +25,11 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [metadata, setMetadata] = useState<MetadataInput | null>(null);
   const [tab, setTab] = useState<Tab>("编辑器");
-  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | null>(null);
+  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteDialog = useRef<HTMLDivElement>(null);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
   const dirty = Boolean(draft && (isDirty(draft) || metadataDirty));
 
@@ -44,6 +46,28 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     window.addEventListener("beforeunload", prevent);
     return () => window.removeEventListener("beforeunload", prevent);
   }, [dirty]);
+  useEffect(() => {
+    if (!deleteOpen) return;
+    const dialog = deleteDialog.current;
+    if (!dialog) return;
+    const previousFocus = document.activeElement;
+    const focusInside = () => {
+      const button = dialog.querySelector<HTMLButtonElement>("button:not(:disabled)");
+      (button ?? dialog).focus();
+    };
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !dialog.contains(event.target)) focusInside();
+    };
+    focusInside();
+    document.addEventListener("focusin", containFocus);
+    return () => {
+      document.removeEventListener("focusin", containFocus);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [deleteOpen]);
+  useEffect(() => {
+    if (deleteOpen && busy === "delete") deleteDialog.current?.focus();
+  }, [deleteOpen, busy]);
 
   function report(caught: unknown) { setError(caught instanceof Error ? caught : new Error("操作失败，请稍后重试。")); }
   async function refresh() {
@@ -89,6 +113,23 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       setMetadata(metadataOf(record)); client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
       setNotice("设置保存成功，JSON 版本保持不变。");
+    } catch (caught) { report(caught); } finally { setBusy(null); }
+  }
+  async function restore(version: number) {
+    if (!draft || busy || draft.record.meta.locked) return;
+    if (!window.confirm(`将 v${version} 的内容恢复为新的最新版本？${dirty ? "未保存的 JSON 和设置修改将被丢弃。" : "已有历史版本不会改变。"}`)) return;
+    setBusy("restore"); setError(null); setNotice("");
+    try {
+      await client.cancelQueries({ queryKey: ["bin", id] });
+      const record = await restoreBinVersion(id, version, draft.record.etag);
+      if (!mounted.current) return;
+      await client.cancelQueries({ queryKey: ["bin", id] });
+      if (!mounted.current) return;
+      setDraft(createDraft(record)); setMetadata(metadataOf(record));
+      client.setQueryData(["bin", id], record);
+      await client.invalidateQueries({ queryKey: ["bins"] });
+      await client.invalidateQueries({ queryKey: ["bin-versions", id] });
+      setNotice(`已恢复 v${version}，生成新版本 v${record.meta.currentVersion}。`);
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
   async function confirmDelete() {
@@ -140,7 +181,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </div>}
     <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
       {(["编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item => {
-        const disabled = item === "树形视图" || item === "历史版本";
+        const disabled = item === "树形视图";
         return <button key={item} type="button" role="tab" aria-selected={tab === item} disabled={disabled}
           onClick={() => !disabled && setTab(item as Tab)}>{item}{disabled && <small>即将推出</small>}</button>;
       })}
@@ -157,6 +198,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
           <JsonEditor value={draft.text} onChange={text => { setDraft(previous => previous ? { ...previous, text } : previous); setNotice(""); }} readOnly={locked || Boolean(busy)} dark={dark} />
         </Suspense>
       </>}
+      {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
+        <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
+      </Suspense>}
       {tab === "API" && <div className="bin-api"><h2>此数据仓的 API</h2><p>当前使用管理界面的 Session 认证；外部 API Key 调用将在后续阶段提供。</p>
         <pre>{`GET ${apiUrl}\n\nPUT ${apiUrl}\nContent-Type: application/json\nIf-Match: ${record.etag}\n\n${JSON.stringify({ value: record.value }, null, 2)}`}</pre>
         <p>写入成功生成新版本；ETag 过期返回 412，锁定返回 423。</p></div>}
@@ -170,10 +214,22 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </div>
     <footer className="detail-footer"><p>删除后元数据移入回收站，历史版本保留。</p>
       <button type="button" className="danger-button" onClick={() => setDeleteOpen(true)} disabled={Boolean(busy)}><Trash2 size={15} />删除数据仓</button></footer>
-    {deleteOpen && <div className="dialog-backdrop"><div className="dialog delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title"
-      onKeyDown={event => { if (event.key === "Escape" && !busy) setDeleteOpen(false); }}>
+    {deleteOpen && <div className="dialog-backdrop"><div ref={deleteDialog} tabIndex={-1} className="dialog delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title"
+      onKeyDown={event => {
+        if (event.key === "Escape" && !busy) { event.preventDefault(); setDeleteOpen(false); }
+        if (event.key !== "Tab") return;
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+        const first = buttons[0];
+        const last = buttons.at(-1);
+        if (!first) { event.preventDefault(); event.currentTarget.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
+          event.preventDefault(); last!.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) {
+          event.preventDefault(); first.focus();
+        }
+      }}>
       <h2 id="delete-title">删除数据仓？</h2><p>“{record.meta.name}”将移入回收站。{dirty && "未保存的修改将被丢弃。"}</p>
-      <div className="dialog-actions"><button autoFocus type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => setDeleteOpen(false)}>取消</button>
+      <div className="dialog-actions"><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => setDeleteOpen(false)}>取消</button>
         <button type="button" className="danger-button" disabled={Boolean(busy)} onClick={confirmDelete}>{busy === "delete" ? "正在删除…" : "确认删除"}</button></div>
     </div></div>}
   </section>;

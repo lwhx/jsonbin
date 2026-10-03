@@ -34,7 +34,7 @@ The `main` branch currently has a deployable Cloudflare-native v3 foundation wit
 - GitHub Actions typecheck + production build
 - Cloudflare automatic deployment
 
-The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. Local acceptance passes; CI and production deployment of these changes are pending. After P1 production acceptance, the next target is P2 version history, diff and restore.
+The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. P2 adds version history, read-only comparison of any two versions and restoration into a new immutable version. Local acceptance passes; CI, production deployment and production acceptance of these changes are pending.
 
 ## Local development
 
@@ -115,6 +115,8 @@ Browser tests start an isolated local Worker with disposable R2/KV and in-memory
 In the cloud workspace, export `XDG_CONFIG_HOME=/workspace/.cloud-config` and `WRANGLER_SEND_METRICS=false` before Wrangler/Vite commands so tool state stays in a writable directory.
 
 Bin metadata is updated through `PATCH /api/v1/bins/:id/meta` with `If-Match` and a JSON object containing `name`, `description`, and/or `visibility`. Metadata updates preserve the JSON version. JSON saves use `PUT /api/v1/bins/:id`, reserve immutable version objects, and conditionally update canonical metadata; conflicts return 412. Orphan versions from failed concurrent writes are retained and their numbers are skipped on subsequent saves.
+
+Version history is available through `GET /api/v1/bins/:id/versions` and `GET /api/v1/bins/:id/versions/:version`. Lists include all retained version objects, including orphans, with R2 upload timestamps and stored file sizes. `POST /api/v1/bins/:id/versions/:version/restore` appends the selected value as a new version while preserving current metadata. Send the current Bin ETag in `If-Match`, rather than the historical object's ETag; missing preconditions return 428, stale ETags return 412 and locked Bins return 423. These endpoints require a signed session and cannot read deleted Bins. See the detail page's history tab for JSON viewing and Diff.
 
 ## Documentation
 
