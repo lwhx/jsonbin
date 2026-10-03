@@ -1,0 +1,12 @@
+export type ExampleLanguage = 'curl' | 'javascript' | 'python';
+export type DocAuth = 'none' | 'session' | 'resource';
+export type EtagPolicy = 'none' | 'optional' | 'required' | 'conditional';
+export type DocScope = 'bin:read' | 'bin:create' | 'bin:update' | 'bin:delete' | 'collection:read' | 'collection:write' | 'schema:read' | 'schema:write' | 'history:read';
+export type DocSection = { id: string; title: string; introduction: string[] };
+export type DocError = { status: number; code: string; meaning: string; recovery: string };
+export type DocOperation = { id: string; sectionId: string; title: string; method: 'GET'|'POST'|'PUT'|'PATCH'|'DELETE'; path: string;
+  auth: DocAuth; scopes: readonly DocScope[]; etag: EtagPolicy; publicRead: boolean; description: string; requestFields: string;
+  responseShape: string; successStatus: number; body?: unknown };
+export type ExampleContext = { origin: string; binId?: string; etag?: string; collectionId?: string; schemaId?: string; keyId?: string;
+  version?: number; pathSegments?: string[]; anonymous?: boolean };
+export type ExampleRequest = { method: DocOperation['method']; url: string; headers: Record<string,string>; body?: unknown; credentials?: 'include' };
