@@ -5,6 +5,7 @@ test.beforeEach(async({page})=>{
 test('文档导航刷新三语言复制与移动端深色',async({page})=>{
   await page.goto('/'); const nav=page.getByRole('button',{name:'API 文档',exact:true});await expect(nav).toBeEnabled();await nav.click();await expect(page).toHaveURL(/#\/docs$/);
   await expect(page.locator('.docs-page')).toContainText('ETag 与并发更新');await expect(page.locator('.docs-page')).toContainText('Schema API');
+  await expect(page.locator('.docs-page')).toContainText('/value/a~1b/x~0y/');
   await page.context().grantPermissions(['clipboard-read','clipboard-write']);
   for(const language of ['curl','javascript','python']){
     await page.getByLabel('示例语言',{exact:true}).selectOption(language);
@@ -45,4 +46,16 @@ test('Bin API 只展示演示 JSON，动态状态刷新并保留草稿和离页�
   const remote=await page.request.put(path,{headers:{'If-Match':saved.etag},data:{value:{other:marker}}});expect(remote.status()).toBe(200);const changed=await remote.json();
   await page.getByRole('button',{name:'重新加载',exact:true}).click();await expect(panel).toContainText(changed.etag);await expect(panel).not.toContainText(marker);
   await page.getByRole('tab',{name:'设置',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('新草稿');page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'API 文档',exact:true}).click();await expect(page).toHaveURL(/#\/docs$/);
+});
+test('JSON 草稿在 API 页签往返保持，移动端示例和复制不泄露内容',async({page})=>{
+  const saved='stored-'+crypto.randomUUID(),draft='draft-'+crypto.randomUUID();
+  const bin=await(await page.request.post('/api/v1/bins',{data:{name:'JSON 草稿',value:{secret:saved}}})).json();
+  await page.goto('/#/bins/'+bin.meta.id);await expect(page.locator('.monaco-editor')).toBeVisible();
+  await page.context().grantPermissions(['clipboard-read','clipboard-write']);await page.evaluate(text=>navigator.clipboard.writeText(text),JSON.stringify({secret:draft}));
+  await page.getByRole('textbox',{name:'JSON 编辑器',exact:true}).focus();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.press('ControlOrMeta+v');
+  await expect(page.locator('.dirty-badge')).toBeVisible();await page.getByRole('tab',{name:'API',exact:true}).click();const panel=page.getByRole('tabpanel');
+  await expect(panel).not.toContainText(saved);await expect(panel).not.toContainText(draft);await panel.locator('.code-example').first().getByRole('button',{name:'复制代码',exact:true}).click();
+  const code=await page.evaluate(()=>navigator.clipboard.readText());expect(code).not.toContain(saved);expect(code).not.toContain(draft);
+  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'切换明暗主题'}).click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.getByRole('tab',{name:'编辑器',exact:true}).click();await expect(page.locator('.monaco-editor')).toContainText(draft);await expect(page.getByRole('button',{name:'保存 JSON',exact:true})).toBeEnabled();
 });

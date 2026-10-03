@@ -9,6 +9,7 @@ import { listCollections } from "../collections/api";
 
 import { listSchemas } from "../schemas/api";
 import { SchemaIssues } from "../schemas/SchemaIssues";
+import { BinApiPanel } from "../docs/BinApiPanel";
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
@@ -232,13 +233,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
         <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
       </Suspense>}
-      {tab === "API" && <div className="bin-api"><h2>此数据仓的 API</h2><p>网页登录使用 Session；外部调用请创建 API 密钥并发送 Authorization: Bearer Token。读取需 bin:read，更新需 bin:update；历史读取需 history:read，恢复需同时有 bin:update 和 history:read。</p>
-        <p>{record.meta.visibility === "public" ? "此数据仓已公开：任何持有 API 地址的人都能匿名读取当前内容及元数据。列表、历史版本和写入仍需认证。" : "此数据仓为私有：所有读取都需要 Session 或对应 Scope 的 API 密钥。"}</p>
-        <pre>{`GET ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\n\nPUT ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/json\nIf-Match: ${record.etag}\n\n${JSON.stringify({ value: record.value }, null, 2)}`}</pre>
-        <h3>局部更新与路径访问</h3>
-        <pre>{`PATCH ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/merge-patch+json\nIf-Match: ${record.etag}\n\n{"settings":{"theme":"dark"}}\n\nGET ${apiUrl}/value/settings/theme\nAuthorization: Bearer <你的 API 密钥>\n\nPUT ${apiUrl}/value/settings/theme\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/json\nIf-Match: <重新读取后的 ETag>\n\n{"value":"light"}`}</pre>
-        <p>Merge Patch 中 null 删除对象字段，数组整体替换。路径使用 JSON Pointer 转义（/ → ~1、~ → ~0），数组从 0 开始，末尾 - 可追加；父节点必须存在。/value 读写整个 JSON。</p>
-        <p>JSON 写入成功生成新版本；局部写入缺少 If-Match 返回 428，ETag 过期返回 412，锁定返回 423，Scope 不足返回 403，JSON 不符合绑定模型返回 422。</p></div>}
+      {tab === "API" && <BinApiPanel bin={{id: record.meta.id, etag: record.etag, visibility: record.meta.visibility, locked: record.meta.locked, expiresAt: record.meta.expiresAt}} />}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>
         <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={localDateTime(metadata.expiresAt)} disabled={Boolean(busy) || locked}
           onChange={event => setMetadata({ ...metadata, expiresAt: expiryFromInput(event.target.value) })} /></label>
