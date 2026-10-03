@@ -5,6 +5,9 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=
 SESSION_SECRET=
 
+# Optional API key digest pepper (at least 32 characters; keep stable)
+TOKEN_PEPPER=
+
 # Optional GitHub OAuth login
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=

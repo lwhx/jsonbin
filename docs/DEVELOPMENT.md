@@ -45,7 +45,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
-| API 密钥 | ⬜ 未开始 | 只有导航占位 |
+| API 密钥 | ✅ 本地验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；CI 与 Workers Builds 待核实 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | 回收站 | ⬜ 未开始 | 后端有最基础 trash 写入，无 UI/恢复 |
@@ -165,6 +165,7 @@ SESSION_SECRET
 - ADMIN_USERNAME：普通变量。
 - ADMIN_PASSWORD：Cloudflare Secret。
 - SESSION_SECRET：Cloudflare Secret，至少 32 个字符。
+- TOKEN_PEPPER：可选 Cloudflare Secret，至少 32 个字符；用于新密钥 HMAC 摘要，需保持稳定。缺省/留空时使用 SHA-256；详细轮换行为见 P5。
 
 APP_ORIGIN 可选；正式绑定固定域名后建议填写。
 
@@ -511,7 +512,7 @@ GET    /api/v1/collections/:id/bins
 
 - 集合与成员关系均以 R2 为权威数据源。列表和详情从活动 Bin 元数据计算数量，不依赖 KV 计数。
 - 创建/编辑支持名称（trim 后 1–160 字符）与描述（不超过 1000 字符）；名称可以重复。slug 创建时由 UUID 生成，保持唯一且稳定，不随改名变化，也不支持手动修改。
-- 集合读取/修改响应包含 ETag；PATCH 和 DELETE 必须提供 `If-Match`，缺少返回 428、过期返回 412。所有集合接口需要 Session，未登录返回 401。
+- 集合读取/修改响应包含 ETag；PATCH 和 DELETE 必须提供 `If-Match`，缺少返回 428、过期返回 412。管理界面使用 Session；P5 起外部调用可使用对应 Scope 的 Bearer Token，未认证返回 401。
 - 新建 Bin 可以提供 `collectionId`；现有 Bin 通过 `PATCH /api/v1/bins/:id/meta` 设置 `collectionId` 为目标 UUID，或设为 null 移出。操作只修改元数据，不改变 JSON 或版本号；不存在或正在删除的集合返回 409。
 - 集合删除先将状态设为 deleting 并阻止新成员加入，再逐个条件更新 Bin 的 collectionId；只解除关联，不删除 Bin 或版本文件，也不改变数据锁。最终记录 deleted 标记，列表/详情不再展示该集合。
 - R2 多对象操作不能原子提交，删除中断时 deleting 记录仍可在列表打开，使用“重试删除集合”继续清理。重复删除已完成的集合成功返回，不重新创建集合。
@@ -548,7 +549,7 @@ schemas/
 
 `meta.json` 包含 id、name、description、currentRevision、createdAt、updatedAt 和 status。修订对象条件创建且不可覆盖，meta 条件更新；并发失败的孤立修订保留，后续写入跳过已占用编号。模型编辑产生新修订，已有 Bin 不会自动改变约束。删除将 status 设为 deleted，保留所有修订；列表/详情隐藏已删除模型，已有绑定仍可按原修订校验、写入和恢复。
 
-API（均需 Session；未登录返回 401）：
+API（管理界面使用 Session；P5 支持对应 Scope 的 Bearer Token，未认证返回 401）：
 
 ~~~text
 GET    /api/v1/schemas
@@ -613,47 +614,102 @@ Bin 绑定规则：
 
 ## P5 API 密钥与外部 API 认证
 
+状态：✅ 后端、界面及本地验收完成；GitHub CI / Workers Builds 待推送后核实，生产功能验收待确认。
+
 Token 格式：
 
 ~~~text
-jb_live_<random>
+jb_live_<UUID去掉连字符>_<32随机字节的Base64URL>
 ~~~
 
-安全规则：
+UUID 是公开的查找标识，不参与秘密强度；后缀含 256 位随机秘密。认证时直接读取 `keys/<UUID>/meta.json`，不依赖 KV 或扫描全部密钥。
 
-- Token 明文只展示一次。
-- R2 永远不保存完整明文 Token。
-- 保存 Token digest。
-- 建议加入 TOKEN_PEPPER Secret。
-- 日志禁止输出 Authorization Header。
-
-初始权限范围：
+R2：
 
 ~~~text
-bin:read
-bin:create
-bin:update
-bin:delete
-collection:read
-collection:write
-schema:read
-schema:write
-history:read
+keys/
+  <keyId>/
+    meta.json
+~~~
+
+保存 id、name、prefix、scopes、createdAt、expiresAt、revokedAt、lastUsedAt、digest 和 digestAlgorithm。prefix 只含 Token 类型与 UUID 前八位，不含随机秘密。明文不进入 R2、KV、日志、浏览器 localStorage/sessionStorage 或 React Query 缓存。
+
+摘要与配置：
+
+- 默认/空 `TOKEN_PEPPER` 使用 SHA-256 摘要，随机秘密保持 256 位；建议通过 `wrangler secret put TOKEN_PEPPER` 配置至少 32 字符的 Secret，以 HMAC-SHA-256 创建新密钥。
+- digestAlgorithm 在每个密钥上持久化，添加 Pepper 不会使此前 SHA-256 密钥失效。更改或移除 Pepper 会让此前 HMAC 密钥无法认证；轮换前应准备替换密钥，再撤销旧密钥。已撤销状态不会随 Pepper 配置恢复。
+- 非空但不足 32 字符的 Pepper 会阻止创建，返回 503 `key_service_unavailable`。管理 Session 不受 Pepper 变更影响。
+- 摘要使用常量时间比较。日志禁止输出 Authorization、完整 Token 或 Pepper；现有异常日志只包含错误消息、路径和方法。
+
+管理 API（只允许 Session；Token 不能管理密钥或获得登录 Session）：
+
+~~~text
+GET    /api/v1/keys
+POST   /api/v1/keys
+DELETE /api/v1/keys/:id
+~~~
+
+创建请求：
+
+~~~json
+{"name":"自动化只读","scopes":["bin:read","history:read"],"expiresAt":null}
+~~~
+
+- name trim 后 1–160 字符。scopes 至少一项，只允许下表九种权限，不允许重复。expiresAt 可以省略、设为 null，或指定未来的带时区 ISO 时间；未知字段拒绝，输入错误返回 422。
+- 创建返回 201 `{key, token}`；明文只在该次响应及当前提示中显示，关闭提示、刷新或离开页面后不可重新获取。
+- 列表返回 `{items, total}`，包括有效、已过期和已撤销记录。撤销返回 `{key}`；所有公开 key 对象均剔除 digest、digestAlgorithm 和明文，响应均为 `Cache-Control: no-store`。
+- DELETE 为幂等的软撤销，保留首次 revokedAt；不存在的 UUID 返回 404。管理接口收到任何 Authorization 头时返回 401 `session_required`，即使同时提供 Cookie，也不会把 Bearer 权限升级为密钥管理权限。
+- 最后使用时间记录通过 Scope 检查的认证请求（包括后续业务校验失败/404 的请求）；格式错误、Scope 不足、过期或撤销的请求不更新它。认证和撤销均以 R2 条件写入保护，冲突重读时再次验证摘要、权限及失效状态，无法覆盖撤销记录；争用重试耗尽分别返回认证服务 503 或管理操作 409。
+- 每次外部请求都读取权威 R2 记录，撤销/过期无 KV 缓存延迟。已完成授权检查的在途请求可能继续完成，撤销后的新授权失败。
+
+Bearer 权限规则：
+
+- 使用 Cookie 的 Session 写请求若携带 Origin，必须匹配 APP_ORIGIN 或当前请求 origin，否则返回 403 `origin_not_allowed`。不携带 Origin 的可信脚本 Session 请求保留原行为；显式 Bearer 调用按 Scope 授权，不使用 Cookie 的来源规则。
+- Worker 收到 Authorization 请求头时，优先检查 Bearer 凭据；无效/撤销/过期 Token 返回 401 与 `WWW-Authenticate`，不回退 Cookie。没有 Authorization 时保留现有 Session 认证。
+- Scope 不足返回 403 `insufficient_scope` 与 requiredScopes，并提供对应认证响应头。Session 管理员可使用全部已有资源接口。
+- 权限作用于单用户仓库的全部对应资源，当前没有按 Bin/集合 ID 限制的子权限。新资源路由必须显式使用 `requireAccess(...)`，并加入 Scope 验收矩阵。
+
+| Scope | 允许的现有接口 |
+| --- | --- |
+| bin:read | Bin 列表、当前 JSON/元数据详情 |
+| bin:create | 新建 Bin（含可选集合、模型绑定） |
+| bin:update | 更新 JSON、修改元数据/绑定/锁定；恢复历史还需 history:read |
+| bin:delete | 删除 Bin |
+| collection:read | 集合列表/详情；集合内 Bin 列表还需 bin:read |
+| collection:write | 集合创建、修改、删除（只解除成员关联） |
+| schema:read | 模型列表/详情、JSON 样本校验 |
+| schema:write | 模型创建、替换、删除 |
+| history:read | 历史列表/版本内容；恢复还需 bin:update |
+
+外部调用继续复用现有 ETag、数据锁、模型锁、固定模型修订和历史恢复校验。集合/模型修改或删除、历史恢复仍必须携带 If-Match；Bin 写入继承既有 If-Match 行为。历史接口仍不能读取已删除 Bin。密钥有效不授予绕过业务约束的能力。
+
+调用示例（把 origin 和 Token 保存在环境变量中）：
+
+~~~bash
+curl "$JSONBIN_ORIGIN/api/v1/bins" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN"
 ~~~
 
 功能：
 
-- [ ] 创建 API Key
-- [ ] 一次性显示明文
-- [ ] 复制
-- [ ] 命名
-- [ ] 设置 Scope
-- [ ] 设置过期时间
-- [ ] 撤销
-- [ ] 最后使用时间
-- [ ] Bearer Token 中间件
+- [x] 创建 API Key 与命名
+- [x] 一次性显示明文、复制、关闭提示后清除
+- [x] 设置 Scope（默认只选 bin:read）
+- [x] 设置未来过期时间或永不过期
+- [x] 撤销、幂等重试及并发状态保护
+- [x] 最后使用时间、有效/过期/撤销状态
+- [x] Bearer Token 中间件及所有现有资源路由 Scope 校验
+- [x] 手机/深色界面、草稿/未保存密钥导航保护及错误重试
 
-P5 完成后，JSONBin 才正式具备脚本/自动化工具调用能力。
+本地验收进度（2026-10-03）：
+
+- 类型检查、生产构建通过。
+- Worker/客户端测试 48 项通过，0 失败、0 跳过。覆盖 21 条资源路由与九种单独 Scope 的矩阵、组合权限、密钥管理隔离、摘要/明文不落盘、HMAC/Pepper 轮换与 SHA 兼容、过期/撤销、并发认证不复活密钥、业务锁/ETag/模型校验，Cookie 写请求 Origin 校验，以及直接入口的空 Authorization 处理。运行时 HTTP 传输会移除空头，所以原始空头另通过构建后的入口验证。
+- Chromium 浏览器验收 23 项通过，0 失败、0 跳过；新增一次性显示/复制与刷新清除、权限与期限保存、最后使用/撤销/过期、未保存内容导航保护，以及创建/列表/撤销的网络和 Session 错误重试。
+- GitHub CI、Workers Builds：待功能提交推送后核实。
+- 生产功能验收：待确认，不将本地测试或构建成功等同于生产数据操作已验收。
+
+P5 完成后，JSONBin 具备脚本/自动化工具调用能力；后续 P6 的新读写路径必须继续检查 Scope 并复用同一业务约束。
 
 ---
 
@@ -668,7 +724,7 @@ P5 完成后，JSONBin 才正式具备脚本/自动化工具调用能力。
 - [x] Schema 锁 schemaLocked（P4 已实现；P6 新写入路径需复用同一校验）
 - [ ] Public/Private 真正生效
 - [ ] public Bin 无登录只读
-- [ ] private Bin 必须 Session 或 API Key
+- [x] private Bin 必须 Session 或 API Key（P5 已实现当前接口；P6 新路由需继续校验）
 
 计划 API：
 
@@ -830,7 +886,7 @@ summary:dashboard
 - [ ] R2 storage 测试
 - [ ] ETag 并发测试
 - [ ] Session 测试
-- [ ] API Key Scope 测试
+- [x] API Key Scope 测试（P5 当前接口全矩阵；后续新增接口需扩展）
 - [ ] Schema 校验测试
 - [ ] Trash/Restore 测试
 - [ ] npm run typecheck 通过
@@ -883,6 +939,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P4 数据模型 / JSON Schema 已完成本地开发、验收及 CI，下一阶段为 **P5 API 密钥与外部 API 认证**。P1 / P2 / P3 / P4 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
+P5 API 密钥与外部 API 认证已完成本地开发和验收，下一阶段为 **P6 高级 Bin API**。P5 的 CI 与 Workers Builds 等待本次功能提交核实；P1 / P2 / P3 / P4 的成功状态已确认。生产功能验收单独保留待确认状态。
 
-后续 P5 为现有 Bin、集合和模型接口增加带 scope 的外部认证，并继续复用 R2 条件写入、固定模型修订和模型锁校验。API Key 明文只在创建时展示一次，R2 仅保存摘要；生产功能验收仍单独记录。
+后续 P6 实现 JSON Merge Patch、深层路径访问、数据锁管理及公开/私有访问策略，所有新增写入继续复用 Scope、R2 条件写入、固定模型修订和模型锁校验。

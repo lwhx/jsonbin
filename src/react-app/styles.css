@@ -1312,3 +1312,18 @@ kbd {
 .detail-form .schema-checkbox input, .create-form .schema-checkbox input { width: 16px; height: 16px; min-height: 0; padding: 0; flex-shrink: 0; }
 .schema-issues { margin: 12px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
 .schema-issues li + li { margin-top: 6px; }
+
+.keys-page { display: grid; gap: 20px; }
+.key-scopes { display: grid; gap: 12px; margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.key-scopes legend { padding: 0 6px; font-size: 13px; }
+.key-scopes code { color: var(--muted); font-size: 12px; }
+.key-list { padding: 0; margin: 16px 0 0; list-style: none; }
+.key-list li { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 20px 0; border-top: 1px solid var(--border); }
+.key-list li > div { min-width: 0; overflow-wrap: anywhere; }
+.key-list h3 { margin: 0 0 8px; font-size: 15px; }
+.key-list p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.key-list .danger-button { flex-shrink: 0; }
+.key-disclosure { border-color: var(--accent); }
+.key-disclosure input { font-family: ui-monospace, monospace; }
+.key-example { overflow-x: auto; font-size: 12px; }
+@media (max-width: 640px) { .key-list li { flex-direction: column; } }

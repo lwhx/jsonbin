@@ -6,6 +6,7 @@ interface Env {
   ADMIN_USERNAME?: string;
   ADMIN_PASSWORD?: string;
   SESSION_SECRET?: string;
+  TOKEN_PEPPER?: string;
 
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

@@ -6,13 +6,15 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 let mf, cookie, bucket;
 const password = randomBytes(32).toString('hex');
-export async function request(path, { method = 'GET', value, etag, authenticated = true } = {}) {
+export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin } = {}) {
   return mf.dispatchFetch('http://localhost/api/v1' + path, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(authenticated && cookie ? { Cookie: cookie } : {}),
       ...(etag ? { 'If-Match': etag } : {}),
+      ...(authorization !== undefined ? { Authorization: authorization } : {}),
+      ...(origin !== undefined ? { Origin: origin } : {}),
     },
     ...(value !== undefined ? { body: JSON.stringify(value) } : {}),
   });
@@ -554,4 +556,155 @@ test('racing schema binding and incompatible JSON save cannot publish a Bin that
   }
   const required = await (await request(`/schemas/${schema.meta.id}/validate`, { method: 'POST', value: { value: {} } })).json();
   assert.ok(required.issues.some(issue => issue.path === '#/count' && issue.keyword === 'required'));
+});
+
+const keyScopes = ['bin:read', 'bin:create', 'bin:update', 'bin:delete', 'collection:read', 'collection:write', 'schema:read', 'schema:write', 'history:read'];
+async function apiKey(scopes = ['bin:read'], extra = {}) {
+  const response = await request('/keys', { method: 'POST', value: { name: '测试密钥', scopes, ...extra } });
+  assert.equal(response.status, 201); assert.equal(response.headers.get('cache-control'), 'no-store'); return response.json();
+}
+const bearerRequest = (token, path, options = {}) => request(path, { authenticated: false, authorization: `Bearer ${token}`, ...options });
+
+test('API keys are session-only, return a token only on creation and never persist or list the secret or digest', async () => {
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const path = method === 'DELETE' ? '/keys/' + crypto.randomUUID() : '/keys';
+    assert.equal((await request(path, { method, authenticated: false })).status, 401);
+  }
+  const created = await apiKey(keyScopes, { name: '  自动化  ', expiresAt: new Date(Date.now() + 86400000).toISOString() });
+  assert.match(created.token, /^jb_live_[0-9a-f]{32}_[A-Za-z0-9_-]{43}$/);
+  assert.equal(created.key.name, '自动化'); assert.equal(created.key.lastUsedAt, null);
+  const stored = await (await bucket.get(`keys/${created.key.id}/meta.json`)).json();
+  assert.equal(stored.digestAlgorithm, 'sha256'); assert.ok(stored.digest); assert.ok(!JSON.stringify(stored).includes(created.token));
+  assert.ok(!Object.hasOwn(created.key, 'digest')); assert.ok(!Object.hasOwn(created.key, 'digestAlgorithm'));
+  const response = await request('/keys'); assert.equal(response.headers.get('cache-control'), 'no-store');
+  const listed = await response.json(); const publicRecord = listed.items.find(item => item.id === created.key.id);
+  assert.deepEqual(publicRecord, created.key); assert.ok(!JSON.stringify(listed).includes(created.token));
+  assert.ok(!Object.hasOwn(publicRecord, 'token')); assert.ok(!Object.hasOwn(publicRecord, 'digest'));
+  for (const [path, method] of [['/keys', 'GET'], ['/keys', 'POST'], ['/keys/' + created.key.id, 'DELETE']]) {
+    assert.equal((await bearerRequest(created.token, path, { method, value: method === 'POST' ? { name: 'escalation', scopes: keyScopes } : undefined })).status, 401);
+    assert.equal((await bearerRequest(created.token, path, { method, authenticated: true })).status, 401);
+  }
+  assert.equal((await bearerRequest(created.token, '/auth/me')).status, 401);
+});
+test('key creation rejects invalid names, scopes, duplicate scopes, past expiry and unknown fields', async () => {
+  for (const value of [{ name: '', scopes: ['bin:read'] }, { name: 'x'.repeat(161), scopes: ['bin:read'] },
+    { name: 'x', scopes: [] }, { name: 'x', scopes: ['unknown'] }, { name: 'x', scopes: ['bin:read', 'bin:read'] },
+    { name: 'x', scopes: ['bin:read'], expiresAt: 'bad' }, { name: 'x', scopes: ['bin:read'], expiresAt: '2000-01-01T00:00:00Z' },
+    { name: 'x', scopes: ['bin:read'], token: 'chosen-secret' }]) {
+    assert.equal((await request('/keys', { method: 'POST', value })).status, 422);
+  }
+});
+test('Bearer precedence rejects malformed or unknown credentials even alongside a valid admin cookie', async () => {
+  const key = await apiKey();
+  for (const [caseIndex, authorization] of ['Basic anything', 'Bearer', 'Bearer invalid', `Bearer ${key.token} extra`, `Bearer ${key.token.slice(0, -1)}!`,
+    `Bearer ${key.token.slice(0, -1)}${key.token.at(-1) === 'A' ? 'B' : 'A'}`, `Bearer jb_live_${'0'.repeat(32)}_${'a'.repeat(43)}`].entries()) {
+    for (const authenticated of [true, false]) {
+      const response = await request('/bins', { authorization, authenticated });
+      assert.equal(response.status, 401, `credential case ${caseIndex}, cookie ${authenticated}`); assert.match(response.headers.get('www-authenticate'), /invalid_token/);
+    }
+  }
+  assert.equal((await request('/bins', { authenticated: false, authorization: `bearer ${key.token}` })).status, 200);
+  assert.equal((await bearerRequest(key.token, '/bins', { method: 'POST', authenticated: true, value: { name: 'forbidden', value: null } })).status, 403);
+});
+test('every existing resource route enforces the exact Bearer scopes, including collection members and historical restoration', async () => {
+  const id = crypto.randomUUID();
+  const routes = [
+    ['/bins', 'GET', ['bin:read'], undefined, 200], ['/bins', 'POST', ['bin:create'], {}, 422],
+    [`/bins/${id}`, 'GET', ['bin:read'], undefined, 404], [`/bins/${id}`, 'PUT', ['bin:update'], { value: null }, 404],
+    [`/bins/${id}/meta`, 'PATCH', ['bin:update'], { name: 'x' }, 404], [`/bins/${id}`, 'DELETE', ['bin:delete'], undefined, 404],
+    [`/bins/${id}/versions`, 'GET', ['history:read'], undefined, 404], [`/bins/${id}/versions/1`, 'GET', ['history:read'], undefined, 404],
+    [`/bins/${id}/versions/1/restore`, 'POST', ['bin:update', 'history:read'], undefined, 404],
+    ['/collections', 'GET', ['collection:read'], undefined, 200], ['/collections', 'POST', ['collection:write'], {}, 422],
+    [`/collections/${id}`, 'GET', ['collection:read'], undefined, 404], [`/collections/${id}/bins`, 'GET', ['collection:read', 'bin:read'], undefined, 404],
+    [`/collections/${id}`, 'PATCH', ['collection:write'], { name: 'x' }, 404], [`/collections/${id}`, 'DELETE', ['collection:write'], undefined, 404],
+    ['/schemas', 'GET', ['schema:read'], undefined, 200], ['/schemas', 'POST', ['schema:write'], {}, 422],
+    [`/schemas/${id}`, 'GET', ['schema:read'], undefined, 404], [`/schemas/${id}`, 'PUT', ['schema:write'], { name: 'x', schema: true }, 404],
+    [`/schemas/${id}`, 'DELETE', ['schema:write'], undefined, 404], [`/schemas/${id}/validate`, 'POST', ['schema:read'], { value: null }, 404],
+  ];
+  for (const scope of keyScopes) {
+    const key = await apiKey([scope]);
+    for (const [path, method, required, value, allowedStatus] of routes) {
+      const response = await bearerRequest(key.token, path, { method, value, etag: '"unused"' });
+      const allowed = required.every(item => item === scope);
+      assert.equal(response.status, allowed ? allowedStatus : 403, `${scope}: ${method} ${path}`);
+      if (!allowed) assert.deepEqual((await response.json()).requiredScopes, required);
+    }
+  }
+  for (const required of [['bin:update', 'history:read'], ['collection:read', 'bin:read']]) {
+    const key = await apiKey(required), path = required[0] === 'bin:update' ? `/bins/${id}/versions/1/restore` : `/collections/${id}/bins`;
+    assert.equal((await bearerRequest(key.token, path, { method: required[0] === 'bin:update' ? 'POST' : 'GET', etag: '"unused"' })).status, 404);
+  }
+});
+test('authorized external clients can CRUD models, collections and Bins while retaining ETag, JSON Schema, locks and restore checks', async () => {
+  const key = await apiKey(keyScopes);
+  const schemaResponse = await bearerRequest(key.token, '/schemas', { method: 'POST', value: { name: '外部模型', schema: modelDefinition } });
+  assert.equal(schemaResponse.status, 201); const schema = await schemaResponse.json();
+  const collectionResponse = await bearerRequest(key.token, '/collections', { method: 'POST', value: { name: '外部集合' } });
+  assert.equal(collectionResponse.status, 201); const collection = await collectionResponse.json();
+  const response = await bearerRequest(key.token, '/bins', { method: 'POST', value: { name: '外部数据仓', value: { count: 1 }, schemaId: schema.meta.id, schemaLocked: true, collectionId: collection.meta.id } });
+  assert.equal(response.status, 201); const bin = await response.json(), path = '/bins/' + bin.meta.id;
+  assert.equal((await bearerRequest(key.token, path + '/meta', { method: 'PATCH', etag: bin.etag, value: { schemaId: null } })).status, 423);
+  assert.equal((await bearerRequest(key.token, path, { method: 'PUT', etag: bin.etag, value: { value: { count: 'invalid' } } })).status, 422);
+  const metaObject = await bucket.get(`bins/${bin.meta.id}/meta.json`);
+  const savedMeta = await metaObject.json();
+  await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify({ ...savedMeta, locked: true }));
+  assert.equal((await bearerRequest(key.token, path, { method: 'PUT', etag: bin.etag, value: { value: { count: 2 } } })).status, 423);
+  await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify(savedMeta, null, 2));
+  const updatedResponse = await bearerRequest(key.token, path, { method: 'PUT', etag: bin.etag, value: { value: { count: 2 } } });
+  assert.equal(updatedResponse.status, 200); const updated = await updatedResponse.json();
+  assert.equal((await bearerRequest(key.token, path, { method: 'PUT', etag: bin.etag, value: { value: { count: 3 } } })).status, 412);
+  assert.equal((await bearerRequest(key.token, path + '/versions')).status, 200);
+  assert.equal((await bearerRequest(key.token, path + '/versions/1')).status, 200);
+  assert.equal((await bearerRequest(key.token, path + '/versions/1/restore', { method: 'POST' })).status, 428);
+  assert.equal((await bearerRequest(key.token, path + '/versions/1/restore', { method: 'POST', etag: updated.etag })).status, 200);
+  assert.equal((await bearerRequest(key.token, `/collections/${collection.meta.id}/bins`)).status, 200);
+  assert.equal((await bearerRequest(key.token, path, { method: 'DELETE' })).status, 200);
+  assert.equal((await bearerRequest(key.token, `/collections/${collection.meta.id}`, { method: 'DELETE', etag: collection.etag })).status, 200);
+  assert.equal((await bearerRequest(key.token, `/schemas/${schema.meta.id}`, { method: 'DELETE', etag: schema.etag })).status, 200);
+});
+test('last-used time is recorded for permitted authentication only, expiry and revocation reject future requests', async () => {
+  const key = await apiKey();
+  const path = `keys/${key.key.id}/meta.json`, stored = () => bucket.get(path).then(object => object.json());
+  assert.equal((await bearerRequest(key.token, '/collections')).status, 403); assert.equal((await stored()).lastUsedAt, null);
+  assert.equal((await bearerRequest(key.token, '/bins')).status, 200); assert.ok((await stored()).lastUsedAt);
+  let value = await stored();
+  await bucket.put(path, JSON.stringify({ ...value, expiresAt: '2000-01-01T00:00:00Z' }));
+  assert.equal((await bearerRequest(key.token, '/bins')).status, 401); assert.equal((await stored()).lastUsedAt, value.lastUsedAt);
+  await bucket.put(path, JSON.stringify({ ...value, expiresAt: null }));
+  const revokedResponse = await request('/keys/' + key.key.id, { method: 'DELETE' });
+  assert.equal(revokedResponse.status, 200); const revoked = (await revokedResponse.json()).key;
+  assert.ok(revoked.revokedAt); assert.ok(!Object.hasOwn(revoked, 'digest'));
+  assert.equal((await bearerRequest(key.token, '/bins')).status, 401);
+  assert.deepEqual((await (await request('/keys/' + key.key.id, { method: 'DELETE' })).json()).key, revoked);
+  assert.equal((await request('/keys/' + crypto.randomUUID(), { method: 'DELETE' })).status, 404);
+});
+test('concurrent authentication and revocation never reactivate a revoked key or overwrite its revocation timestamp', async () => {
+  const key = await apiKey();
+  const responses = await Promise.all([
+    ...Array.from({ length: 8 }, () => bearerRequest(key.token, '/bins')),
+    request('/keys/' + key.key.id, { method: 'DELETE' }),
+    request('/keys/' + key.key.id, { method: 'DELETE' }),
+  ]);
+  for (const response of responses.slice(0, 8)) assert.ok([200, 401].includes(response.status));
+  for (const response of responses.slice(8)) assert.equal(response.status, 200);
+  const records = await Promise.all(responses.slice(8).map(response => response.json()));
+  assert.equal(records[0].key.revokedAt, records[1].key.revokedAt);
+  const stored = await (await bucket.get(`keys/${key.key.id}/meta.json`)).json();
+  assert.equal(stored.revokedAt, records[0].key.revokedAt);
+  for (const response of await Promise.all(Array.from({ length: 4 }, () => bearerRequest(key.token, '/bins')))) assert.equal(response.status, 401);
+});
+
+test('Cookie writes reject foreign or null Origins while trusted Session scripts and scoped Bearer clients keep working', async () => {
+  const id = crypto.randomUUID();
+  for (const origin of ['https://foreign.example', 'null']) {
+    for (const [path, method] of [['/keys', 'POST'], ['/keys/' + id, 'DELETE'], ['/bins', 'POST'], ['/bins/' + id, 'PUT'], ['/collections', 'POST'], ['/schemas', 'POST']]) {
+      const response = await request(path, { method, origin, value: method === 'DELETE' ? undefined : {} });
+      assert.equal(response.status, 403); assert.equal((await response.json()).error, 'origin_not_allowed');
+    }
+  }
+  const sameOrigin = await request('/keys', { method: 'POST', origin: 'http://localhost', value: { name: '同源密钥', scopes: ['bin:create'] } });
+  assert.equal(sameOrigin.status, 201); const key = await sameOrigin.json();
+  const external = await bearerRequest(key.token, '/bins', { method: 'POST', origin: 'https://external.example', value: { name: '脚本创建', value: null } });
+  assert.equal(external.status, 201);
+  assert.equal((await request('/keys', { method: 'POST', value: { name: '可信脚本', scopes: ['bin:read'] } })).status, 201);
 });

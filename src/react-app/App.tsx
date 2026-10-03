@@ -37,6 +37,8 @@ import { listSchemas, schemaHash, schemaIdFromHash } from "./features/schemas/ap
 import { SchemaIssues } from "./features/schemas/SchemaIssues";
 import type { SchemaIssue } from "./features/schemas/api";
 
+import { KeysPage } from "./features/keys/KeysPage";
+
 type Health = {
   ok: boolean;
   service: string;
@@ -79,7 +81,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys";
 
 type NavLink = {
   label: string;
@@ -105,7 +107,7 @@ const nav: NavItem[] = [
   { label: "集合", icon: Boxes, section: "Collections" },
   { label: "数据模型", icon: Braces, section: "Schemas" },
   { divider: true, label: "开发者" },
-  { label: "API 密钥", icon: KeyRound, disabled: true },
+  { label: "API 密钥", icon: KeyRound, section: "Keys" },
   { label: "活动记录", icon: Activity, disabled: true },
   { label: "API 文档", icon: TerminalSquare, disabled: true },
   { divider: true, label: "系统" },
@@ -348,11 +350,11 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : "Overview";
+  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : "/"; };
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
@@ -413,6 +415,7 @@ function AuthenticatedApp({
     queryClient.removeQueries({ queryKey: ["collection-bins"] });
     queryClient.removeQueries({ queryKey: ["schemas"] });
     queryClient.removeQueries({ queryKey: ["schema"] });
+    queryClient.removeQueries({ queryKey: ["keys"] });
   }
 
   const totalStorage =
@@ -535,7 +538,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Overview" ? (
+          ) : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
               binsLoading={bins.isLoading}

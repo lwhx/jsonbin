@@ -29,7 +29,7 @@ R2 owns all durable state.
 
 Nothing stored only in KV is considered authoritative.
 
-Planned object layout:
+Current and planned object layout (system settings and trash management remain later phases):
 
 ```text
 system/
@@ -45,7 +45,9 @@ collections/
 schemas/
   <schemaId>/
     meta.json
-    schema.json
+    revisions/
+      000001.json
+      000002.json
 
 bins/
   <binId>/
@@ -55,8 +57,9 @@ bins/
       000002.json
       000003.json
 
-api-keys/
-  <keyId>.json
+keys/
+  <keyId>/
+    meta.json
 
 trash/
   bins/
@@ -97,15 +100,15 @@ API authentication is separate from dashboard sessions.
 
 ## API keys
 
-API keys will use a prefixed format such as:
+API keys use a UUID lookup selector and 256 random secret bits:
 
 ```text
-jb_live_<random>
+jb_live_<uuid-without-hyphens>_<base64url-random-secret>
 ```
 
-The plaintext token is shown once. Durable storage contains only a cryptographic digest.
+The plaintext token is returned only on creation and shown once. `keys/<keyId>/meta.json` stores metadata and a SHA-256 digest, or HMAC-SHA-256 when an optional stable `TOKEN_PEPPER` Secret is configured. Public list/revoke responses contain neither token nor digest. Key administration requires a signed dashboard session; a Bearer credential cannot issue or revoke keys.
 
-Planned scopes:
+Implemented scopes:
 
 - `bin:read`
 - `bin:create`
@@ -117,7 +120,9 @@ Planned scopes:
 - `schema:write`
 - `history:read`
 
-Keys may optionally be restricted to a collection or a bin and may have an expiry date.
+Keys support optional future expiry, idempotent revocation and last-used timestamps. Resource-specific restrictions are a future extension; current scopes cover the single owner’s resources. Every authorization reads canonical R2 state and conditionally updates last use. CAS retries recheck credentials and cannot resurrect a revoked key. Existing requests already authorized before revocation may complete.
+
+An Authorization header received by the Worker takes precedence over Cookies; invalid Bearer credentials return 401, missing scopes return 403. Collection member reads require `collection:read` plus `bin:read`; historical restore requires `bin:update` plus `history:read`. Cookie-authenticated writes validate a supplied Origin against APP_ORIGIN or the request origin. Bearer clients continue to follow scope and existing ETag/lock/schema rules.
 
 ## Core API
 

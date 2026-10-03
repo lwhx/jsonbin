@@ -212,9 +212,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
         <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
       </Suspense>}
-      {tab === "API" && <div className="bin-api"><h2>此数据仓的 API</h2><p>当前使用管理界面的 Session 认证；外部 API Key 调用将在后续阶段提供。</p>
-        <pre>{`GET ${apiUrl}\n\nPUT ${apiUrl}\nContent-Type: application/json\nIf-Match: ${record.etag}\n\n${JSON.stringify({ value: record.value }, null, 2)}`}</pre>
-        <p>写入成功生成新版本；ETag 过期返回 412，锁定返回 423。</p></div>}
+      {tab === "API" && <div className="bin-api"><h2>此数据仓的 API</h2><p>网页登录使用 Session；外部调用请创建 API 密钥并发送 Authorization: Bearer Token。读取需 bin:read，更新需 bin:update；历史读取需 history:read，恢复需同时有 bin:update 和 history:read。</p>
+        <pre>{`GET ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\n\nPUT ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/json\nIf-Match: ${record.etag}\n\n${JSON.stringify({ value: record.value }, null, 2)}`}</pre>
+        <p>写入成功生成新版本；ETag 过期返回 412，锁定返回 423，Scope 不足返回 403，JSON 不符合绑定模型返回 422。</p></div>}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>
         <label>名称<input required maxLength={160} value={metadata.name} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, name: event.target.value })} /></label>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
@@ -241,7 +241,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <label className="schema-checkbox"><input type="checkbox" aria-label="锁定模型绑定" checked={metadata.schemaLocked} disabled={Boolean(busy) || locked || !metadata.schemaId}
           onChange={event => setMetadata({ ...metadata, schemaLocked: event.target.checked })} />锁定模型绑定</label>
         {record.meta.schemaLocked && <p>模型绑定已锁定；更换、解除或升级前，请先取消锁定并单独保存。</p>}
-        <p>当前所有读取仍需登录；公开只读访问将在后续阶段提供。</p>
+        <p>读取仍需 Session 或具有所需 Scope 的 API 密钥；公开只读访问将在后续阶段提供。</p>
         <button type="submit" className="primary-button" disabled={!metadataDirty || !metadata.name.trim() || Boolean(busy) || locked}><Save size={15} />保存设置</button>
       </form>}
     </div>

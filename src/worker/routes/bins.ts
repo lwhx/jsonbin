@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { requireSession } from "../middleware/auth";
+import { requireAccess } from "../middleware/auth";
 import {
   createBin,
   deleteBin,
@@ -24,7 +24,6 @@ type Variables = {
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
-app.use("*", requireSession);
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -66,13 +65,13 @@ function parseVersion(value: string) {
   return Number.isSafeInteger(version) ? version : null;
 }
 
-app.get("/:id/versions", async (c) => {
+app.get("/:id/versions", requireAccess("history:read"), async (c) => {
   const versions = await listBinVersions(c.env, c.req.param("id"));
   if (!versions) return c.json({ error: "not_found" }, 404);
   return c.json(versions);
 });
 
-app.get("/:id/versions/:version", async (c) => {
+app.get("/:id/versions/:version", requireAccess("history:read"), async (c) => {
   const version = parseVersion(c.req.param("version"));
   if (version === null) return c.json({ error: "invalid_version" }, 422);
   const record = await getBinVersion(c.env, c.req.param("id"), version);
@@ -82,7 +81,7 @@ app.get("/:id/versions/:version", async (c) => {
   return c.json(record);
 });
 
-app.post("/:id/versions/:version/restore", async (c) => {
+app.post("/:id/versions/:version/restore", requireAccess(["bin:update", "history:read"]), async (c) => {
   const version = parseVersion(c.req.param("version"));
   if (version === null) return c.json({ error: "invalid_version" }, 422);
   const expectedEtag = c.req.header("If-Match");
@@ -100,7 +99,7 @@ app.post("/:id/versions/:version/restore", async (c) => {
   }
 });
 
-app.get("/", async (c) => {
+app.get("/", requireAccess("bin:read"), async (c) => {
   const items = await listBins(c.env);
   return c.json({
     items,
@@ -108,7 +107,7 @@ app.get("/", async (c) => {
   });
 });
 
-app.post("/", async (c) => {
+app.post("/", requireAccess("bin:create"), async (c) => {
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json(
@@ -124,7 +123,7 @@ app.post("/", async (c) => {
   return c.json(created, 201);
 });
 
-app.get("/:id", async (c) => {
+app.get("/:id", requireAccess("bin:read"), async (c) => {
   const record = await getBin(c.env, c.req.param("id"));
   if (!record) return c.json({ error: "not_found" }, 404);
 
@@ -133,7 +132,7 @@ app.get("/:id", async (c) => {
   return c.json(record);
 });
 
-app.put("/:id", async (c) => {
+app.put("/:id", requireAccess("bin:update"), async (c) => {
   const parsed = updateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json(
@@ -168,13 +167,13 @@ app.put("/:id", async (c) => {
   }
 });
 
-app.delete("/:id", async (c) => {
+app.delete("/:id", requireAccess("bin:delete"), async (c) => {
   const deleted = await deleteBin(c.env, c.req.param("id"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
 });
 
-app.patch("/:id/meta", async (c) => {
+app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
   const parsed = metadataSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
