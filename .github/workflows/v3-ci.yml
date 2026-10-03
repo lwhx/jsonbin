@@ -6,7 +6,7 @@ on:
       - cloudflare-v3
   pull_request:
     branches:
-      - master
+      - cloudflare-v3
 
 permissions:
   contents: read
