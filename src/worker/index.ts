@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import authRoutes from "./routes/auth";
+import binRoutes from "./routes/bins";
 
 type Bindings = Env;
 
@@ -23,11 +25,14 @@ app.use(
   }),
 );
 
+app.route("/api/v1/auth", authRoutes);
+app.route("/api/v1/bins", binRoutes);
+
 app.get("/api/v1/system/health", (c) => {
   return c.json({
     ok: true,
     service: "jsonbin",
-    version: "3.0.0-alpha.1",
+    version: "3.0.0-alpha.2",
     runtime: "cloudflare-workers",
     storage: {
       r2: Boolean(c.env.DATA),
