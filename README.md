@@ -48,6 +48,19 @@ Health check:
 GET /api/v1/system/health
 ```
 
+
+### Login configuration
+
+For personal single-user use, configure these Worker variables/secrets:
+
+```text
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your-password
+SESSION_SECRET=a-random-string-at-least-32-characters
+```
+
+Store `ADMIN_PASSWORD` and `SESSION_SECRET` as Cloudflare Secrets. Do not commit their real values to Git.
+
 ## Cloudflare resources
 
 Create the resources before enabling the bindings in `wrangler.jsonc`.

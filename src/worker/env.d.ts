@@ -4,7 +4,7 @@ interface Env {
 
   APP_ORIGIN?: string;
   ADMIN_USERNAME?: string;
-  ADMIN_PASSWORD_HASH?: string;
+  ADMIN_PASSWORD?: string;
   SESSION_SECRET?: string;
 
   GITHUB_CLIENT_ID?: string;

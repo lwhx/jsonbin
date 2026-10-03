@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { verifyPassword } from "../auth/password";
 import {
   clearSession,
   issueSession,
@@ -19,7 +18,7 @@ const loginSchema = z.object({
 app.get("/config", (c) => {
   return c.json({
     passwordEnabled: Boolean(
-      c.env.ADMIN_USERNAME && c.env.ADMIN_PASSWORD_HASH,
+      c.env.ADMIN_USERNAME && c.env.ADMIN_PASSWORD,
     ),
     githubEnabled: Boolean(
       c.env.GITHUB_CLIENT_ID &&
@@ -38,10 +37,8 @@ app.post("/login", async (c) => {
   const configuredUsername = c.env.ADMIN_USERNAME;
   const usernameMatches =
     Boolean(configuredUsername) && body.data.username === configuredUsername;
-  const passwordMatches = await verifyPassword(
-    body.data.password,
-    c.env.ADMIN_PASSWORD_HASH,
-  );
+  const passwordMatches =
+    Boolean(c.env.ADMIN_PASSWORD) && body.data.password === c.env.ADMIN_PASSWORD;
 
   if (!usernameMatches || !passwordMatches) {
     return c.json({ error: "invalid_credentials" }, 401);
