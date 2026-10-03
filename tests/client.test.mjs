@@ -19,6 +19,7 @@ test('client uses response ETag, includes If-Match and distinguishes API errors'
       assert.deepEqual(JSON.parse(body), { value: null });
       res.end(JSON.stringify({ ...record, value: null })); return;
     }
+    if (mode === 'schema') { res.statusCode = 422; res.end(JSON.stringify({ error: 'schema_validation_failed', issues: [{ path: '#/count', keyword: 'minimum', message: '数值小于最小值' }] })); return; }
     res.statusCode = Number(mode); res.end(JSON.stringify({ error: 'failure' }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -26,6 +27,8 @@ test('client uses response ETag, includes If-Match and distinguishes API errors'
   try {
     assert.equal((await api.getBin('example', base)).etag, '"header"');
     mode = 'save'; assert.equal((await api.saveBin('example', null, '"header"', base)).value, null);
+    mode = 'schema';
+    await assert.rejects(api.saveBin('example', {}, '"header"', base), error => error.status === 422 && error.message.includes('绑定的模型') && error.issues[0].path === '#/count');
     for (const status of [401, 404, 412, 423, 500]) {
       mode = String(status);
       await assert.rejects(api.getBin('example', base), error => error.status === status && error.message.length > 0);

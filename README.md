@@ -34,7 +34,7 @@ The `main` branch currently has a deployable Cloudflare-native v3 foundation wit
 - GitHub Actions typecheck + production build
 - Cloudflare automatic deployment
 
-The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. P2 adds version history, read-only comparison of any two versions and restoration into a new immutable version. P3 adds collections, member counts and Bin membership settings. Collection deletion detaches members and preserves their JSON and version history. See the development plan for local, CI and production acceptance status.
+The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. P2 adds version history, read-only comparison of any two versions and restoration into a new immutable version. P3 adds collections, member counts and Bin membership settings. Collection deletion detaches members and preserves their JSON and version history. P4 adds Draft 7 JSON Schema management, sample validation and Bin bindings to immutable model revisions. Creation, updates and historical restoration validate against the pinned revision; model locks protect binding changes, and deleting a model retains existing constraints. See the development plan for local, CI and production acceptance status.
 
 ## Local development
 

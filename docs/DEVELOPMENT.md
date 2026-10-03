@@ -44,7 +44,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
-| 数据模型 | ⬜ 未开始 | 只有导航占位 |
+| 数据模型 | ✅ 本地验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；CI 与 Workers Builds 待核实 |
 | API 密钥 | ⬜ 未开始 | 只有导航占位 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
@@ -531,7 +531,9 @@ GET    /api/v1/collections/:id/bins
 
 ## P4 数据模型 / JSON Schema
 
-建议使用 AJV 做 JSON Schema 校验，Zod 继续只负责 API 请求结构校验。
+状态：✅ 后端、界面及本地验收完成；GitHub CI / Workers Builds 待推送后核实，生产功能验收待确认。
+
+采用 `@cfworker/json-schema` 4.1.1 解释执行 JSON Schema，Zod 只负责 API 请求结构校验。Workers 禁止运行时 `eval` / `new Function`，因此没有使用 AJV 的常规动态编译方式。官方 Draft 7 meta-schema 随源码保存，许可证见 [JSON Schema 许可](licenses/JSON-Schema.txt)。
 
 R2：
 
@@ -539,10 +541,14 @@ R2：
 schemas/
   <schemaId>/
     meta.json
-    schema.json
+    revisions/
+      000001.json
+      000002.json
 ~~~
 
-API：
+`meta.json` 包含 id、name、description、currentRevision、createdAt、updatedAt 和 status。修订对象条件创建且不可覆盖，meta 条件更新；并发失败的孤立修订保留，后续写入跳过已占用编号。模型编辑产生新修订，已有 Bin 不会自动改变约束。删除将 status 设为 deleted，保留所有修订；列表/详情隐藏已删除模型，已有绑定仍可按原修订校验、写入和恢复。
+
+API（均需 Session；未登录返回 401）：
 
 ~~~text
 GET    /api/v1/schemas
@@ -553,15 +559,54 @@ DELETE /api/v1/schemas/:id
 POST   /api/v1/schemas/:id/validate
 ~~~
 
+创建 / 替换模型请求：
+
+~~~json
+{
+  "name": "计数模型",
+  "description": "非负整数",
+  "schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": { "count": { "type": "integer", "minimum": 0 } },
+    "required": ["count"],
+    "additionalProperties": false
+  }
+}
+~~~
+
+- 创建返回 201；读取/修改返回 `{meta, schema, etag}` 和 ETag 响应头。替换与删除必须携带 `If-Match`，缺少返回 428，过期或并发冲突返回 412。
+- name trim 后为 1–160 字符，description 最长 1000 字符。请求未知字段拒绝。`schema` 支持对象或布尔值，定义最长 64 KiB、嵌套最多 64 层。
+- 当前支持 Draft 7；省略 `$schema` 时默认 Draft 7。定义使用官方 meta-schema 校验，未知关键字拒绝，扩展注释可用 `x-` 前缀。支持本地 JSON Pointer 引用、递归 properties/items、标准 format 和 Unicode 正则；不支持外部引用、嵌套独立 `$id`、其他草案或自定义 format。不能消费数据层级的引用循环会被拒绝，避免无限校验。定义无效返回 422 `invalid_schema`。
+- `/validate` 请求为 `{"value": 任意JSON}`，必需包含 value；返回 200 `{valid, issues, revision}`。样本不合模型时 valid 为 false，不修改模型或 Bin。
+- `issues` 最多返回 20 条，格式为 `{path, keyword, message}`，path 使用 `#/字段` JSON Pointer；必填字段错误指向缺失字段。响应不回显输入数值，校验不会填默认值、强制转换类型或删除字段。
+
+Bin 绑定规则：
+
+- 创建 Bin 可提供 `schemaId`（UUID 或 null）和 `schemaLocked`。绑定时先校验 JSON，成功后保存 schemaId 和 schemaRevision；无模型时 schemaRevision 为 null。已删除/不存在的模型返回 409 `schema_unavailable`。
+- `PATCH /api/v1/bins/:id/meta` 支持 schemaId、schemaLocked、refreshSchema。修改绑定或 `refreshSchema: true` 会选择模型当前修订，并校验 Bin 的**已保存 JSON**；只改元数据，不追加版本。同一个 schemaId 的普通设置保存不会隐式升级。
+- 锁定模型绑定前必须有模型，否则返回 422 `schema_required`。已锁定绑定禁止更换、解除和升级，返回 423 `schema_locked`，即使同次请求设置 schemaLocked 为 false 也不能绕过。必须先单独解锁保存，再更改绑定。符合模型的 JSON 仍可更新；现有数据锁 locked 继续阻止修改。
+- JSON 更新和历史版本恢复均校验 Bin 绑定的固定修订。模型编辑或删除不会绕过校验；失败返回 422 `schema_validation_failed` 与字段 issues，不写新版本或改变 meta/ETag。
+- 模型绑定与 JSON 保存同样通过 Bin meta 的条件写入保护并发请求；过期 If-Match 返回 412。模型与 Bin 之间没有跨对象事务，并发模型编辑/删除时已经取得的修订仍可能被绑定；由于修订永不删除，约束不会失效。后续新读取的绑定请求只允许活动模型。
+
 功能：
 
-- [ ] Schema 创建/编辑/删除
-- [ ] Bin 绑定 Schema
-- [ ] 创建 Bin 时校验
-- [ ] 更新 Bin 时校验
-- [ ] 恢复历史版本时校验
-- [ ] schemaLocked
-- [ ] 前端显示具体字段错误
+- [x] Schema 创建/编辑/删除与详情刷新
+- [x] Bin 绑定 Schema 固定修订、主动升级 / 解除绑定
+- [x] 创建 Bin 时校验
+- [x] 更新 Bin 时校验
+- [x] 恢复历史版本时校验
+- [x] schemaLocked 与单独解锁规则
+- [x] 前端显示具体字段错误、失败后保留草稿
+- [x] 模型样本校验、未保存导航保护、网络 / Session / ETag 错误处理
+
+本地验收进度（2026-10-03）：
+
+- 类型检查、生产构建通过。
+- Worker/客户端测试 37 项通过，0 失败、0 跳过；新增模型 CRUD/认证/条件写入、定义/引用/格式校验、失败不写版本、历史恢复、固定修订升级、绑定锁、归档模型继续校验，以及并发修订不可覆盖、模型绑定与不合约束 JSON 保存竞争验收。
+- Chromium 浏览器验收 19 项通过，0 失败、0 跳过；包含模型创建/编辑/刷新/删除、样本字段错误、Bin 创建与绑定锁/升级、JSON 和恢复失败，以及草稿保护、手机/深色布局、冲突/网络/Session 错误。
+- GitHub CI、Workers Builds：待功能提交推送后核实。
+- 生产功能验收：待确认，不将本地测试或构建成功等同于生产数据操作已验收。
 
 ---
 
@@ -619,7 +664,7 @@ P5 完成后，JSONBin 才正式具备脚本/自动化工具调用能力。
 - [ ] 深层路径读取
 - [ ] 深层路径写入
 - [ ] 数据锁 locked
-- [ ] Schema 锁 schemaLocked
+- [x] Schema 锁 schemaLocked（P4 已实现；P6 新写入路径需复用同一校验）
 - [ ] Public/Private 真正生效
 - [ ] public Bin 无登录只读
 - [ ] private Bin 必须 Session 或 API Key
@@ -837,7 +882,7 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P3 集合已完成本地开发、验收及 CI，下一阶段为 **P4 数据模型 / JSON Schema**。P1 / P2 / P3 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
+P4 数据模型 / JSON Schema 已完成本地开发和验收，下一阶段为 **P5 API 密钥与外部 API 认证**。P4 的 CI 与 Workers Builds 等待本次功能提交核实；P1 / P2 / P3 的成功状态已确认。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
 
 这样可以先把最核心的 Bin 使用链路彻底打通：
 

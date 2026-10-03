@@ -385,3 +385,173 @@ test('collection cleanup never overwrites concurrent JSON saves or a move to ano
     } else { assert.deepEqual(final.value, original.value); assert.equal(final.meta.currentVersion, 1); }
   }
 });
+
+const modelDefinition = { type: 'object', properties: { count: { type: 'integer', minimum: 0 } }, required: ['count'], additionalProperties: false };
+async function model(schema = modelDefinition) {
+  const response = await request('/schemas', { method: 'POST', value: { name: '计数模型', schema } });
+  assert.equal(response.status, 201); return response.json();
+}
+async function boundBin(schema, value = { count: 1 }, schemaLocked = false) {
+  const response = await request('/bins', { method: 'POST', value: { name: '绑定模型', value, schemaId: schema.meta.id, schemaLocked } });
+  assert.equal(response.status, 201); return response.json();
+}
+
+test('schema CRUD requires session and conditional writes; listing and sample validation use the latest revision', async () => {
+  assert.equal((await request('/schemas', { authenticated: false })).status, 401);
+  assert.equal((await request('/schemas', { method: 'POST', authenticated: false, value: { name: 'x', schema: true } })).status, 401);
+  const schema = await model(), path = '/schemas/' + schema.meta.id;
+  for (const [suffix, method] of [['', 'GET'], ['', 'PUT'], ['', 'DELETE'], ['/validate', 'POST']]) {
+    assert.equal((await request(path + suffix, { method, authenticated: false })).status, 401);
+  }
+  const fetched = await request(path);
+  assert.equal(fetched.headers.get('etag'), schema.etag); assert.deepEqual(await fetched.json(), schema);
+  assert.ok((await (await request('/schemas')).json()).items.some(item => item.id === schema.meta.id));
+  assert.equal((await request(path, { method: 'PUT', value: { name: 'x', schema: true } })).status, 428);
+  const changed = await request(path, { method: 'PUT', etag: schema.etag, value: { name: '允许全部', description: '已编辑', schema: true } });
+  assert.equal(changed.status, 200); const next = await changed.json();
+  assert.equal(next.meta.currentRevision, 2); assert.equal(next.meta.description, '已编辑');
+  assert.equal((await request(path, { method: 'PUT', etag: schema.etag, value: { name: 'stale', schema: false } })).status, 412);
+  assert.deepEqual(await (await request(path + '/validate', { method: 'POST', value: { value: null } })).json(), { valid: true, issues: [], revision: 2 });
+  assert.equal((await request(path + '/validate', { method: 'POST', value: {} })).status, 422);
+  assert.equal((await request(path, { method: 'DELETE' })).status, 428);
+  assert.equal((await request(path, { method: 'DELETE', etag: schema.etag })).status, 412);
+  assert.equal((await request(path, { method: 'DELETE', etag: next.etag })).status, 200);
+  assert.equal((await request(path)).status, 404);
+  assert.equal((await request(path + '/validate', { method: 'POST', value: { value: null } })).status, 404);
+  assert.ok(!(await (await request('/schemas')).json()).items.some(item => item.id === schema.meta.id));
+  assert.deepEqual(await (await bucket.get(`schemas/${schema.meta.id}/revisions/000001.json`)).json(), modelDefinition);
+});
+test('schema definitions reject malformed keywords, dialects, refs, patterns and nonproductive recursion', async () => {
+  for (const schema of [null, [], { type: 'invalid' }, { required: 'count' }, { minimum: '0' }, { minLength: -1 },
+    { type: ['string', 'string'] }, { enum: [] }, { properties: { bad: 12 } }, { $schema: 'https://json-schema.org/draft/2020-12/schema' },
+    { $ref: 'https://example.test/model' }, { $ref: '#/definitions/missing' }, { $ref: '#' }, { allOf: [{ $ref: '#' }] },
+    { format: 'unknown-format' }, { pattern: '[' }, { patternProperties: { '[': true } }, { unevaluatedProperties: false }, { properties: { child: { $id: 'child' } } }]) {
+    const response = await request('/schemas', { method: 'POST', value: { name: 'bad', schema } });
+    assert.equal(response.status, 422, JSON.stringify(schema));
+  }
+  assert.equal((await request('/schemas', { method: 'POST', value: { name: 'x', schema: true, extra: true } })).status, 422);
+  let deep = true; for (let i = 0; i < 70; i++) deep = { not: deep };
+  assert.equal((await request('/schemas', { method: 'POST', value: { name: 'deep', schema: deep } })).status, 422);
+  assert.equal((await request('/schemas', { method: 'POST', value: { name: 'large', schema: { description: 'x'.repeat(65537) } } })).status, 422);
+});
+test('boolean schemas, local escaped refs, recursive properties and format constraints validate without code generation', async () => {
+  for (const definition of [true, false]) {
+    const schema = await model(definition);
+    for (const value of [null, false, 0, '', [], {}]) {
+      const response = await request(`/schemas/${schema.meta.id}/validate`, { method: 'POST', value: { value } });
+      assert.equal(response.status, 200); assert.equal((await response.json()).valid, definition);
+    }
+  }
+  const local = await model({ definitions: { 'a/b~c': { type: 'string', minLength: 2 } }, properties: { text: { $ref: '#/definitions/a~1b~0c' } } });
+  assert.equal((await (await request(`/schemas/${local.meta.id}/validate`, { method: 'POST', value: { value: { text: 'ok' } } })).json()).valid, true);
+  assert.equal((await (await request(`/schemas/${local.meta.id}/validate`, { method: 'POST', value: { value: { text: 7 } } })).json()).valid, false);
+  const recursive = await model({ type: 'object', properties: { name: { type: 'string' }, child: { $ref: '#' } }, required: ['name'] });
+  const tree = { name: 'root', child: { name: 'leaf' } };
+  assert.equal((await (await request(`/schemas/${recursive.meta.id}/validate`, { method: 'POST', value: { value: tree } })).json()).valid, true);
+  const dependencies = await model({ definitions: { counter: { ...modelDefinition, additionalProperties: true } }, dependencies: { type: { $ref: '#/definitions/counter' } } });
+  for (const [value, expected] of [[{ type: true, count: 1 }, true], [{ type: true, count: 'bad' }, false], [{ other: true }, true]]) {
+    assert.equal((await (await request(`/schemas/${dependencies.meta.id}/validate`, { method: 'POST', value: { value } })).json()).valid, expected);
+  }
+  const dependencyRef = await model({ dependencies: { type: { type: 'object' } }, $ref: '#/dependencies/type' });
+  assert.equal((await (await request(`/schemas/${dependencyRef.meta.id}/validate`, { method: 'POST', value: { value: {} } })).json()).valid, true);
+  const format = await model({ type: 'string', format: 'email' });
+  assert.equal((await (await request(`/schemas/${format.meta.id}/validate`, { method: 'POST', value: { value: 'bad' } })).json()).valid, false);
+});
+test('failed creation and updates expose field paths and preserve Bin metadata, ETag and version files', async () => {
+  const schema = await model();
+  const before = (await (await request('/bins')).json()).total;
+  const rejected = await request('/bins', { method: 'POST', value: { name: 'bad', schemaId: schema.meta.id, value: { count: 'bad' } } });
+  assert.equal(rejected.status, 422); const body = await rejected.json();
+  assert.equal(body.error, 'schema_validation_failed'); assert.ok(body.issues.some(issue => issue.path === '#/count' && issue.keyword === 'type'));
+  assert.equal((await (await request('/bins')).json()).total, before);
+  const bin = await boundBin(schema), path = '/bins/' + bin.meta.id;
+  const response = await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: -17 } } });
+  assert.equal(response.status, 422); assert.ok(!JSON.stringify(await response.json()).includes('-17'));
+  assert.deepEqual(await (await request(path)).json(), bin);
+  assert.equal((await bucket.list({ prefix: `bins/${bin.meta.id}/versions/` })).objects.length, 1);
+  assert.equal((await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 2 } } })).status, 200);
+});
+test('binding validates current JSON; historical restore validates the pinned schema and does not append invalid content', async () => {
+  const schema = await model(), bin = await create({ count: 'old' }), path = '/bins/' + bin.meta.id;
+  const rejected = await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { schemaId: schema.meta.id } });
+  assert.equal(rejected.status, 422); assert.deepEqual(await (await request(path)).json(), bin);
+  const updated = await (await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 3 } } })).json();
+  const bound = await request(path + '/meta', { method: 'PATCH', etag: updated.etag, value: { schemaId: schema.meta.id } });
+  assert.equal(bound.status, 200); const record = await bound.json();
+  assert.equal(record.meta.currentVersion, 2); assert.equal(record.meta.schemaRevision, 1);
+  assert.equal((await request(path + '/versions/1/restore', { method: 'POST', etag: record.etag })).status, 422);
+  assert.deepEqual(await (await request(path)).json(), record);
+  assert.equal((await bucket.list({ prefix: `bins/${bin.meta.id}/versions/` })).objects.length, 2);
+  assert.equal((await request(path + '/versions/2/restore', { method: 'POST', etag: record.etag })).status, 200);
+});
+test('model edits keep existing Bin constraints until an explicit upgrade and failed upgrades leave the binding unchanged', async () => {
+  const schema = await model(), bin = await boundBin(schema), path = '/bins/' + bin.meta.id;
+  const newDefinition = { ...modelDefinition, properties: { count: { type: 'integer', minimum: 5 } } };
+  const changed = await (await request('/schemas/' + schema.meta.id, { method: 'PUT', etag: schema.etag, value: { name: '新模型', schema: newDefinition } })).json();
+  let record = await (await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { name: '改名', schemaId: schema.meta.id } })).json();
+  assert.equal(record.meta.schemaRevision, 1);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: record.etag, value: { refreshSchema: true } })).status, 422);
+  assert.deepEqual(await (await request(path)).json(), record);
+  record = await (await request(path, { method: 'PUT', etag: record.etag, value: { value: { count: 8 } } })).json();
+  const upgraded = await request(path + '/meta', { method: 'PATCH', etag: record.etag, value: { refreshSchema: true } });
+  assert.equal(upgraded.status, 200); const latest = await upgraded.json();
+  assert.equal(latest.meta.schemaRevision, changed.meta.currentRevision); assert.equal(latest.meta.currentVersion, record.meta.currentVersion);
+  assert.ok(!Object.hasOwn(latest.meta, 'refreshSchema'));
+  assert.equal((await request(path, { method: 'PUT', etag: latest.etag, value: { value: { count: 1 } } })).status, 422);
+});
+test('schema lock protects binding changes, unbind and upgrades even in an unlock request; valid JSON remains writable', async () => {
+  const schema = await model(), other = await model(true), bin = await boundBin(schema, { count: 2 }, true), path = '/bins/' + bin.meta.id;
+  for (const fields of [{ schemaId: null }, { schemaId: other.meta.id }, { refreshSchema: true }, { schemaLocked: false, schemaId: null }]) {
+    assert.equal((await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: fields })).status, 423);
+  }
+  assert.deepEqual(await (await request(path)).json(), bin);
+  const valid = await (await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 7 } } })).json();
+  assert.equal(valid.meta.schemaLocked, true); assert.equal(valid.meta.currentVersion, 2);
+  const unlocked = await (await request(path + '/meta', { method: 'PATCH', etag: valid.etag, value: { schemaLocked: false } })).json();
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: unlocked.etag, value: { schemaId: null, refreshSchema: true } })).status, 422);
+  const detached = await (await request(path + '/meta', { method: 'PATCH', etag: unlocked.etag, value: { schemaId: null } })).json();
+  assert.equal(detached.meta.schemaRevision, null); assert.equal(detached.meta.schemaId, null);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: unlocked.etag, value: { schemaId: other.meta.id } })).status, 412);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: detached.etag, value: { schemaLocked: true } })).status, 422);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: detached.etag, value: { refreshSchema: true } })).status, 422);
+  assert.equal((await request('/bins', { method: 'POST', value: { name: 'no model', value: null, schemaLocked: true } })).status, 422);
+});
+test('archived schemas reject new bindings and upgrades but preserve validation for existing locked bindings', async () => {
+  const schema = await model(), bin = await boundBin(schema, { count: 2 }, true), path = '/bins/' + bin.meta.id;
+  assert.equal((await request('/schemas/' + schema.meta.id, { method: 'DELETE', etag: schema.etag })).status, 200);
+  assert.equal((await request('/bins', { method: 'POST', value: { name: 'new', value: { count: 2 }, schemaId: schema.meta.id } })).status, 409);
+  assert.equal((await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 'bad' } } })).status, 422);
+  let record = await (await request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 3 } } })).json();
+  record = await (await request(path + '/meta', { method: 'PATCH', etag: record.etag, value: { schemaId: schema.meta.id, schemaLocked: false } })).json();
+  assert.equal(record.meta.schemaRevision, 1);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: record.etag, value: { refreshSchema: true } })).status, 409);
+  assert.equal((await request(path + '/versions/1/restore', { method: 'POST', etag: record.etag })).status, 200);
+});
+test('concurrent model edits reserve immutable snapshots and publish only one metadata revision', async () => {
+  const schema = await model(), path = '/schemas/' + schema.meta.id;
+  await bucket.put(`schemas/${schema.meta.id}/revisions/000008.json`, JSON.stringify({ const: 'orphan' }));
+  const responses = await Promise.all([true, false].map(definition => request(path, { method: 'PUT', etag: schema.etag, value: { name: 'concurrent', schema: definition } })));
+  assert.deepEqual(responses.map(r => r.status).sort(), [200, 412]);
+  const winner = await responses.find(r => r.status === 200).json();
+  assert.ok(winner.meta.currentRevision >= 9); assert.deepEqual(await (await request(path)).json(), winner);
+  assert.deepEqual(await (await bucket.get(`schemas/${schema.meta.id}/revisions/${String(winner.meta.currentRevision).padStart(6, '0')}.json`)).json(), winner.schema);
+  assert.deepEqual(await (await bucket.get(`schemas/${schema.meta.id}/revisions/000001.json`)).json(), schema.schema);
+  assert.deepEqual(await (await bucket.get(`schemas/${schema.meta.id}/revisions/000008.json`)).json(), { const: 'orphan' });
+});
+
+test('racing schema binding and incompatible JSON save cannot publish a Bin that violates its binding', async () => {
+  const schema = await model(), bin = await create({ count: 1 }), path = '/bins/' + bin.meta.id;
+  const responses = await Promise.all([
+    request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { schemaId: schema.meta.id } }),
+    request(path, { method: 'PUT', etag: bin.etag, value: { value: { count: 'incompatible' } } }),
+  ]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 412]);
+  const current = await (await request(path)).json();
+  if (current.meta.schemaId) {
+    assert.equal(current.meta.schemaId, schema.meta.id); assert.deepEqual(current.value, { count: 1 });
+  } else {
+    assert.deepEqual(current.value, { count: 'incompatible' });
+  }
+  const required = await (await request(`/schemas/${schema.meta.id}/validate`, { method: 'POST', value: { value: {} } })).json();
+  assert.ok(required.issues.some(issue => issue.path === '#/count' && issue.keyword === 'required'));
+});

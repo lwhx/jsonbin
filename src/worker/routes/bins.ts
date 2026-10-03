@@ -13,6 +13,8 @@ import {
   restoreBinVersion,
 } from "../storage/bins";
 
+import { SchemaError } from "../validation/schema";
+
 type Variables = {
   user: {
     id: string;
@@ -29,8 +31,10 @@ const createSchema = z.object({
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
   collectionId: z.string().uuid().nullable().optional(),
+  schemaId: z.string().uuid().nullable().optional(),
+  schemaLocked: z.boolean().optional(),
   value: z.unknown(),
-});
+}).strict();
 
 const updateSchema = z.object({
   value: z.unknown(),
@@ -41,9 +45,16 @@ const metadataSchema = z.object({
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
   collectionId: z.string().uuid().nullable().optional(),
+  schemaId: z.string().uuid().nullable().optional(),
+  schemaLocked: z.boolean().optional(),
+  refreshSchema: z.boolean().optional(),
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
+  if (error instanceof SchemaError) {
+    const status = error.message === "schema_locked" ? 423 : error.message === "schema_unavailable" ? 409 : 422;
+    return c.json({ error: error.message, issues: error.issues }, status);
+  }
   if (error.message === "collection_unavailable") return c.json({ error: "collection_unavailable" }, 409);
   if (error.message === "collection_delete_conflict") return c.json({ error: "collection_delete_conflict" }, 409);
   throw error;

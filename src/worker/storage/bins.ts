@@ -1,6 +1,9 @@
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
 import { assertCollectionAvailable, getCollection, detachBinFromCollection } from "./collections";
 
+import { resolveSchemaBinding, assertBoundSchema } from "./schemas";
+import { SchemaError } from "../validation/schema";
+
 export type BinMeta = {
   id: string;
   name: string;
@@ -8,6 +11,7 @@ export type BinMeta = {
   visibility: "private" | "public";
   collectionId: string | null;
   schemaId: string | null;
+  schemaRevision: number | null;
   currentVersion: number;
   size: number;
   locked: boolean;
@@ -87,10 +91,14 @@ export async function createBin(
     value: unknown;
     visibility?: "private" | "public";
     collectionId?: string | null;
+    schemaId?: string | null;
+    schemaLocked?: boolean;
   },
 ): Promise<BinRecord> {
   const bucket = requireDataBucket(env);
   await assertCollectionAvailable(env, input.collectionId);
+  const binding = await resolveSchemaBinding(env, input.schemaId, input.value);
+  if (input.schemaLocked && !binding.schemaId) throw new SchemaError("schema_required");
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const json = JSON.stringify(input.value);
@@ -101,11 +109,11 @@ export async function createBin(
     description: input.description ?? "",
     visibility: input.visibility ?? "private",
     collectionId: input.collectionId ?? null,
-    schemaId: null,
+    ...binding,
     currentVersion: 1,
     size: new TextEncoder().encode(json).byteLength,
     locked: false,
-    schemaLocked: false,
+    schemaLocked: input.schemaLocked ?? false,
     createdAt: now,
     updatedAt: now,
     expiresAt: null,
@@ -196,6 +204,7 @@ export async function updateBin(
   const current = await getJson<BinMeta>(bucket, metaKey(id));
   if (!current) return null;
   assertWritable(current.value, current.etag, expectedEtag);
+  await assertBoundSchema(env, current.value, value);
   const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value);
   const now = new Date().toISOString();
   const json = JSON.stringify(value);
@@ -242,6 +251,9 @@ export type BinMetadataInput = {
   description?: string;
   visibility?: "private" | "public";
   collectionId?: string | null;
+  schemaId?: string | null;
+  schemaLocked?: boolean;
+  refreshSchema?: boolean;
 };
 
 export async function updateBinMetadata(
@@ -252,7 +264,15 @@ export async function updateBinMetadata(
   if (!current) return null;
   assertWritable(current.meta, current.etag, expectedEtag);
   await assertCollectionAvailable(env, input.collectionId);
-  const meta = { ...current.meta, ...input, updatedAt: new Date().toISOString() };
+  const { refreshSchema, ...fields } = input;
+  const changedBinding = (input.schemaId !== undefined && input.schemaId !== current.meta.schemaId) || refreshSchema === true;
+  if (current.meta.schemaLocked && changedBinding) throw new SchemaError("schema_locked");
+  const requestedSchemaId = input.schemaId === undefined ? current.meta.schemaId : input.schemaId;
+  if (refreshSchema && !requestedSchemaId) throw new SchemaError("schema_required");
+  const binding = changedBinding ? await resolveSchemaBinding(env, requestedSchemaId, current.value)
+    : { schemaId: current.meta.schemaId, schemaRevision: current.meta.schemaRevision ?? null };
+  const meta = { ...current.meta, ...fields, ...binding, updatedAt: new Date().toISOString() };
+  if (meta.schemaLocked && !meta.schemaId) throw new SchemaError("schema_required");
   const written = await putJson(bucket, metaKey(id), meta, {
     onlyIf: { etagMatches: normalizeEtag(current.etag) },
   });

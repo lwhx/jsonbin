@@ -1,5 +1,7 @@
 import type { BinRecord, MetadataInput, BinVersionRecord, BinVersionList } from "./types";
 
+import type { SchemaIssue } from "../schemas/api";
+
 const endpoint = "/api/v1/bins";
 const messages: Record<number, string> = {
   0: "无法连接 Worker API，请检查网络后重试。",
@@ -13,9 +15,16 @@ const messages: Record<number, string> = {
 };
 export class BinApiError extends Error {
   status: number;
-  constructor(status: number) {
-    super(messages[status] ?? "操作失败，请稍后重试。当前草稿已保留。");
-    this.status = status;
+  issues: SchemaIssue[];
+  constructor(status: number, issues: SchemaIssue[] = [], code?: string) {
+    const schemaMessages: Record<string, string> = {
+      schema_validation_failed: "JSON 不符合绑定的模型，当前草稿已保留。",
+      schema_locked: "模型绑定已锁定，请先单独解除模型锁定并保存。",
+      schema_unavailable: "模型已删除或不可用，请重新选择。",
+      schema_required: "请先绑定数据模型，再锁定或升级修订。",
+    };
+    super((code && schemaMessages[code]) || messages[status] || "操作失败，请稍后重试。当前草稿已保留。");
+    this.status = status; this.issues = issues;
   }
 }
 async function request(url: string, init: RequestInit = {}): Promise<Response> {
@@ -25,7 +34,10 @@ async function request(url: string, init: RequestInit = {}): Promise<Response> {
     if (init.signal?.aborted) throw error;
     throw new BinApiError(0);
   }
-  if (!response.ok) throw new BinApiError(response.status);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string; issues?: SchemaIssue[] };
+    throw new BinApiError(response.status, body.issues?.filter(issue => typeof issue.path === "string") ?? [], body.error);
+  }
   return response;
 }
 async function recordResponse(response: Response): Promise<BinRecord> {

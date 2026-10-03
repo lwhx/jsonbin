@@ -31,6 +31,12 @@ import { CollectionsPage } from "./features/collections/CollectionsPage";
 import { CollectionDetailPage } from "./features/collections/CollectionDetailPage";
 import { collectionHash, collectionIdFromHash, listCollections } from "./features/collections/api";
 
+import { SchemasPage } from "./features/schemas/SchemasPage";
+import { SchemaDetailPage } from "./features/schemas/SchemaDetailPage";
+import { listSchemas, schemaHash, schemaIdFromHash } from "./features/schemas/api";
+import { SchemaIssues } from "./features/schemas/SchemaIssues";
+import type { SchemaIssue } from "./features/schemas/api";
+
 type Health = {
   ok: boolean;
   service: string;
@@ -73,7 +79,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas";
 
 type NavLink = {
   label: string;
@@ -97,7 +103,7 @@ const nav: NavItem[] = [
   { label: "概览", icon: LayoutDashboard, section: "Overview" },
   { label: "数据仓", icon: FileJson2, section: "Bins" },
   { label: "集合", icon: Boxes, section: "Collections" },
-  { label: "数据模型", icon: Braces, disabled: true },
+  { label: "数据模型", icon: Braces, section: "Schemas" },
   { divider: true, label: "开发者" },
   { label: "API 密钥", icon: KeyRound, disabled: true },
   { label: "活动记录", icon: Activity, disabled: true },
@@ -342,10 +348,11 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : "Overview";
+  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : "/"; };
+  const schemaId = schemaIdFromHash(route);
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
@@ -404,6 +411,8 @@ function AuthenticatedApp({
     queryClient.removeQueries({ queryKey: ["collections"] });
     queryClient.removeQueries({ queryKey: ["collection"] });
     queryClient.removeQueries({ queryKey: ["collection-bins"] });
+    queryClient.removeQueries({ queryKey: ["schemas"] });
+    queryClient.removeQueries({ queryKey: ["schema"] });
   }
 
   const totalStorage =
@@ -520,6 +529,12 @@ function AuthenticatedApp({
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/collections"); setRoute("#/collections"); }} />
             : <CollectionsPage onCreate={() => { window.location.hash = "/collections/new"; }}
               onOpen={id => { window.location.hash = collectionHash(id); }} />
+          ) : section === "Schemas" ? (schemaId || route === "#/schemas/new" ?
+            <SchemaDetailPage key={schemaId ?? "new"} id={schemaId} onDirtyChange={setDetailDirty}
+              onBack={() => setSection("Schemas")}
+              onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
+              onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
+            : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
           ) : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
@@ -807,6 +822,10 @@ function CreateBinDialog({
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [collectionId, setCollectionId] = useState("");
+  const [schemaId, setSchemaId] = useState("");
+  const [schemaLocked, setSchemaLocked] = useState(false);
+  const [issues, setIssues] = useState<SchemaIssue[]>([]);
+  const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const [jsonText, setJsonText] = useState(`{
   "hello": "world"
@@ -816,7 +835,7 @@ function CreateBinDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
+    setError(""); setIssues([]);
 
     let value: unknown;
     try {
@@ -837,16 +856,16 @@ function CreateBinDialog({
           description,
           visibility,
           collectionId: collectionId || null,
+          schemaId: schemaId || null,
+          schemaLocked,
           value,
         }),
       });
 
       if (!response.ok) {
-        setError(
-          response.status === 500
-            ? "R2 存储尚未配置。"
-            : "无法创建数据仓。",
-        );
+        const body = await response.json().catch(() => ({})) as { error?: string; issues?: SchemaIssue[] };
+        setError(body.error === "schema_validation_failed" ? "JSON 不符合所选模型，请检查字段错误。" : body.error === "schema_unavailable" ? "模型已删除，请重新选择。" : "无法创建数据仓，请检查输入后重试。");
+        setIssues(body.issues?.filter(issue => typeof issue.path === "string") ?? []);
         return;
       }
 
@@ -917,9 +936,16 @@ function CreateBinDialog({
             <option value="">未分组</option>{collections.data?.items.filter(item => item.status === "active").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select></label>
           {collections.isError && <p role="alert">{collections.error.message} 可先创建未分组数据仓。</p>}
+          <label>数据模型<select aria-label="数据模型" value={schemaId} disabled={schemas.isPending || schemas.isError || saving}
+            onChange={event => { setSchemaId(event.target.value); if (!event.target.value) setSchemaLocked(false); }}>
+            <option value="">不绑定模型</option>{schemas.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · r{item.currentRevision}</option>)}
+          </select></label>
+          {schemas.isError && <p role="alert">{schemas.error.message}<button className="secondary-button" type="button" onClick={() => schemas.refetch()}>重试模型选项</button></p>}
+          <label className="schema-checkbox"><input type="checkbox" aria-label="锁定模型绑定" checked={schemaLocked} disabled={!schemaId || saving} onChange={event => setSchemaLocked(event.target.checked)} />锁定模型绑定</label>
           <label>
             JSON
             <textarea
+              aria-label="JSON"
               className="json-textarea"
               value={jsonText}
               onChange={(event) => setJsonText(event.target.value)}
@@ -927,7 +953,7 @@ function CreateBinDialog({
             />
           </label>
 
-          {error && <div className="login-error">{error}</div>}
+          {error && <div className="login-error" role="alert">{error}<SchemaIssues issues={issues} /></div>}
 
           <div className="dialog-actions">
             <button className="secondary-button" type="button" onClick={onClose}>

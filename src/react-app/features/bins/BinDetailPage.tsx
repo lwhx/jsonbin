@@ -7,12 +7,15 @@ import type { Draft } from "./editor-state";
 import type { BinRecord, MetadataInput } from "./types";
 import { listCollections } from "../collections/api";
 
+import { listSchemas } from "../schemas/api";
+import { SchemaIssues } from "../schemas/SchemaIssues";
+
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
 type Tab = "编辑器" | "历史版本" | "API" | "设置";
 function metadataOf(record: BinRecord): MetadataInput {
-  const { name, description, visibility, collectionId } = record.meta;
-  return { name, description, visibility, collectionId };
+  const { name, description, visibility, collectionId, schemaId, schemaLocked } = record.meta;
+  return { name, description, visibility, collectionId, schemaId, schemaLocked, refreshSchema: false };
 }
 
 export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
@@ -22,6 +25,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBin(id, undefined, signal), retry: false });
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
+  const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -180,6 +184,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button></div>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}
+      {error instanceof BinApiError && <SchemaIssues issues={error.issues} />}
       {error instanceof BinApiError && error.status === 412 && <button type="button" className="secondary-button" onClick={refresh}>重新加载最新版本</button>}
       {error instanceof BinApiError && error.status === 401 && <button type="button" className="secondary-button" onClick={() => {
         if (!dirty || window.confirm("重新登录会离开当前页面，是否放弃未保存的内容？")) client.invalidateQueries({ queryKey: ["auth-me"] });
@@ -221,6 +226,21 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
           {collections.data?.items.filter(item => item.status === "active").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select></label>
         {collections.isError && <p role="alert">{collections.error.message}<button type="button" className="secondary-button" onClick={() => collections.refetch()}>重试集合选项</button></p>}
+        <label>数据模型<select aria-label="数据模型" value={metadata.schemaId ?? ""}
+          disabled={Boolean(busy) || locked || record.meta.schemaLocked || schemas.isPending || schemas.isError}
+          onChange={event => setMetadata({ ...metadata, schemaId: event.target.value || null, refreshSchema: false })}>
+          <option value="">不绑定模型</option>
+          {metadata.schemaId && !schemas.data?.items.some(item => item.id === metadata.schemaId) && <option value={metadata.schemaId}>已删除的模型（绑定修订仍有效）</option>}
+          {schemas.data?.items.map(item => <option key={item.id} value={item.id}>{item.name} · 最新 r{item.currentRevision}</option>)}
+        </select></label>
+        {schemas.isError && <p role="alert">{schemas.error.message}<button type="button" className="secondary-button" onClick={() => schemas.refetch()}>重试模型选项</button></p>}
+        {record.meta.schemaId && <p>当前绑定修订 r{record.meta.schemaRevision}。新绑定与升级会先校验已保存的 JSON。</p>}
+        <label className="schema-checkbox"><input type="checkbox" aria-label="使用模型最新修订" checked={metadata.refreshSchema ?? false}
+          disabled={Boolean(busy) || locked || record.meta.schemaLocked || !metadata.schemaId || metadata.schemaId !== record.meta.schemaId || !schemas.data?.items.some(item => item.id === metadata.schemaId)}
+          onChange={event => setMetadata({ ...metadata, refreshSchema: event.target.checked })} />使用模型最新修订</label>
+        <label className="schema-checkbox"><input type="checkbox" aria-label="锁定模型绑定" checked={metadata.schemaLocked} disabled={Boolean(busy) || locked || !metadata.schemaId}
+          onChange={event => setMetadata({ ...metadata, schemaLocked: event.target.checked })} />锁定模型绑定</label>
+        {record.meta.schemaLocked && <p>模型绑定已锁定；更换、解除或升级前，请先取消锁定并单独保存。</p>}
         <p>当前所有读取仍需登录；公开只读访问将在后续阶段提供。</p>
         <button type="submit" className="primary-button" disabled={!metadataDirty || !metadata.name.trim() || Boolean(busy) || locked}><Save size={15} />保存设置</button>
       </form>}

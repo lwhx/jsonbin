@@ -5,6 +5,7 @@ export type BinMeta = {
   visibility: "private" | "public";
   collectionId: string | null;
   schemaId: string | null;
+  schemaRevision: number | null;
   currentVersion: number;
   size: number;
   locked: boolean;
@@ -14,7 +15,7 @@ export type BinMeta = {
   expiresAt: string | null;
 };
 export type BinRecord = { meta: BinMeta; value: unknown; etag: string };
-export type MetadataInput = Pick<BinMeta, "name" | "description" | "visibility" | "collectionId">;
+export type MetadataInput = Pick<BinMeta, "name" | "description" | "visibility" | "collectionId" | "schemaId" | "schemaLocked"> & { refreshSchema?: boolean };
 export type BinVersionSummary = { version: number; createdAt: string; size: number };
 export type BinVersionRecord = BinVersionSummary & { id: string; value: unknown; etag: string };
 export type BinVersionList = { items: BinVersionSummary[]; currentVersion: number; total: number };
