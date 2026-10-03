@@ -18,6 +18,7 @@ async function statistics(env: Env): Promise<SystemInfo['statistics']> {
     const metadata = objects.filter(o => /^(?:bins|trash\/bins|collections|schemas)\/[^/]+\/meta\.json$/.test(o.key));
     if (metadata.length > 500) return { status: 'unavailable', error: 'statistics_limit_exceeded' };
     const data: BusinessStats = { activeBins: 0, trashBins: 0, pendingImports: 0, collections: 0, schemas: 0, versions: 0, currentValueBytes: 0, storedBytes: 0 };
+    data.storedBytes = objects.filter(o => /^(?:(?:bins|trash\/bins|collections|schemas)\/[^/]+\/meta\.json|(?:bins\/[^/]+\/versions|schemas\/[^/]+\/revisions)\/\d{6,}\.json)$/.test(o.key)).reduce((sum, o) => sum + o.size, 0);
     const keys = new Set(objects.map(o => o.key));
     for (const object of metadata) {
       const record = await env.DATA.get(object.key); if (!record) throw new Error();
@@ -25,8 +26,7 @@ async function statistics(env: Env): Promise<SystemInfo['statistics']> {
       if (!meta || typeof meta !== 'object') throw new Error();
       if (object.key.startsWith('trash/') && keys.has(object.key.slice(6))) continue;
       const prefix = object.key.slice(0, -9);
-      const files = objects.filter(o => o.key.startsWith(prefix));
-      data.storedBytes += files.reduce((sum, file) => sum + file.size, 0);
+      const files = objects.filter(o => o.key.startsWith(object.key.startsWith("trash/") ? prefix.slice(6) : prefix));
       if (meta.importState === 'pending') { data.pendingImports++; continue; }
       if (object.key.startsWith('bins/') || object.key.startsWith('trash/')) {
         if (meta.purgeState === 'purged') continue;

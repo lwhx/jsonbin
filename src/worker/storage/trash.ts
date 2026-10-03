@@ -1,3 +1,4 @@
+import { isImportMarker } from '../../shared/backup.ts';
 import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 import { binMetaKey, legacyTrashKey, isExpired, normalizeEtag, type StoredBinMeta } from "./bin-state";
 import { getBin, type BinMeta } from "./bins";
@@ -10,7 +11,7 @@ async function readTrash(env: Env, id: string): Promise<(TrashRecord & { legacy:
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
   const stored = canonical ?? await getJson<BinMeta>(bucket, legacyTrashKey(id));
-  if (!stored || stored.value.purgeState === "purged") return null;
+  if (!stored || isImportMarker(stored.value) || stored.value.purgeState === "purged") return null;
   const meta = stored.value;
   if (!meta.deletedAt && !isExpired(meta)) return null;
   return {
@@ -80,7 +81,7 @@ async function removeContents(bucket: R2Bucket, id: string) {
 export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, onCommitted?: () => Promise<void>) {
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
-  if (canonical?.value.purgeState === "purged") {
+  if (canonical && !isImportMarker(canonical.value) && canonical.value.purgeState === "purged") {
     await removeContents(bucket, id);
     return { ok: true };
   }
@@ -97,7 +98,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
   await removeContents(bucket, id);
   const written = await putJson(bucket, binMetaKey(id), { id, deletedAt: current.meta.deletedAt, purgeState: "purged" },
     { onlyIf: { etagMatches: normalizeEtag(etag) } });
-  if (!written && (await getJson<StoredBinMeta>(bucket, binMetaKey(id)))?.value.purgeState !== "purged") throw new Error("etag_conflict");
+  if (!written) { const latest = await getJson<StoredBinMeta>(bucket, binMetaKey(id)); if (!latest || isImportMarker(latest.value) || latest.value.purgeState !== "purged") throw new Error("etag_conflict"); }
   if (written) { try { await onCommitted?.(); } catch { console.error("activity_notification_failed"); } }
   return { ok: true };
 }
@@ -108,10 +109,11 @@ export async function sweepBins(env: Env, now = Date.now(), onTransition?: (even
   const items = await listJsonObjects<StoredBinMeta>(bucket, "bins/");
   const result = { expired: 0, purged: 0, conflicts: 0, failed: 0 };
   for (const item of items) {
+    if (isImportMarker(item)) continue;
     if (!item.purgeState && (item.deletedAt || !isExpired(item, now))) continue;
     try {
       const current = await getJson<StoredBinMeta>(bucket, binMetaKey(item.id));
-      if (!current) continue;
+      if (!current || isImportMarker(current.value)) continue;
       if (current.value.purgeState) {
         await purgeTrashBin(env, item.id, current.etag, () => onTransition?.({ action: "bin.purged", id: item.id }) ?? Promise.resolve()); result.purged++;
       } else if (!current.value.deletedAt && isExpired(current.value, now)) {

@@ -1,3 +1,5 @@
+import { restoreResource } from '../storage/backup-restore';
+import { validateRestoreRequest, MAX_BACKUP_BYTES } from '../../shared/backup.ts';
 import { z } from 'zod';
 import { exportData } from '../storage/backup-export';
 import type { ExportQuery } from '../../shared/system.ts';
@@ -30,5 +32,11 @@ app.get('/export', managementSession, async c => {
   const result = await exportData(c.env, { scope, format, ...(id === null ? {} : { id }) } as ExportQuery);
   await auditRequest(c, result.activity.action, result.activity.resourceId);
   return new Response(Uint8Array.from(result.body), { headers: { 'Content-Type': result.contentType, 'Content-Disposition': `attachment; filename="${result.fileName}"`, 'Cache-Control': 'no-store' } });
+});
+app.post('/restore', managementSession, async c => {
+  const input = validateRestoreRequest(await readBoundedJson(c.req.raw, MAX_BACKUP_BYTES));
+  const result = await restoreResource(c.env, input);
+  if (result.status === 'created') await auditRequest(c, result.kind === 'collection' ? 'collection.imported' : result.kind === 'schema' ? 'schema.imported' : 'bin.imported', result.id);
+  return c.json(result);
 });
 export default app;

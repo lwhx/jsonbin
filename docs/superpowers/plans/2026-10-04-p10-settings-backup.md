@@ -117,15 +117,15 @@
 
 **Interfaces:** 消费 RestoreRequest、fingerprintResource、isImportMarker、既有 schema/集合清理；产出 `restoreResource(env:Env,input:RestoreRequest):Promise<RestoreResult>`。合法 created/unchanged/skipped 返回 HTTP 200；校验失败 422，内容冲突 409 restore_conflict，依赖失败 409 restore_dependency_conflict，存储失败 503。客户端在 Task 6 映射依赖错误为逐项 dependency_skipped。
 
-- [ ] 写 RED：源包导出后恢复到独立空 R2，比较 ID、当前 JSON、全部历史号/值/逻辑时间、固定模型修订、锁/可见性/TTL/删除及 purged；缺省配置不自动应用。示例：`assert.equal(result.status,'created'); assert.deepEqual(restored.value,source.value);`。
-- [ ] Run build + `node --test tests/backup-restore.test.mjs`。Expected: 404/没有恢复行为 RED。
-- [ ] 写并运行隔离 RED：直接种 pending 后正常读/匿名读/列表/回收站/Collection 成员/Schema 管理不暴露，普通写和 Cron 不碰文件；正常、删除、purged、legacy 或孤立目标冲突字节不变。Expected: 原有入口误读占位或覆盖时失败。
-- [ ] 实现 Stored*Meta 联合及所有读取/生命周期 guard；实现获取 canonical 占位前检查既有对象、marker 完整校验、条件文件写入/同内容续作、依赖收据和固定模型验证、CAS 发布。最终 meta 仅业务白名单；Bin 新 lifecycleId；版本 originalUploadedAt 及历史接口回退语义一起接入。
-- [ ] 写并观察故障 RED：第 N 次 put/get 抛异常、同/异指纹并发、已有文件不匹配、metadata 发布竞争、普通修改清除收据、依赖在占位后变化；同文件重试只补未完成文件且不重记成功事件。Expected: 不完整可见、覆写或重复发布时失败。
-- [ ] 实现完整文件集合核对、赢家收据识别和故障状态，只有 CAS 发布者记固定导入事件。中断保留隐藏占位，同 hash 可继续；不同 hash 跳过。普通更新不能保留旧 restoreFingerprint，版本原始时间不能因此丢失。
-- [ ] 写/观察发布后集合并发删除、detach 失败和 TTL 边界 RED；实现发布后重查/清理。已发布响应保留 created（重放为 unchanged），清理失败报告 collection_cleanup_failed、数据不回滚，重放可重查并重试关联清理；实际 detach 返回 collection_detached。模型修订仍不可变，过期项立即遵循回收站语义。
-- [ ] Run `npm run build`、`node --test tests/backup-restore.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN，旧 Bin/Schema/Trash/活动/文档契约仍通过。
-- [ ] 提交 `feat: restore backups with conditional publication and resumable state`。
+- [x] 写 RED：源包导出后恢复到独立空 R2，比较 ID、当前 JSON、全部历史号/值/逻辑时间、固定模型修订、锁/可见性/TTL/删除及 purged；缺省配置不自动应用。示例：`assert.equal(result.status,'created'); assert.deepEqual(restored.value,source.value);`。
+- [x] Run build + `node --test tests/backup-restore.test.mjs`。Expected: 404/没有恢复行为 RED。
+- [x] 写并运行隔离 RED：直接种 pending 后正常读/匿名读/列表/回收站/Collection 成员/Schema 管理不暴露，普通写和 Cron 不碰文件；正常、删除、purged、legacy 或孤立目标冲突字节不变。Expected: 原有入口误读占位或覆盖时失败。
+- [x] 实现 Stored*Meta 联合及所有读取/生命周期 guard；实现获取 canonical 占位前检查既有对象、marker 完整校验、条件文件写入/同内容续作、依赖收据和固定模型验证、CAS 发布。最终 meta 仅业务白名单；Bin 新 lifecycleId；版本 originalUploadedAt 及历史接口回退语义一起接入。
+- [x] 写并观察故障 RED：第 N 次 put/get 抛异常、同/异指纹并发、已有文件不匹配、metadata 发布竞争、普通修改清除收据、依赖在占位后变化；同文件重试只补未完成文件且不重记成功事件。Expected: 不完整可见、覆写或重复发布时失败。
+- [x] 实现完整文件集合核对、赢家收据识别和故障状态，只有 CAS 发布者记固定导入事件。中断保留隐藏占位，同 hash 可继续；不同 hash 跳过。普通更新不能保留旧 restoreFingerprint，版本原始时间不能因此丢失。
+- [x] 写/观察发布后集合并发删除、detach 失败和 TTL 边界 RED；实现发布后重查/清理。已发布响应保留 created（重放为 unchanged），清理失败报告 collection_cleanup_failed、数据不回滚，重放可重查并重试关联清理；实际 detach 返回 collection_detached。模型修订仍不可变，过期项立即遵循回收站语义。
+- [x] Run `npm run build`、`node --test tests/backup-restore.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN，旧 Bin/Schema/Trash/活动/文档契约仍通过。
+- [x] 提交 `feat: restore backups with conditional publication and resumable state`。
 
 ## Task 5: 标准 JSON 批量导入与明确的逐项结果
 

@@ -1,3 +1,5 @@
+import { isImportMarker } from '../../shared/backup.ts';
+import type { ImportMarker } from '../../shared/backup-types.ts';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
 import { isActiveBin, type StoredBinMeta } from "./bin-state";
 
@@ -10,8 +12,8 @@ function key(id: string) { return `collections/${id}/meta.json`; }
 function normalizeEtag(etag: string) { return etag.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1"); }
 
 export async function getCollection(env: Env, id: string) {
-  const stored = await getJson<CollectionMeta>(requireDataBucket(env), key(id));
-  if (!stored || stored.value.status === "deleted") return null;
+  const stored = await getJson<CollectionMeta | ImportMarker>(requireDataBucket(env), key(id));
+  if (!stored || isImportMarker(stored.value) || stored.value.status === "deleted") return null;
   return { meta: stored.value, etag: stored.etag };
 }
 
@@ -30,11 +32,11 @@ export async function listCollectionBins(env: Env, id: string) {
 export async function listCollections(env: Env) {
   const bucket = requireDataBucket(env);
   const [collections, bins] = await Promise.all([
-    listJsonObjects<CollectionMeta>(bucket, "collections/"), listJsonObjects<StoredBinMeta>(bucket, "bins/"),
+    listJsonObjects<CollectionMeta | ImportMarker>(bucket, "collections/"), listJsonObjects<StoredBinMeta>(bucket, "bins/"),
   ]);
   const counts = new Map<string, number>();
   for (const bin of bins) if (isActiveBin(bin) && bin.collectionId) counts.set(bin.collectionId, (counts.get(bin.collectionId) ?? 0) + 1);
-  return collections.filter(meta => meta.status !== "deleted").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return collections.filter((meta): meta is CollectionMeta => !isImportMarker(meta) && meta.status !== "deleted").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(meta => ({ ...meta, binCount: counts.get(meta.id) ?? 0 }));
 }
 
@@ -72,8 +74,8 @@ export async function detachBinFromCollection(env: Env, binId: string, collectio
 
 export async function deleteCollection(env: Env, id: string, expectedEtag: string) {
   const bucket = requireDataBucket(env);
-  let current = await getJson<CollectionMeta>(bucket, key(id));
-  if (!current) return null;
+  let current = await getJson<CollectionMeta | ImportMarker>(bucket, key(id));
+  if (!current || isImportMarker(current.value)) return null;
   if (current.value.status === "deleted") return { ok: true, detached: 0 };
   if (current.value.status === "active") {
     if (normalizeEtag(current.etag) !== normalizeEtag(expectedEtag)) throw new Error("etag_conflict");
@@ -89,8 +91,8 @@ export async function deleteCollection(env: Env, id: string, expectedEtag: strin
   const stored = await putJson(bucket, key(id), { ...current.value, status: "deleted", updatedAt: new Date().toISOString() },
     { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
   if (!stored) {
-    const latest = await getJson<CollectionMeta>(bucket, key(id));
-    if (latest?.value.status !== "deleted") throw new Error("collection_delete_conflict");
+    const latest = await getJson<CollectionMeta | ImportMarker>(bucket, key(id));
+    if (!latest || isImportMarker(latest.value) || latest.value.status !== "deleted") throw new Error("collection_delete_conflict");
   }
   return { ok: true, detached };
 }

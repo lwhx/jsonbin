@@ -1,3 +1,4 @@
+import { isImportMarker } from '../../shared/backup.ts';
 import { resolveCreateDefaults } from './settings';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
 import { assertCollectionAvailable, getCollection, detachBinFromCollection } from "./collections";
@@ -65,7 +66,7 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
   let nextVersion = currentVersion + 1;
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor });
+    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor, include: ["customMetadata"] });
     for (const object of page.objects) {
       const number = Number(object.key.split("/").pop()?.replace(/\.json$/, ""));
       if (Number.isSafeInteger(number)) nextVersion = Math.max(nextVersion, number + 1);
@@ -170,13 +171,13 @@ export async function listBinVersions(env: Env, id: string) {
   const items: BinVersionSummary[] = [];
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor });
+    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor, include: ["customMetadata"] });
     for (const object of page.objects) {
       const filename = object.key.split("/").pop()!;
       if (!/^\d{6,}\.json$/.test(filename)) continue;
       const version = Number(filename.slice(0, -5));
       if (!Number.isSafeInteger(version) || version < 1 || object.key !== versionKey(id, version)) continue;
-      items.push({ version, createdAt: object.uploaded.toISOString(), size: object.size });
+      items.push({ version, createdAt: object.customMetadata?.originalUploadedAt ?? object.uploaded.toISOString(), size: object.size });
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -190,7 +191,7 @@ export async function getBinVersion(env: Env, id: string, version: number): Prom
   if (!current || !isActiveBin(current.value)) return null;
   const object = await bucket.get(versionKey(id, version));
   if (!object) return null;
-  return { id, version, createdAt: object.uploaded.toISOString(), size: object.size,
+  return { id, version, createdAt: object.customMetadata?.originalUploadedAt ?? object.uploaded.toISOString(), size: object.size,
     value: await object.json(), etag: object.httpEtag };
 }
 
@@ -232,7 +233,7 @@ export async function updateBin(
   if (!written) {
     // A purge may have raced this in-flight append; don't leave its new orphan behind.
     const latest = await getJson<StoredBinMeta>(bucket, metaKey(id));
-    if (latest?.value.purgeState) await bucket.delete(versionKey(id, nextVersion));
+    if (latest && !isImportMarker(latest.value) && latest.value.purgeState) await bucket.delete(versionKey(id, nextVersion));
     throw new Error("etag_conflict");
   }
 
@@ -254,7 +255,7 @@ export async function transformBin(env: Env, id: string, transform: (value: unkn
 export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
   const bucket = requireDataBucket(env);
   const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
-  if (!current || current.value.purgeState === "purged") return false;
+  if (!current || isImportMarker(current.value) || current.value.purgeState === "purged") return false;
 
   // A CAS tombstone makes deletion compete atomically with locking and writes.
   // Retain it so no delayed writer can recreate an active Bin after deletion.

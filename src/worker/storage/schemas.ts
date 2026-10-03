@@ -1,3 +1,5 @@
+import { isImportMarker } from '../../shared/backup.ts';
+import type { ImportMarker } from '../../shared/backup-types.ts';
 import { getJson, putJson, listJsonObjects, requireDataBucket } from "./r2";
 import { assertSchemaDefinition, assertSchemaValue, SchemaError, type JsonSchema } from "../validation/schema";
 
@@ -9,12 +11,12 @@ const metaKey = (id: string) => `schemas/${id}/meta.json`;
 const revisionKey = (id: string, revision: number) => `schemas/${id}/revisions/${String(revision).padStart(6, "0")}.json`;
 const normalize = (etag: string) => etag.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1");
 export async function listSchemas(env: Env) {
-  return (await listJsonObjects<SchemaMeta>(requireDataBucket(env), "schemas/")).filter(meta => meta.status === "active")
+  return (await listJsonObjects<SchemaMeta | ImportMarker>(requireDataBucket(env), "schemas/")).filter((meta): meta is SchemaMeta => !isImportMarker(meta) && meta.status === "active")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 export async function getSchema(env: Env, id: string): Promise<SchemaRecord | null> {
-  const bucket = requireDataBucket(env), stored = await getJson<SchemaMeta>(bucket, metaKey(id));
-  if (!stored || stored.value.status !== "active") return null;
+  const bucket = requireDataBucket(env), stored = await getJson<SchemaMeta | ImportMarker>(bucket, metaKey(id));
+  if (!stored || isImportMarker(stored.value) || stored.value.status !== "active") return null;
   const revision = await getJson<JsonSchema>(bucket, revisionKey(id, stored.value.currentRevision));
   if (!revision) throw new Error("schema_revision_missing");
   return { meta: stored.value, schema: revision.value, etag: stored.etag };
