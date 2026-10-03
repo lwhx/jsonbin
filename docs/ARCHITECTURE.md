@@ -29,7 +29,7 @@ R2 owns all durable state.
 
 Nothing stored only in KV is considered authoritative.
 
-Current and planned object layout (system settings remain a later phase; the trash prefix is retained for legacy compatibility):
+Current and planned object layout (system/settings.json is implemented; system/auth is reserved; the trash prefix is retained for legacy compatibility):
 
 ```text
 system/
@@ -240,3 +240,20 @@ The editor experience will use Monaco and the history comparison will use Monaco
 The original Remy Sharp JSONBin code is preserved on the `legacy-v2.6.4` branch.
 
 The `main` branch is a clean reimplementation and does not attempt runtime compatibility with the old Express/MongoDB stack.
+
+
+## System settings and business backups (P10)
+
+`/api/v1/system/info|settings|import|export|restore` requires a management Session, rejects every explicit Authorization, validates Origin for writes and returns no-store. The existing public health endpoint keeps its contract. R2 `system/settings.json` stores only versioned defaults and update time; reads of absent settings return private/null and a virtual ETag without creating an object. PATCH uses mandatory If-Match and conditional create/update. Defaults are resolved in common server-side Bin creation only for omitted visibility/expiry fields; explicit null means no expiry and relative TTL uses creation time.
+
+System probes use read-only R2 HEAD/KV GET. OAuth reports configuration presence, never values. Statistics scan at most 10000 R2 objects and 500 metadata bodies; errors/limits yield unavailable rather than partial totals. Canonical/legacy precedence and pending/purged exclusion apply to usable history; physical stored bytes include canonical orphan files.
+
+Exports project an allowlist into `jsonbin-backup` schemaVersion 1: defaults, collection metadata, all retained model revisions, Bin metadata/versions, trash/expired records and terminal purge markers. System authentication, keys/digests, activity, KV, unknown namespaces and internal restore metadata are excluded; arbitrary user JSON is preserved. Canonical metadata overrides old trash. Each captured resource's metadata ETag and history membership, plus settings ETag, are rechecked; a change/missing dependency/transition aborts export. This is per-resource consistency, not a global transaction: newly created resources may be absent.
+
+The closed backup graph has 100-resource/250-logical-object/10-MiB JSON limits; each metadata/marker, revision/version and settings counts once. Business depth is at most 64 excluding wrappers; each value is at most 1 MiB and a schema at most 64 KiB. UTF-8 is decoded strictly, BOM accepted. Browser ZIP is standard uncompressed STORE with exactly manifest.json and backup.json, verified CRC32, SHA-256 and byte count. The reader bounds actual bytes and rejects compression, encryption, ZIP64, descriptors, extras, paths, duplicate/overlapping entries and conflicting headers. Worker restore takes JSON resources, not ZIP.
+
+Restore is create-only per resource and retains original IDs. Collections/models publish before dependent Bins. Conditional metadata claims store a validated hidden `importState:pending` marker and content fingerprint. Ordinary reads/writes/listing, trash, lifecycle and Cron reject/skip these claims; interrupted claims are not automatically discarded. Immutable files are conditionally created, then all expected files and actual dependency receipts are verified before metadata CAS publication. Same-content imports resume; other claims and existing canonical/legacy/orphan/purged resources are skipped without overwrite. Bin publication creates a new lifecycle ID and preserves source visibility, expiry, locks, deletion state and pinned schema revision. Old history values are not revalidated against later models; current values are checked against their pinned revision.
+
+R2 custom metadata holds private restoreFingerprint receipts, originalUploadedAt and restoreOrder for history reconstruction; these fields never enter backup metadata or API values. Unchanged completed receipts allow safe repeat results; ordinary edits drop receipts. Expected dependency fingerprints are checked against actual published metadata and immutable files, including original revision order. Settings are only a candidate: applying them is a separate mandatory If-Match PATCH. Publication may be followed by collection detachment during concurrent deletion; cleanup failure remains created/unchanged with a warning. There is no cross-resource rollback. Abort stops client work and does not undo accepted server commits; network failure requires inspecting outcomes before repeating raw import.
+
+The Chinese settings UI keeps file contents only in component memory. Default settings use ETag conflict handling; preview/confirmation precedes writes, results remain per item and configuration application is separate. Generation/mounted/AbortController guards discard late file reads and responses on selection, navigation or logout, and Blob URLs are released after downloads. Bin detail exports the saved server value while retaining editor drafts.

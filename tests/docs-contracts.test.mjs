@@ -108,3 +108,22 @@ test('documentation auth matches public reads Session-only management and combin
   assert.equal(denied.response.status,403);assert.deepEqual(denied.data.requiredScopes,['collection:read','bin:read']);
   const revoked=await send('keys-revoke',{keyId:only.data.key.id});assert.ok(revoked.data.key.revokedAt);assert.equal(revoked.data.ok,undefined);
 });
+
+test('P10 generated management operations execute against the real Worker with Session CAS and restore outcomes',async()=>{
+ assert.ok(op('system-settings-get'));const settings=await send('system-settings-get');assert.equal(settings.response.status,200);
+ assert.equal((await send('system-settings-update',{etag:settings.data.etag})).response.status,200);assert.equal((await send('system-settings-update',{etag:settings.data.etag})).response.status,412);
+ const imported=await send('system-import');assert.equal(imported.response.status,200);assert.ok(imported.data.results.every(r=>r.status==='created'));
+ const backup=await send('system-export-all');assert.equal(backup.data.format,'jsonbin-backup');assert.equal(backup.response.headers.get('cache-control'),'no-store');
+ const restored=await send('system-restore');assert.equal(restored.data.status,'created');assert.equal((await send('system-restore')).data.status,'unchanged');
+ const denied=await send('system-info',{},undefined,{Authorization:'Bearer '+token});assert.equal(denied.response.status,401);
+});
+test('P10 three-language import examples transmit Chinese UTF-8 bytes to the real Worker',async()=>{
+ assert.ok(op('system-import'));const request=examples.buildRequest(op('system-import'),{origin});
+ for(const language of ['javascript','curl','python']){
+  let result;const code=examples.renderExample(language,request);
+  if(language==='javascript')await new(Object.getPrototypeOf(async function(){}).constructor)('fetch','console',code)((url,init)=>fetch(url,{...init,headers:{...init.headers,Cookie:cookie}}),{log(value){result=value;}});
+  else if(language==='curl'){const output=await run('bash',code.replace('-b cookies.txt -c cookies.txt',"-H 'Cookie: "+cookie+"'"));result=JSON.parse(output.trim().split(/\r?\n\r?\n/).at(-1));}
+  else {const stub=`import ast,json,sys,types,urllib.request\ncode=sys.stdin.read();ast.parse(code)\nclass Value(dict):\n def __repr__(self):return json.dumps(self)\nclass Response:\n def __init__(self,r):self.body=r.read()\n def raise_for_status(self):pass\n def json(self):return Value(json.loads(self.body))\ndef call(method,url,headers,data=None,timeout=30):\n assert data is None or isinstance(data,bytes)\n headers={**headers,'Cookie':${JSON.stringify(cookie)}}\n return Response(urllib.request.urlopen(urllib.request.Request(url,method=method,headers=headers,data=data),timeout=timeout))\nsession=types.SimpleNamespace(request=call)\nsys.modules['requests']=types.SimpleNamespace(request=call)\nexec(code)\n`;result=JSON.parse((await run('python3',code,['-c',stub])).trim());}
+  assert.ok(result.results.every(r=>r.status==='created'));const id=result.results[0].id;const stored=await send('bin-get',{binId:id});assert.equal(stored.data.meta.name,'演示 JSON');assert.equal(stored.data.value.note,null);
+ }
+});

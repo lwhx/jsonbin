@@ -954,28 +954,44 @@ Dashboard 内提供可直接复制的文档：
 
 设置页：
 
-- [ ] 系统信息
-- [ ] Worker / R2 / KV 状态
-- [ ] 当前版本
-- [ ] 默认可见性
-- [ ] 默认 TTL
-- [ ] GitHub OAuth 状态
-- [ ] 数据统计
+- [x] 系统信息
+- [x] Worker / R2 / KV 状态
+- [x] 当前版本
+- [x] 默认可见性
+- [x] 默认 TTL
+- [x] GitHub OAuth 状态
+- [x] 数据统计
 
 导入：
 
-- [ ] 单 JSON 文件
-- [ ] 批量 JSON
-- [ ] 旧 JSONBin 数据格式（如需要）
+- [x] 单 JSON 文件
+- [x] 批量 JSON
+- [x] 旧 JSONBin 数据格式（如需要）：当前不适用，未发现确定协议或样本；普通 JSON 不按 format 字段自动解包。
 
 导出：
 
-- [ ] 导出单 Bin
-- [ ] 导出全部数据
-- [ ] 导出配置和元数据
-- [ ] ZIP 备份格式
+- [x] 导出单 Bin
+- [x] 导出全部数据
+- [x] 导出配置和元数据
+- [x] ZIP 备份格式
 
-Secret 永远不进入导出文件。
+系统认证 Secret、Session、API Key/摘要、KV、活动日志、内部标记和未知命名空间不进入备份。业务 JSON 由用户控制，原样保留，不按敏感词删改。
+
+---
+
+实施契约（2026-10-04，Asia/Shanghai）：
+
+- 设置页为 `/#/settings`，系统状态/统计只读；探针不验证 OAuth 登录、存储写入或真实 Cron。统计最多扫描 10000 对象/读取 500 元数据，失败或超限显示不可用。
+- `/api/v1/system/info|settings|import|export|restore` 仅管理 Session，拒绝任何 Authorization；写入校验 Origin，响应 no-store。公共 health 契约保留。
+- 默认设置为 private/null，R2 对象缺失时只读返回虚拟 ETag。设置保存要求 If-Match（428 缺少、412 冲突）；TTL 为 null 或 1–31536000 整数秒。创建时仅省略字段应用默认值，显式 visibility 或 expiresAt:null 优先；相对 TTL 按服务器创建时间计算，不改变既有 Bin。
+- 普通导入接受完整 UTF-8/BOM JSON 文件，一个数组/null/false 也是一项；文件及序列化值各限 1 MiB、业务深度 64，每批 1–100 项且正文不超过 10 MiB。全量结构验证后逐项创建并返回 created/failed，写入不自动重试，网络中断先核对列表。
+- 导出参数封闭为 all/config + backup，或 bin + UUID + value/backup。value 读取保存值，不修改编辑草稿；业务备份包含全部保留历史、回收站/过期元数据、永久删除标记、集合/模型修订及默认设置，canonical 优先于旧 trash。捕获资源及设置变化返回 409；逐资源一致不保证全局事务，新创建资源可能遗漏。
+- 备份上限 100 资源、250 逻辑对象、10 MiB UTF-8 JSON，元数据/标记、版本/修订和设置各计一次；模型 64 KiB。ZIP 为 STORE 的 manifest.json/backup.json，含 CRC32、SHA-256 与字节校验，总大小不超过 10 MiB + 64 KiB。拒绝压缩、加密、ZIP64、描述符、额外/路径/重复/重叠条目及头不一致。Worker 只接收验证过的 JSON 资源。
+- 恢复保留 ID、公开性、TTL、锁、删除状态、固定模型修订及历史；既有 active/deleted/purged/legacy/orphan 资源跳过不覆盖。依赖优先，冲突跳过相关 Bin。隐藏 pending 用于同备份故障续作，不由 Cron 清除；修改后的既有资源不能被重试覆盖。设置单独确认并带 If-Match 保存。过期 Bin 立即服从回收站规则。并发集合清理失败保留实际 created/unchanged 和警告；取消不回滚已提交数据。
+- 文件只保留组件内存，预览确认后写入；切换文件、离页、退出或取消丢弃迟到结果/下载，默认设置迟到不覆盖手动选择，412 保留草稿。
+- API 文档新增系统管理及备份操作，curl/JavaScript/Python 示例共用契约；Python 正文显式 UTF-8 bytes。设计和执行依据见 [P10 设计](superpowers/specs/2026-10-04-p10-settings-backup-design.md) / [实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)。
+
+验收状态：UI 实现通过类型检查/构建、123 项 Worker/客户端测试及 48 项 Chromium 浏览器测试；新增 API 文档 10 项定向测试已通过，含真实 Worker 的三语言请求；完整产品树正在最终复验。整阶段独立审查、main 合并及精确提交的 GitHub CI / Workers Builds 待核对，未预先宣称远端成功。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
 
 ---
 
@@ -1067,4 +1083,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。下一阶段为 **P10 设置、导入与导出**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现并通过 UI 本地验收，正在补齐最终文档契约与整阶段审查；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。

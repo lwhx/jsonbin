@@ -71,3 +71,9 @@ test('every operation renders matching request semantics in all three languages'
     if(Object.hasOwn(request,'body'))assert.deepEqual(JSON.parse(parsed.data),request.body);
   }
 });
+
+test('P10 documents Session-only management, required settings CAS and bounded backup contracts',()=>{
+ const ids=['system-info','system-settings-get','system-settings-update','system-import','system-export-all','system-export-config','system-export-bin','system-restore'];
+ for(const id of ids){const op=operation(id);assert.ok(op,id);assert.equal(op.auth,'session');assert.deepEqual(op.scopes,[]);const req=examples.buildRequest(op,context);assert.equal(req.credentials,'include');assert.equal(req.headers.Authorization,undefined);}
+ assert.equal(operation('system-settings-update').etag,'required');assert.equal(operation('system-settings-update').method,'PATCH');assert.ok(Array.isArray(operation('system-import').body.items));assert.equal(operation('system-export-all').path,'/api/v1/system/export?scope=all&format=backup');assert.ok(operation('system-restore').body.resource.kind);assert.ok(catalog.DOC_ERRORS.some(e=>e.status===413));
+});
