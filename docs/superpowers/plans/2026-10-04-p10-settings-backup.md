@@ -148,13 +148,13 @@
 
 `parseStandardFiles(files:readonly File[]):Promise<ImportPreviewItem[]>`（fileName/name/value/type/bytes）；`readBackupFile(file:File):Promise<BackupPackage>`；`buildRestoreRequests(backup:BackupPackage):Promise<RestoreRequest[]>`；`runRestore(backup:BackupPackage,client:SystemClient,onResult:(r:RestoreResult)=>void,signal?:AbortSignal):Promise<RestoreResult[]>`；`downloadBytes(bytes:Uint8Array,fileName:string,contentType:string):void`。
 
-- [ ] 写 RED：真实本地 HTTP 捕获 credentials/If-Match/query 和只发一次写请求；100 项含部分失败正确返回；AbortError 不当成全失败；export 保留 UTF-8/raw scalar 字节。Expected: 缺函数或不正确协议失败。
-- [ ] Run `node --test tests/transfer.test.mjs`。Expected: 明确接口/行为 RED。
-- [ ] 实现 client（错误不回显正文），真实字节下载上限；文件数量/size 先检再读，fatal UTF-8/BOM、完整 JSON/名称限制、明确模式、不按 format 自动恢复。备份按固定 ZIP magic / JSON 分支校验。
-- [ ] 写/观察图调度 RED：集合/模型优先、同一指纹与服务器一致、依赖 failed/skipped 不请求相关 Bin、409 依赖错误映射 dependency_skipped，其他独立资源继续；取消后不发下一个请求，已提交结果保留且不声称回滚。
-- [ ] 实现 buildRestoreRequests 和 runRestore，配置只作为候选不发送自动 PATCH；导出 bytes 封装 ZIP 用 Task 2，downloadBytes 创建/释放 Blob URL。UI 生命周期控制由 Task 7 调用处负责。
-- [ ] Run `node --test tests/transfer.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN，客户端不保存 Cookie/Token/文件到持久存储。
-- [ ] 提交 `feat: add bounded file transfer clients and restore orchestration`。
+- [x] 写 RED：真实本地 HTTP 捕获 credentials/If-Match/query 和只发一次写请求；100 项含部分失败正确返回；AbortError 不当成全失败；export 保留 UTF-8/raw scalar 字节。Expected: 缺函数或不正确协议失败。
+- [x] Run `node --test tests/transfer.test.mjs`。Expected: 明确接口/行为 RED。
+- [x] 实现 client（错误不回显正文），真实字节下载上限；文件数量/size 先检再读，fatal UTF-8/BOM、完整 JSON/名称限制、明确模式、不按 format 自动恢复。备份按固定 ZIP magic / JSON 分支校验。
+- [x] 写/观察图调度 RED：集合/模型优先、同一指纹与服务器一致、依赖 failed/skipped 不请求相关 Bin、409 依赖错误映射 dependency_skipped，其他独立资源继续；取消后不发下一个请求，已提交结果保留且不声称回滚。
+- [x] 实现 buildRestoreRequests 和 runRestore，配置只作为候选不发送自动 PATCH；导出 bytes 封装 ZIP 用 Task 2，downloadBytes 创建/释放 Blob URL。UI 生命周期控制由 Task 7 调用处负责。
+- [x] Run `node --test tests/transfer.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN，客户端不保存 Cookie/Token/文件到持久存储。
+- [x] 提交 `feat: add bounded file transfer clients and restore orchestration`。
 
 ## Task 7: 中文设置页、真实导入导出和创建默认选择
 
