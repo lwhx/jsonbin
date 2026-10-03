@@ -991,7 +991,7 @@ Dashboard 内提供可直接复制的文档：
 - 文件只保留组件内存，预览确认后写入；切换文件、离页、退出或取消丢弃迟到结果/下载，默认设置迟到不覆盖手动选择，412 保留草稿。
 - API 文档新增系统管理及备份操作，curl/JavaScript/Python 示例共用契约；Python 正文显式 UTF-8 bytes。设计和执行依据见 [P10 设计](superpowers/specs/2026-10-04-p10-settings-backup-design.md) / [实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)。
 
-验收状态：UI 实现通过类型检查/构建、123 项 Worker/客户端测试及 48 项 Chromium 浏览器测试；新增 API 文档 10 项定向测试已通过，含真实 Worker 的三语言请求；完整产品树正在最终复验。整阶段独立审查、main 合并及精确提交的 GitHub CI / Workers Builds 待核对，未预先宣称远端成功。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
+验收状态：完整 P10 产品树通过类型检查/构建、126 项 Worker/客户端测试及 48 项 Chromium 浏览器测试，无失败或 skip；新增 API 文档 10 项定向测试已通过，含真实 Worker 的三语言请求。整阶段独立审查、main 合并及精确 main 提交的 GitHub CI / Workers Builds 待核对，未预先宣称远端成功。中间功能分支 `9609f49` 的 Workers Builds 报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；后续 main 构建另行核对。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
 
 ---
 
@@ -1083,4 +1083,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现并通过 UI 本地验收，正在补齐最终文档契约与整阶段审查；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现并通过 UI 本地验收，文档契约及完整本地验收已通过，正在整阶段审查；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。

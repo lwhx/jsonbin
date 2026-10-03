@@ -183,8 +183,8 @@
 - [x] 实现目录和必要生成器扩展。
 - [x] Run 上述 docs focused 命令。Expected: GREEN，既有恶意引用/隐私/三语言执行用例保持。
 - [x] 更新 README/ARCHITECTURE/DEVELOPMENT：P10 必做勾选、旧格式当前不适用、URL/默认规则、STORE ZIP 支持、10 MiB/100/250/深度/批量限制、保留 ID/冲突/续作/未完成占位、不覆写设置、逐资源一致与公开/TTL 语义。远端检查此时明确待核对，不预先称成功。
-- [ ] Run `npm run typecheck`、`npm run build`、`npm test`、`npm run test:browser`。Expected: 最终产品树全套 GREEN，无失败/skip；只记录实际数量（基线 91 / 40），将输出保存在本计划临时目录。
-- [ ] 提交 `docs: document P10 settings and backup contracts with local acceptance`，产品树/文档可供整分支审查。
+- [x] Run `npm run typecheck`、`npm run build`、`npm test`、`npm run test:browser`。Expected: 最终产品树全套 GREEN，无失败/skip；只记录实际数量（基线 91 / 40），将输出保存在本计划临时目录。
+- [x] 提交 `docs: document P10 settings and backup contracts with local acceptance`，产品树/文档可供整分支审查。
 
 
 ## Task 9: 一次整分支审查及已授权的 main 交付
