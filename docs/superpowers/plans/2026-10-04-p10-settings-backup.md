@@ -162,15 +162,15 @@
 
 **Interfaces:** SettingsPage({onDirtyChange:(dirty:boolean)=>void})；DefaultsForm({record:SettingsRecord,onSaved:(r:SettingsRecord)=>void,onDirtyChange:(dirty:boolean)=>void})；ImportPanel({client:SystemClient,onBusyChange:(busy:boolean)=>void,onCompleted:()=>void})；ExportPanel({client:SystemClient,onBusyChange:(busy:boolean)=>void})。消费 Task 6 systemApi/files/transfer/download；Query keys 为 system-info / system-settings，业务完成后刷新 bins / trash-bins / collections / schemas / activity。
 
-- [ ] 写浏览器 RED：侧栏设置启用、/#/settings 刷新；真实保存默认/新建省略默认与显式 null；412 保留草稿、确认离页；迟到默认数据不覆盖用户选择。Expected: 原禁用导航/缺路由或错误状态失败。
-- [ ] Run `npm run test:browser -- tests/browser/settings.spec.ts`。Expected: 目标 UI 断言 RED。
-- [ ] 实现路由与三组卡片、Loading/错误/重试/统计不可用；DefaultsForm 只在成功响应后提交草稿，412 显示重新读取；新建选项明确“以创建时设置为准”，默认/永不过期/自定义发送正确省略/null/时间，TTL 不在打开时预计算。退出清理系统查询。
-- [ ] 写并观察真实文件 RED：普通多文件预览无写、数组/null/BOM/非法编码/超限反馈、逐项部分失败、mode 区分；下载事件读实际 JSON/ZIP，迁移到空测试存储后核对恢复列表/历史，公开/过期提示可见。往返测试使用两套独立 createSystemHarness，经 Playwright API 路由透传真实 Worker/独立 R2，依次切换源/目的实例并转发实际正文；不伪造成功结果，也不依赖旧浏览器用例留下的大数据集。Expected: 缺流程、错误内容或无预览即写时失败。
-- [ ] 实现导入/恢复确认、结果列表与进度；source 配置只显示并提供单独 If-Match 应用。导出全量/config/选定 Bin；BinDetailPage “导出已保存 JSON”仅 GET，JSON/设置草稿不变。
-- [ ] 写并观察生命周期 RED：慢读/传输后改选文件、离页/退出、拒绝下载/失败；阻止重复点击，迟到结果不更新新预览、不触发离开后的下载；取消提示已提交可能继续。覆盖 390px 无整体横向溢出、深色模式和键盘操作。
-- [ ] 实现 generation / AbortController / mounted guard 与 Blob 清理，onDirtyChange 聚合草稿及 busy，沿用现有确认；文件只保留组件内存，失败不清掉可修正预览。
-- [ ] Run `npm run typecheck`、`npm test`、完整 `npm run test:browser`。Expected: GREEN，旧 40 项浏览器及新增项全部真实执行，记录实际数量。
-- [ ] 提交 `feat: add settings dashboard and reviewed import and backup flows`。
+- [x] 写浏览器 RED：侧栏设置启用、/#/settings 刷新；真实保存默认/新建省略默认与显式 null；412 保留草稿、确认离页；迟到默认数据不覆盖用户选择。Expected: 原禁用导航/缺路由或错误状态失败。
+- [x] Run `npm run test:browser -- tests/browser/settings.spec.ts`。Expected: 目标 UI 断言 RED。
+- [x] 实现路由与三组卡片、Loading/错误/重试/统计不可用；DefaultsForm 只在成功响应后提交草稿，412 显示重新读取；新建选项明确“以创建时设置为准”，默认/永不过期/自定义发送正确省略/null/时间，TTL 不在打开时预计算。退出清理系统查询。
+- [x] 写并观察真实文件 RED：普通多文件预览无写、数组/null/BOM/非法编码/超限反馈、逐项部分失败、mode 区分；下载事件读实际 JSON/ZIP，迁移到空测试存储后核对恢复列表/历史，公开/过期提示可见。往返测试使用两套独立 createSystemHarness，经 Playwright API 路由透传真实 Worker/独立 R2，依次切换源/目的实例并转发实际正文；不伪造成功结果，也不依赖旧浏览器用例留下的大数据集。Expected: 缺流程、错误内容或无预览即写时失败。
+- [x] 实现导入/恢复确认、结果列表与进度；source 配置只显示并提供单独 If-Match 应用。导出全量/config/选定 Bin；BinDetailPage “导出已保存 JSON”仅 GET，JSON/设置草稿不变。
+- [x] 写并观察生命周期 RED：慢读/传输后改选文件、离页/退出、拒绝下载/失败；阻止重复点击，迟到结果不更新新预览、不触发离开后的下载；取消提示已提交可能继续。覆盖 390px 无整体横向溢出、深色模式和键盘操作。
+- [x] 实现 generation / AbortController / mounted guard 与 Blob 清理，onDirtyChange 聚合草稿及 busy，沿用现有确认；文件只保留组件内存，失败不清掉可修正预览。
+- [x] Run `npm run typecheck`、`npm test`、完整 `npm run test:browser`。Expected: GREEN，旧 40 项浏览器及新增项全部真实执行，记录实际数量。
+- [x] 提交 `feat: add settings dashboard and reviewed import and backup flows`。
 
 ## Task 8: API 示例、备份说明和完整本地验收
 

@@ -1,3 +1,5 @@
+import { SettingsPage } from './features/settings/SettingsPage';
+import { systemApi } from './features/settings/api';
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -85,7 +87,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash" | "Activity" | "Docs";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash" | "Activity" | "Docs" | "Settings";
 
 type NavLink = {
   label: string;
@@ -116,7 +118,7 @@ const nav: NavItem[] = [
   { label: "API 文档", icon: TerminalSquare, section: "Docs" },
   { divider: true, label: "系统" },
   { label: "回收站", icon: Archive, section: "Trash" },
-  { label: "设置", icon: Settings, disabled: true },
+  { label: "设置", icon: Settings, section: "Settings" },
 ];
 
 function apiErrorMessage(status: number) {
@@ -354,11 +356,11 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : "Overview";
+  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : "/"; };
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
@@ -408,6 +410,8 @@ function AuthenticatedApp({
 
   async function logout() {
     if (detailDirty && !window.confirm("退出登录将丢弃未保存的修改，是否继续？")) return;
+    window.dispatchEvent(new Event("jsonbin:logout"));
+    setDetailDirty(false);
     await fetch("/api/v1/auth/logout", {
       method: "POST",
       credentials: "include",
@@ -422,6 +426,7 @@ function AuthenticatedApp({
     queryClient.removeQueries({ queryKey: ["schema"] });
     queryClient.removeQueries({ queryKey: ["keys"] });
     queryClient.removeQueries({ queryKey: ["trash-bins"] });
+    for (const key of ["system-info", "system-settings", "activity"]) { await queryClient.cancelQueries({ queryKey: [key] }); queryClient.removeQueries({ queryKey: [key] }); }
   }
 
   const totalStorage =
@@ -544,7 +549,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Docs" ? <DocsPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Trash" ?
+          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Trash" ?
             <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
@@ -831,7 +836,9 @@ function CreateBinDialog({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<"private" | "public">("private");
+  const [visibility, setVisibility] = useState<"default" | "private" | "public">("default");
+  const defaults = useQuery({ queryKey: ["system-settings"], queryFn: ({ signal }) => systemApi.getSettings(signal), retry: false });
+  const [expiryMode, setExpiryMode] = useState<"default" | "never" | "custom">("default");
   const [expiryInput, setExpiryInput] = useState("");
   const [collectionId, setCollectionId] = useState("");
   const [schemaId, setSchemaId] = useState("");
@@ -848,7 +855,7 @@ function CreateBinDialog({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(""); setIssues([]);
-    if (expiryInput && new Date(expiryInput).getTime() <= Date.now()) {
+    if (expiryMode === "custom" && (!expiryInput || new Date(expiryInput).getTime() <= Date.now())) {
       setError("到期时间必须晚于当前时间，留空表示永不过期。"); return;
     }
 
@@ -869,11 +876,11 @@ function CreateBinDialog({
         body: JSON.stringify({
           name,
           description,
-          visibility,
+          ...(visibility === "default" ? {} : { visibility }),
           collectionId: collectionId || null,
           schemaId: schemaId || null,
           schemaLocked,
-          expiresAt: expiryFromInput(expiryInput),
+          ...(expiryMode === "default" ? {} : { expiresAt: expiryMode === "never" ? null : expiryFromInput(expiryInput) }),
           value,
         }),
       });
@@ -930,17 +937,19 @@ function CreateBinDialog({
               <select
                 value={visibility}
                 onChange={(event) =>
-                  setVisibility(event.target.value as "private" | "public")
+                  setVisibility(event.target.value as "default" | "private" | "public")
                 }
               >
+                <option value="default">使用系统默认（以创建时设置为准）</option>
                 <option value="private">私有</option>
                 <option value="public">公开</option>
               </select>
             </label>
-            {visibility === "public" && <p>公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。</p>}
+            {(visibility === "public" || visibility === "default" && defaults.data?.settings.defaultVisibility === "public") && <p>公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。</p>}
           </div>
-          <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={expiryInput} disabled={saving} onChange={event => setExpiryInput(event.target.value)} /></label>
-          <p>使用本地时区，留空表示永不过期；到期后停止正常读写并进入回收站。</p>
+          <label>到期策略<select aria-label="到期策略" value={expiryMode} disabled={saving} onChange={event => setExpiryMode(event.target.value as typeof expiryMode)}><option value="default">使用系统默认（以创建时设置为准）</option><option value="never">永不过期</option><option value="custom">自定义时间</option></select></label>
+          <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={expiryInput} disabled={saving || expiryMode === "never"} onChange={event => { setExpiryInput(event.target.value); setExpiryMode(event.target.value ? "custom" : "default"); }} /></label>
+          <p>默认值以创建时设置为准；自定义时间使用本地时区。当前默认：{defaults.data ? `${defaults.data.settings.defaultVisibility === "public" ? "公开" : "私有"}，${defaults.data.settings.defaultTtlSeconds === null ? "永不过期" : defaults.data.settings.defaultTtlSeconds + " 秒 TTL"}` : "正在读取，创建时由服务器确定"}。到期后进入回收站。</p>
 
           <label>
             描述

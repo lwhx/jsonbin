@@ -1,3 +1,5 @@
+import { systemApi } from '../settings/api';
+import { downloadBytes } from '../settings/download';
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, Save, Trash2, Braces, RefreshCw } from "lucide-react";
@@ -29,11 +31,12 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const mounted = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const exportController = useRef<AbortController | null>(null), exporting = useRef(false);
+  useEffect(() => { mounted.current = true; const cancel = () => exportController.current?.abort(); window.addEventListener("jsonbin:logout", cancel); return () => { mounted.current = false; exportController.current?.abort(); window.removeEventListener("jsonbin:logout", cancel); }; }, []);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [metadata, setMetadata] = useState<MetadataInput | null>(null);
   const [tab, setTab] = useState<Tab>("编辑器");
-  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | "lock" | null>(null);
+  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | "lock" | "export" | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -77,6 +80,14 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     if (deleteOpen && busy === "delete") deleteDialog.current?.focus();
   }, [deleteOpen, busy]);
 
+  async function exportSaved() {
+    if (busy || exporting.current) return;
+    const abort = new AbortController(); exportController.current = abort; exporting.current = true; setBusy("export"); setError(null);
+    try { const bytes = await systemApi.exportData({ scope: 'bin', id, format: 'value' }, abort.signal); if (!mounted.current || abort.signal.aborted) return;
+      downloadBytes(bytes, `jsonbin-${id}-value.json`, 'application/json; charset=utf-8'); setNotice('已导出服务器保存的 JSON，草稿保留。');
+    } catch (caught) { if (mounted.current && !abort.signal.aborted) report(caught); }
+    finally { if (mounted.current) { exporting.current = false; setBusy(null); } }
+  }
   function report(caught: unknown) { setError(caught instanceof Error ? caught : new Error("操作失败，请稍后重试。")); }
   async function refresh() {
     if (busy || (dirty && !window.confirm("重新加载会丢弃未保存的内容，是否继续？"))) return;
@@ -191,6 +202,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const locked = record.meta.locked;
   return <section className="bin-detail">
     <div className="detail-actions">
+      <button type="button" className="secondary-button" onClick={() => void exportSaved()} disabled={Boolean(busy)}>导出已保存 JSON</button>
       <button type="button" className="secondary-button" onClick={onBack} disabled={Boolean(busy)}><ArrowLeft size={16} />返回数据仓</button>
       <button type="button" className="secondary-button" onClick={refresh} disabled={Boolean(busy)}><RefreshCw size={15} />重新加载</button>
     </div>
