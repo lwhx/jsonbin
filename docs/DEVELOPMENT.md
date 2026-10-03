@@ -43,7 +43,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓删除 | ✅ 后端基础完成 | meta 移入 trash，活动版本暂保留 |
 | 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
-| 集合 | ✅ 本地验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；CI/线上验收待确认 |
+| 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
 | 数据模型 | ⬜ 未开始 | 只有导航占位 |
 | API 密钥 | ⬜ 未开始 | 只有导航占位 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
@@ -463,7 +463,7 @@ P2 验收：
 
 ## P3 集合 Collections
 
-状态：✅ 后端、界面及本地验收完成；GitHub CI、Cloudflare Workers Builds 和生产功能验收待确认。
+状态：✅ 后端、界面、本地验收及 GitHub CI 完成；Cloudflare Workers Builds 成功，生产功能验收待确认。
 
 R2：
 
@@ -523,7 +523,9 @@ GET    /api/v1/collections/:id/bins
 - 类型检查、生产构建通过。
 - Worker/客户端测试 27 项通过，0 失败、0 跳过；覆盖校验、认证、集合 ETag、成员迁移/计数、删除后保留 JSON/版本、锁定 Bin 的关联清理、删除重试、并发迁入/删除，以及清理不覆盖并发 JSON 保存或迁往另一集合的关联。
 - Chromium 浏览器验收 15 项通过，0 失败、0 跳过；包含集合新建/编辑/详情刷新、成员数量、直接分组创建、迁移和移出、删除保留数据，以及手机/深色布局、冲突/网络/Session 错误保留草稿。
-- GitHub CI、Cloudflare Workers Builds 和生产功能验收：等待本轮提交后核实，未提前标记成功。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37122583885) 成功，验证功能提交 `1bedbd6`，包含类型检查、生产构建、Worker/客户端测试和浏览器验收。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/54a075f1-2654-489e-b5eb-f22a6390ff4f) 对同一功能提交报告 success，版本 ID 为 `05302cf1-6c9f-40c5-84b6-f4b0435e6363`。
+- 生产功能验收：尚未确认；没有将构建成功等同于对生产 JSON/集合操作的功能验收。
 
 ---
 
@@ -835,7 +837,7 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P3 集合已完成本地开发与验收，下一阶段为 **P4 数据模型 / JSON Schema**。P1 / P2 的 CI 与 Workers Builds 已核实成功；P3 本轮提交后的结果待核实。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
+P3 集合已完成本地开发、验收及 CI，下一阶段为 **P4 数据模型 / JSON Schema**。P1 / P2 / P3 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
 
 这样可以先把最核心的 Bin 使用链路彻底打通：
 
