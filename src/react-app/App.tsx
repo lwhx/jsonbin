@@ -924,6 +924,7 @@ function CreateBinDialog({
                 <option value="public">公开</option>
               </select>
             </label>
+            {visibility === "public" && <p>公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。</p>}
           </div>
 
           <label>

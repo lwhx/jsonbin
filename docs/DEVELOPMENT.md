@@ -40,12 +40,13 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓列表 | ✅ 基础完成 | 列表、搜索、创建 |
 | 数据仓读取 | ✅ 后端完成 | GET /api/v1/bins/:id |
 | 数据仓更新 | ✅ 本地验收通过 | PUT + ETag/If-Match；版本文件不可覆盖；meta 条件更新 |
-| 数据仓删除 | ✅ 后端基础完成 | meta 移入 trash，活动版本暂保留 |
+| 数据仓删除 | ✅ 后端基础完成 | 条件写入删除标记并归档到 trash；历史版本保留，锁定时拒绝删除 |
 | 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
+| 高级 Bin API | ✅ 本地验收完成，CI 待验证 | Merge Patch、深层路径、数据锁、公开当前读取；新增接口沿用 Scope/ETag/Schema |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | 回收站 | ⬜ 未开始 | 后端有最基础 trash 写入，无 UI/恢复 |
@@ -397,7 +398,7 @@ If-Match: "当前 ETag"
 {"name":"名称","description":"描述","visibility":"private"}
 ~~~
 
-至少提供一个允许字段；名称 trim 后 1–160 字符，描述不超过 1000 字符，可见性仅支持 private/public。未知字段拒绝。成功返回 BinRecord、新 ETag 和当前版本号；不生成 JSON 新版本。公开只读访问仍留给 P6。
+至少提供一个允许字段；名称 trim 后 1–160 字符，描述不超过 1000 字符，可见性仅支持 private/public。未知字段拒绝。成功返回 BinRecord、新 ETag 和当前版本号；不生成 JSON 新版本。P6 已补充公开只读访问与数据锁管理，详见该阶段说明。
 
 并发写入以条件创建版本对象和条件更新 meta 保护：不会覆盖已存在的版本文件。冲突留下的孤立版本保留；后续保存跳过已占用编号，因此并发冲突后版本号可能不连续，正常连续保存仍为 +1。
 
@@ -665,15 +666,15 @@ DELETE /api/v1/keys/:id
 Bearer 权限规则：
 
 - 使用 Cookie 的 Session 写请求若携带 Origin，必须匹配 APP_ORIGIN 或当前请求 origin，否则返回 403 `origin_not_allowed`。不携带 Origin 的可信脚本 Session 请求保留原行为；显式 Bearer 调用按 Scope 授权，不使用 Cookie 的来源规则。
-- Worker 收到 Authorization 请求头时，优先检查 Bearer 凭据；无效/撤销/过期 Token 返回 401 与 `WWW-Authenticate`，不回退 Cookie。没有 Authorization 时保留现有 Session 认证。
+- Worker 收到 Authorization 请求头时，优先检查 Bearer 凭据；无效/撤销/过期 Token 返回 401 与 `WWW-Authenticate`，不回退 Cookie 或公开访问。没有 Authorization 时使用 Session；P6 的公开 Bin 当前内容/路径读取允许匿名。
 - Scope 不足返回 403 `insufficient_scope` 与 requiredScopes，并提供对应认证响应头。Session 管理员可使用全部已有资源接口。
 - 权限作用于单用户仓库的全部对应资源，当前没有按 Bin/集合 ID 限制的子权限。新资源路由必须显式使用 `requireAccess(...)`，并加入 Scope 验收矩阵。
 
 | Scope | 允许的现有接口 |
 | --- | --- |
-| bin:read | Bin 列表、当前 JSON/元数据详情 |
+| bin:read | Bin 列表、当前 JSON/元数据详情及深层路径读取 |
 | bin:create | 新建 Bin（含可选集合、模型绑定） |
-| bin:update | 更新 JSON、修改元数据/绑定/锁定；恢复历史还需 history:read |
+| bin:update | 替换 JSON、Merge Patch、深层路径写入、修改元数据/绑定/锁定；恢复历史还需 history:read |
 | bin:delete | 删除 Bin |
 | collection:read | 集合列表/详情；集合内 Bin 列表还需 bin:read |
 | collection:write | 集合创建、修改、删除（只解除成员关联） |
@@ -716,26 +717,81 @@ P5 完成后，JSONBin 具备脚本/自动化工具调用能力；后续 P6 的�
 
 ## P6 高级 Bin API
 
+状态：✅ 后端、界面和本地验收完成；CI / Workers Builds 待本次提交验证，生产功能验收待确认。
+
 功能：
 
-- [ ] JSON Merge Patch
-- [ ] 深层路径读取
-- [ ] 深层路径写入
-- [ ] 数据锁 locked
-- [x] Schema 锁 schemaLocked（P4 已实现；P6 新写入路径需复用同一校验）
-- [ ] Public/Private 真正生效
-- [ ] public Bin 无登录只读
-- [x] private Bin 必须 Session 或 API Key（P5 已实现当前接口；P6 新路由需继续校验）
+- [x] JSON Merge Patch（RFC 7396）
+- [x] 深层路径读取
+- [x] 深层路径写入
+- [x] 数据锁 locked：设置页锁定/单独解锁、只读编辑器、删除禁用、冲突和网络错误提示
+- [x] Schema 锁 schemaLocked：局部写入复用完整 JSON 与固定模型修订校验
+- [x] Public/Private 真正生效
+- [x] public Bin 无登录只读当前 JSON/元数据和路径；历史/列表/写入仍需认证
+- [x] private Bin 必须 Session 或相应 Scope 的 API Key；新增路由加入权限矩阵
 
-计划 API：
+API：
 
 ~~~text
 PATCH /api/v1/bins/:id
+GET   /api/v1/bins/:id/value
 GET   /api/v1/bins/:id/value/*
+PUT   /api/v1/bins/:id/value
 PUT   /api/v1/bins/:id/value/*
+PATCH /api/v1/bins/:id/meta       # 新增 locked 字段
 ~~~
 
-所有写入最终仍然生成新的不可变版本。
+局部更新规则：
+
+- PATCH 请求体直接是 Merge Patch 文档，推荐 `Content-Type: application/merge-patch+json`，兼容 `application/json`；不使用 `{value: ...}` 包装。对象递归合并，成员值 `null` 删除该字段，数组/标量整体替换，根 `null` 将整个 JSON 替换为 null。
+- 路径 PUT 请求体为严格的 `{"value": ...}`，支持 null、布尔、数字、字符串、数组与对象，未知字段拒绝。GET 路径返回 `{id, path, value, etag, version}`，path 为已解码的 token 数组；写入返回完整 BinRecord。
+- `/value` 表示根 JSON；`/value/` 表示空字符串键。路径按 `/` 分段，每段 URL 解码一次，再按 JSON Pointer token 规则解码 `~1` 为 `/`、`~0` 为 `~`。示例：`/value/a~1b/~0key` 访问 `value["a/b"]["~key"]`。URL 自身的 `.` / `..` 路径规范化规则仍适用；这类键可通过完整 JSON 读取或 Merge Patch 修改。
+- 对象写入允许创建最后一级字段，所有父节点必须已存在。数组索引仅允许规范非负整数且必须存在，末尾 `-` 追加元素；不自动补父节点、创建稀疏数组或插入元素。普通对象的 `__proto__` / `constructor` / `prototype` 作为 JSON 自有字段处理，不沿 JavaScript 原型链遍历。
+- 路径不存在或无法遍历返回 404 `path_not_found`；转义非法、路径超过 128 段返回 422 `invalid_path`。JSON 语法错误返回 422，Merge Patch 对象递归超过 128 层返回 422 `patch_too_deep`。
+- PATCH 和路径 PUT 都必须提供当前 Bin 的 `If-Match`，缺少返回 428，过期返回 412。从同一快照计算新值，再通过已有写入流程检查 ETag、数据锁及完整 JSON Schema，然后追加不可变版本并条件更新 meta。失败的语法/路径/模型校验不写版本；CAS 竞争留下的孤立版本延续既有保留规则。
+- 成功响应包含当前 Bin 的 ETag 和 `X-JSONBin-Version`。每次成功 JSON 写入（包括值未改变）生成新版本；元数据、锁定/解锁不生成 JSON 版本。
+
+调用示例（每次后续写入都要使用最新 ETag）：
+
+~~~bash
+curl -X PATCH "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN" \
+  -H 'Content-Type: application/merge-patch+json' \
+  -H "If-Match: $BIN_ETAG" \
+  --data '{"settings":{"theme":"dark"},"obsolete":null}'
+
+curl "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID/value/settings/theme" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN"
+
+curl -X PUT "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID/value/settings/theme" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H "If-Match: $BIN_ETAG" \
+  --data '{"value":"light"}'
+~~~
+
+数据锁与删除：
+
+- 元数据 PATCH 接受 `locked: true/false`，提供此字段时必须携带 `If-Match`。已锁定时，仅允许单独的 `{"locked":false}` 解锁；同请求携带名称、模型、可见性等任何额外修改均返回 423。解锁不改变 `schemaLocked`。
+- 数据锁阻止完整替换、Merge Patch、路径写入、历史恢复、元数据修改和删除；当前及历史读取继续按原权限开放。集合删除时清除成员关联延续 P3 的管理清理规则，可清除锁定 Bin 的失效关联，但不修改 JSON、模型或锁。
+- DELETE 接受可选 `If-Match`（界面始终发送），并检查数据锁；锁定返回 423，旧 ETag / 并发冲突返回 412。通过 R2 CAS 在 `bins/<id>/meta.json` 写入 `deletedAt`，随后归档 `trash/bins/<id>/meta.json`，历史文件保持不变。
+- 持久删除标记防止在途写入重新激活 Bin，并让删除与锁定竞争同一个 ETag；普通详情/路径/历史/列表及集合成员计数均排除已删除 Bin。归档失败后重试 DELETE 可完成归档，已有删除标记返回成功；完全不存在的 ID 返回 404。P7 恢复必须处理此标记，不能仅复制 trash 元数据。
+- 设置页提供独立数据锁操作，存在草稿时先保存或显式重新加载；请求中禁用操作，失败保留状态并可重试。API 页提供局部写入示例和路径规则。
+
+公开访问边界：
+
+- 无 Authorization 时，`GET /bins/:id` 和 `/value...` 可匿名读取 public Bin 的当前快照，包括详情元数据。private Bin 与不存在的 ID 对匿名请求均返回 401；已认证请求对不存在的 Bin 返回 404。
+- Bin 列表、集合及模型接口、历史列表/内容、所有写入仍需要 Session 或对应 Scope。公开当前版本不公开此前的私有历史，也不开放管理界面登录。
+- 显式 Authorization 始终验证凭据和 `bin:read`，无效/过期/撤销返回 401，Scope 不足返回 403，不回退匿名或 Cookie。
+- 可见性判断与返回 JSON 使用同一个 meta/不可变版本快照，避免并发转私有后读取到新私有内容。所有 Bin API 响应为 `Cache-Control: no-store`；转私有后的新请求必须认证，先前已授权的在途读取可以返回当时的公开快照。浏览器跨域仍遵循现有 APP_ORIGIN/CORS 配置。
+
+本地验收进度（2026-10-03）：
+
+- `npm run typecheck` 与生产构建通过；后者由 `npm test` 执行。Monaco 大 chunk 提示保留为既有优化项。
+- Worker/客户端测试 58 项通过，0 失败、0 跳过；新增 RFC 7396 示例、路径/数组/转义/null、原型键、非法输入不写版本、Schema/锁/Scope、公开转私有、并发快照和删除/锁定竞争测试。Scope 矩阵覆盖 9 种单权限 × 26 个资源路由及组合权限。
+- Chromium 浏览器验收 26 项通过，0 失败、0 跳过；新增数据锁持久化/只读/解锁保存、公开与私有切换/匿名读取、API 示例、锁定网络错误和过期 ETag 重试，既有编辑、历史、集合、模型和密钥验收继续通过。
+- GitHub CI / Cloudflare Workers Builds：待功能提交后补充验证记录。
+- 生产功能验收：待确认；构建通过与生产功能验收分别记录。
 
 ---
 
@@ -887,7 +943,7 @@ summary:dashboard
 - [ ] R2 storage 测试
 - [ ] ETag 并发测试
 - [ ] Session 测试
-- [x] API Key Scope 测试（P5 当前接口全矩阵；后续新增接口需扩展）
+- [x] API Key Scope 测试（P5 / P6 当前接口全矩阵；后续新增接口需扩展）
 - [ ] Schema 校验测试
 - [ ] Trash/Restore 测试
 - [ ] npm run typecheck 通过
@@ -940,6 +996,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P5 API 密钥与外部 API 认证已完成本地开发、验收及 CI，下一阶段为 **P6 高级 Bin API**。P1 / P2 / P3 / P4 / P5 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态。
+P6 高级 Bin API 已实现，当前完成本地验收并等待本次提交的 CI / Workers Builds 结果。生产功能验收单独保留待确认状态。
 
-后续 P6 实现 JSON Merge Patch、深层路径访问、数据锁管理及公开/私有访问策略，所有新增写入继续复用 Scope、R2 条件写入、固定模型修订和模型锁校验。
+下一阶段为 **P7 TTL 与回收站**：expiresAt 设置与到期访问控制、定时清理、回收站列表/恢复/永久删除。恢复流程需兼容 P6 的 R2 条件删除标记，并继续遵守版本不可变、模型约束和 API 权限。

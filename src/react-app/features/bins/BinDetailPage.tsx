@@ -31,7 +31,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [metadata, setMetadata] = useState<MetadataInput | null>(null);
   const [tab, setTab] = useState<Tab>("编辑器");
-  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | null>(null);
+  const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | "lock" | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -141,10 +141,10 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
   async function confirmDelete() {
-    if (busy) return;
+    if (busy || !draft || draft.record.meta.locked) return;
     setBusy("delete"); setError(null);
     try {
-      await removeBin(id);
+      await removeBin(id, undefined, draft.record.etag);
       await client.invalidateQueries({ queryKey: ["bins"] });
       client.removeQueries({ queryKey: ["bin", id] });
       await client.invalidateQueries({ queryKey: ["collections"] });
@@ -152,6 +152,22 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       if (!mounted.current) return;
       onDirtyChange(false); onDeleted();
     } catch (caught) { report(caught); setDeleteOpen(false); } finally { setBusy(null); }
+  }
+  async function toggleLock() {
+    if (!draft || busy || dirty) return;
+    const locked = !draft.record.meta.locked;
+    setBusy("lock"); setError(null); setNotice("");
+    try {
+      await client.cancelQueries({ queryKey: ["bin", id] });
+      const record = await saveBinMetadata(id, { locked }, draft.record.etag);
+      if (!mounted.current) return;
+      await client.cancelQueries({ queryKey: ["bin", id] });
+      if (!mounted.current) return;
+      setDraft(createDraft(record)); setMetadata(metadataOf(record));
+      client.setQueryData(["bin", id], record);
+      await client.invalidateQueries({ queryKey: ["bins"] });
+      setNotice(locked ? "数据仓已锁定，修改和删除已禁止；读取不受影响。" : "数据锁已解除，可以继续编辑。模型锁保持不变。");
+    } catch (caught) { report(caught); } finally { setBusy(null); }
   }
   async function copy(text: string) {
     try { await navigator.clipboard.writeText(text); setNotice("已复制。"); }
@@ -213,8 +229,12 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
       </Suspense>}
       {tab === "API" && <div className="bin-api"><h2>此数据仓的 API</h2><p>网页登录使用 Session；外部调用请创建 API 密钥并发送 Authorization: Bearer Token。读取需 bin:read，更新需 bin:update；历史读取需 history:read，恢复需同时有 bin:update 和 history:read。</p>
+        <p>{record.meta.visibility === "public" ? "此数据仓已公开：任何持有 API 地址的人都能匿名读取当前内容及元数据。列表、历史版本和写入仍需认证。" : "此数据仓为私有：所有读取都需要 Session 或对应 Scope 的 API 密钥。"}</p>
         <pre>{`GET ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\n\nPUT ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/json\nIf-Match: ${record.etag}\n\n${JSON.stringify({ value: record.value }, null, 2)}`}</pre>
-        <p>写入成功生成新版本；ETag 过期返回 412，锁定返回 423，Scope 不足返回 403，JSON 不符合绑定模型返回 422。</p></div>}
+        <h3>局部更新与路径访问</h3>
+        <pre>{`PATCH ${apiUrl}\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/merge-patch+json\nIf-Match: ${record.etag}\n\n{"settings":{"theme":"dark"}}\n\nGET ${apiUrl}/value/settings/theme\nAuthorization: Bearer <你的 API 密钥>\n\nPUT ${apiUrl}/value/settings/theme\nAuthorization: Bearer <你的 API 密钥>\nContent-Type: application/json\nIf-Match: <重新读取后的 ETag>\n\n{"value":"light"}`}</pre>
+        <p>Merge Patch 中 null 删除对象字段，数组整体替换。路径使用 JSON Pointer 转义（/ → ~1、~ → ~0），数组从 0 开始，末尾 - 可追加；父节点必须存在。/value 读写整个 JSON。</p>
+        <p>JSON 写入成功生成新版本；局部写入缺少 If-Match 返回 428，ETag 过期返回 412，锁定返回 423，Scope 不足返回 403，JSON 不符合绑定模型返回 422。</p></div>}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>
         <label>名称<input required maxLength={160} value={metadata.name} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, name: event.target.value })} /></label>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
@@ -241,12 +261,16 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <label className="schema-checkbox"><input type="checkbox" aria-label="锁定模型绑定" checked={metadata.schemaLocked} disabled={Boolean(busy) || locked || !metadata.schemaId}
           onChange={event => setMetadata({ ...metadata, schemaLocked: event.target.checked })} />锁定模型绑定</label>
         {record.meta.schemaLocked && <p>模型绑定已锁定；更换、解除或升级前，请先取消锁定并单独保存。</p>}
-        <p>读取仍需 Session 或具有所需 Scope 的 API 密钥；公开只读访问将在后续阶段提供。</p>
+        <p>{metadata.visibility === "public" ? "公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。" : "私有数据仓的所有读取都需要 Session 或具有所需 Scope 的 API 密钥。"}</p>
         <button type="submit" className="primary-button" disabled={!metadataDirty || !metadata.name.trim() || Boolean(busy) || locked}><Save size={15} />保存设置</button>
+        <h3>数据锁</h3>
+        <p>锁定后禁止修改 JSON、设置、恢复历史和删除；读取保持可用。解锁单独生效，不改变模型锁。</p>
+        {dirty && <p>请先保存未保存的内容，或重新加载后再操作数据锁。</p>}
+        <button type="button" className="secondary-button" disabled={Boolean(busy) || dirty} onClick={toggleLock}>{busy === "lock" ? "正在更新数据锁…" : locked ? "解除数据锁" : "锁定数据仓"}</button>
       </form>}
     </div>
     <footer className="detail-footer"><p>删除后元数据移入回收站，历史版本保留。</p>
-      <button type="button" className="danger-button" onClick={() => setDeleteOpen(true)} disabled={Boolean(busy)}><Trash2 size={15} />删除数据仓</button></footer>
+      <button type="button" className="danger-button" onClick={() => setDeleteOpen(true)} disabled={Boolean(busy) || locked}><Trash2 size={15} />删除数据仓</button></footer>
     {deleteOpen && <div className="dialog-backdrop"><div ref={deleteDialog} tabIndex={-1} className="dialog delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title"
       onKeyDown={event => {
         if (event.key === "Escape" && !busy) { event.preventDefault(); setDeleteOpen(false); }

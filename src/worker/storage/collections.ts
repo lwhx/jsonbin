@@ -24,7 +24,7 @@ export async function assertCollectionAvailable(env: Env, id: string | null | un
 export async function listCollectionBins(env: Env, id: string) {
   if (!await getCollection(env, id)) return null;
   const bins = await listJsonObjects<BinMeta>(requireDataBucket(env), "bins/");
-  return bins.filter(bin => bin.collectionId === id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return bins.filter(bin => !bin.deletedAt && bin.collectionId === id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function listCollections(env: Env) {
@@ -33,7 +33,7 @@ export async function listCollections(env: Env) {
     listJsonObjects<CollectionMeta>(bucket, "collections/"), listJsonObjects<BinMeta>(bucket, "bins/"),
   ]);
   const counts = new Map<string, number>();
-  for (const bin of bins) if (bin.collectionId) counts.set(bin.collectionId, (counts.get(bin.collectionId) ?? 0) + 1);
+  for (const bin of bins) if (!bin.deletedAt && bin.collectionId) counts.set(bin.collectionId, (counts.get(bin.collectionId) ?? 0) + 1);
   return collections.filter(meta => meta.status !== "deleted").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(meta => ({ ...meta, binCount: counts.get(meta.id) ?? 0 }));
 }
@@ -62,7 +62,7 @@ export async function detachBinFromCollection(env: Env, binId: string, collectio
   const bucket = requireDataBucket(env); const binKey = `bins/${binId}/meta.json`;
   for (let attempt = 0; attempt < 8; attempt++) {
     const current = await getJson<BinMeta>(bucket, binKey);
-    if (!current || current.value.collectionId !== collectionId) return false;
+    if (!current || current.value.deletedAt || current.value.collectionId !== collectionId) return false;
     const stored = await putJson(bucket, binKey, { ...current.value, collectionId: null, updatedAt: new Date().toISOString() },
       { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
     if (stored) return true;

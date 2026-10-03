@@ -24,6 +24,86 @@ async function edit(page: Page, text: string) {
   await page.keyboard.press("ControlOrMeta+v");
 }
 
+test("数据锁持久化、禁止编辑与删除，单独解锁后可继续保存", async ({ page }) => {
+  const record = await create(page), path = `/api/v1/bins/${record.meta.id}`;
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await page.getByLabel("名称", { exact: true }).fill("未保存设置");
+  await expect(page.getByRole("button", { name: "锁定数据仓", exact: true })).toBeDisabled();
+  await page.getByLabel("名称", { exact: true }).fill("浏览器验收");
+  await page.getByRole("button", { name: "锁定数据仓", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("数据仓已锁定");
+  const locked = await (await page.request.get(path)).json();
+  expect(locked.meta.locked).toBe(true); expect(locked.meta.currentVersion).toBe(1);
+  await expect(page.getByLabel("名称", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "删除数据仓", exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.locator(".detail-badges")).toContainText("已锁定");
+  await expect(page.getByRole("button", { name: "格式化", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "保存 JSON", exact: true })).toBeDisabled();
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "解除数据锁", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("数据锁已解除");
+  await expect(page.getByLabel("名称", { exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "删除数据仓", exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await edit(page, '{"unlocked":true}');
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  const saved = await (await page.request.get(path)).json();
+  expect(saved.meta.currentVersion).toBe(2); expect(saved.value).toEqual({ unlocked: true });
+});
+
+test("公开设置开放匿名当前读取，切回私有立即收回，API 页提供局部更新说明", async ({ page, playwright }) => {
+  const record = await create(page), path = `/api/v1/bins/${record.meta.id}`;
+  const anonymous = await playwright.request.newContext({ baseURL: "http://127.0.0.1:5174" });
+  try {
+    expect((await anonymous.get(path)).status()).toBe(401);
+    await page.getByRole("tab", { name: "设置", exact: true }).click();
+    await page.getByLabel("可见性", { exact: true }).selectOption("public");
+    await expect(page.getByRole("tabpanel")).toContainText("匿名读取当前 JSON 和元数据");
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(page.locator(".detail-notice[role=status]")).toContainText("设置保存成功");
+    const response = await anonymous.get(path);
+    expect(response.status()).toBe(200); expect(response.headers()["cache-control"]).toBe("no-store");
+    expect((await response.json()).value).toEqual({ initial: true });
+    expect((await (await anonymous.get(path + "/value/initial")).json()).value).toBe(true);
+    expect((await anonymous.get(path + "/versions/1")).status()).toBe(401);
+    expect((await anonymous.patch(path, { data: { initial: false }, headers: { "If-Match": record.etag } })).status()).toBe(401);
+    await page.getByRole("tab", { name: "API", exact: true }).click();
+    await expect(page.getByRole("tabpanel")).toContainText("此数据仓已公开");
+    await expect(page.getByRole("tabpanel")).toContainText("application/merge-patch+json");
+    await expect(page.getByRole("tabpanel")).toContainText("/value/settings/theme");
+    await page.getByRole("tab", { name: "设置", exact: true }).click();
+    await page.getByLabel("可见性", { exact: true }).selectOption("private");
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(page.getByRole("button", { name: "保存设置", exact: true })).toBeDisabled();
+    expect((await anonymous.get(path)).status()).toBe(401);
+    expect((await anonymous.get(path + "/value/initial")).status()).toBe(401);
+    await page.reload();
+    await expect(page.locator(".detail-badges")).toContainText("私有");
+  } finally { await anonymous.dispose(); }
+});
+
+test("数据锁网络错误与过期 ETag 可重试，不会覆盖远端更新", async ({ page }) => {
+  const record = await create(page), path = `/api/v1/bins/${record.meta.id}`;
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await page.route(`**${path}/meta`, route => route.abort("failed"));
+  await page.getByRole("button", { name: "锁定数据仓", exact: true }).click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("无法连接");
+  await expect(page.getByRole("button", { name: "锁定数据仓", exact: true })).toBeEnabled();
+  await page.unroute(`**${path}/meta`);
+  expect((await page.request.put(path, { headers: { "If-Match": record.etag }, data: { value: { remote: true } } })).status()).toBe(200);
+  await page.getByRole("button", { name: "锁定数据仓", exact: true }).click();
+  await expect(page.locator(".detail-error[role=alert]")).toContainText("数据已被其他请求修改");
+  expect((await (await page.request.get(path)).json()).meta.locked).toBe(false);
+  await page.getByRole("button", { name: "重新加载最新版本", exact: true }).click();
+  await expect(page.locator(".detail-error[role=alert]")).not.toBeVisible();
+  await page.getByRole("button", { name: "锁定数据仓", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("数据仓已锁定");
+  const current = await (await page.request.get(path)).json();
+  expect(current.value).toEqual({ remote: true }); expect(current.meta.currentVersion).toBe(2);
+});
+
 test("删除确认限制键盘焦点，取消后恢复焦点，删除中保持弹窗", async ({ page }) => {
   const record = await create(page);
   const trigger = page.getByRole("button", { name: "删除数据仓", exact: true });

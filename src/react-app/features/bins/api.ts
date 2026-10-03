@@ -11,7 +11,7 @@ const messages: Record<number, string> = {
   412: "数据已被其他请求修改。请重新加载后再保存；当前草稿已保留。",
   422: "内容校验失败，请检查输入。",
   423: "数据仓已锁定，无法修改。当前草稿已保留。",
-  428: "请重新加载当前版本后再恢复。",
+  428: "请重新加载当前版本后再操作。",
 };
 export class BinApiError extends Error {
   status: number;
@@ -53,14 +53,14 @@ export async function saveBin(id: string, value: unknown, etag: string, base = e
     body: JSON.stringify({ value }),
   }));
 }
-export async function saveBinMetadata(id: string, input: Partial<MetadataInput>, etag: string, base = endpoint) {
+export async function saveBinMetadata(id: string, input: Partial<MetadataInput> & { locked?: boolean }, etag: string, base = endpoint) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}/meta`, {
     method: "PATCH", headers: { "Content-Type": "application/json", "If-Match": etag },
     body: JSON.stringify(input),
   }));
 }
-export async function removeBin(id: string, base = endpoint) {
-  await request(`${base}/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function removeBin(id: string, base = endpoint, etag?: string) {
+  await request(`${base}/${encodeURIComponent(id)}`, { method: "DELETE", headers: etag ? { "If-Match": etag } : undefined });
 }
 
 export async function listBinVersions(id: string, base = endpoint, signal?: AbortSignal): Promise<BinVersionList> {

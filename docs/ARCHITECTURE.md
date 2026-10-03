@@ -68,11 +68,13 @@ trash/
 
 A bin version is immutable. Updating a bin creates a new version and atomically advances its metadata.
 
-R2 ETags are used for optimistic concurrency control. Dashboard and API updates will support `If-Match` so a stale client cannot silently overwrite newer data.
+R2 ETags are used for optimistic concurrency control. Dashboard updates send `If-Match`; Merge Patch, deep writes and data-lock changes require it. Partial writes derive from one snapshot and publish through the same schema validation, immutable append and metadata CAS as full replacements.
+
+Bin deletion conditionally writes `deletedAt` to canonical metadata before archiving it under `trash/bins/<id>/meta.json`. The retained tombstone makes deletion atomic relative to locking and concurrent updates. Active reads, history and collection counts exclude tombstones; retrying deletion can finish interrupted archival. Future trash restoration must clear the canonical marker conditionally.
 
 ### KV: disposable edge cache and indexes
 
-KV is used only for derived or rebuildable data:
+KV is reserved for derived or rebuildable data (not yet used for these indexes):
 
 - slug -> bin ID index;
 - public/read cache;
@@ -124,6 +126,8 @@ Keys support optional future expiry, idempotent revocation and last-used timesta
 
 An Authorization header received by the Worker takes precedence over Cookies; invalid Bearer credentials return 401, missing scopes return 403. Collection member reads require `collection:read` plus `bin:read`; historical restore requires `bin:update` plus `history:read`. Cookie-authenticated writes validate a supplied Origin against APP_ORIGIN or the request origin. Bearer clients continue to follow scope and existing ETag/lock/schema rules.
 
+Public Bins allow anonymous GET of the current record and deep paths only when no Authorization header is supplied. Lists, history and mutations remain authenticated. Visibility and returned JSON come from the same metadata/immutable-version snapshot. Bin responses use `Cache-Control: no-store`; no public read cache is currently used. Data locks block mutation and deletion but permit an isolated conditional unlock; schema locks remain independent.
+
 ## Core API
 
 The v1 API will live below:
@@ -144,6 +148,8 @@ PATCH  /api/v1/bins/:id
 DELETE /api/v1/bins/:id
 
 GET    /api/v1/bins/:id/value/*
+PUT    /api/v1/bins/:id/value/*
+PATCH  /api/v1/bins/:id/meta
 GET    /api/v1/bins/:id/versions
 GET    /api/v1/bins/:id/versions/:version
 POST   /api/v1/bins/:id/versions/:version/restore

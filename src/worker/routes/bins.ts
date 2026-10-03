@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
 import {
@@ -11,11 +11,15 @@ import {
   listBinVersions,
   getBinVersion,
   restoreBinVersion,
+  transformBin,
+  type BinRecord,
 } from "../storage/bins";
+import { mergePatch, readValue, valuePath, writeValue } from "../validation/json-operations";
 
 import { SchemaError } from "../validation/schema";
 
 type Variables = {
+  bin?: BinRecord | null;
   user: {
     id: string;
     username: string;
@@ -24,6 +28,20 @@ type Variables = {
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// Visibility can change; do not retain an anonymous response in browser/CDN caches.
+app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+
+const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
+  const load = async () => { c.set("bin", await getBin(c.env, c.req.param("id")!)); await next(); };
+  // Explicit credentials keep their authentication and scope semantics on public Bins.
+  if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
+  const record = await getBin(c.env, c.req.param("id")!);
+  c.set("bin", record);
+  if (record?.meta.visibility === "public") return next();
+  // The handler uses this exact snapshot, including its visibility and immutable value.
+  return requireAccess("bin:read")(c, next);
+};
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -47,9 +65,14 @@ const metadataSchema = z.object({
   schemaId: z.string().uuid().nullable().optional(),
   schemaLocked: z.boolean().optional(),
   refreshSchema: z.boolean().optional(),
+  locked: z.boolean().optional(),
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
+  if (error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
+  if (error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+  if (error.message === "path_not_found") return c.json({ error: "path_not_found" }, 404);
+  if (["invalid_path", "patch_too_deep"].includes(error.message)) return c.json({ error: error.message }, 422);
   if (error instanceof SchemaError) {
     const status = error.message === "schema_locked" ? 423 : error.message === "schema_unavailable" ? 409 : 422;
     return c.json({ error: error.message, issues: error.issues }, status);
@@ -123,10 +146,45 @@ app.post("/", requireAccess("bin:create"), async (c) => {
   return c.json(created, 201);
 });
 
-app.get("/:id", requireAccess("bin:read"), async (c) => {
-  const record = await getBin(c.env, c.req.param("id"));
+app.get("/:id", readCurrent, async (c) => {
+  const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);
 
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  return c.json(record);
+});
+
+app.on("GET", ["/:id/value", "/:id/value/*"], readCurrent, (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  const path = valuePath(c.req.url);
+  const value = readValue(record.value, path);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  return c.json({ id: record.meta.id, path, value, etag: record.etag, version: record.meta.currentVersion });
+});
+
+app.patch("/:id", requireAccess("bin:update"), async (c) => {
+  const etag = c.req.header("If-Match");
+  if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
+  let patch: unknown;
+  try { patch = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 422); }
+  const record = await transformBin(c.env, c.req.param("id"), value => mergePatch(value, patch), etag);
+  if (!record) return c.json({ error: "not_found" }, 404);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  return c.json(record);
+});
+
+app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), async (c) => {
+  const etag = c.req.header("If-Match");
+  if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
+  const parsed = updateSchema.strict().safeParse(await c.req.json().catch(() => undefined));
+  if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
+  const path = valuePath(c.req.url);
+  const record = await transformBin(c.env, c.req.param("id"), value => writeValue(value, path, parsed.data.value), etag);
+  if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.currentVersion));
   return c.json(record);
@@ -168,7 +226,7 @@ app.put("/:id", requireAccess("bin:update"), async (c) => {
 });
 
 app.delete("/:id", requireAccess("bin:delete"), async (c) => {
-  const deleted = await deleteBin(c.env, c.req.param("id"));
+  const deleted = await deleteBin(c.env, c.req.param("id"), c.req.header("If-Match"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
 });
@@ -178,6 +236,7 @@ app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }
+  if (parsed.data.locked !== undefined && !c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
   try {
     const record = await updateBinMetadata(c.env, c.req.param("id"), parsed.data, c.req.header("If-Match"));
     if (!record) return c.json({ error: "not_found" }, 404);

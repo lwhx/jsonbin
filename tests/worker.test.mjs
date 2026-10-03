@@ -6,17 +6,17 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 let mf, cookie, bucket;
 const password = randomBytes(32).toString('hex');
-export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin } = {}) {
+export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin, body, contentType = 'application/json' } = {}) {
   return mf.dispatchFetch('http://localhost/api/v1' + path, {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
       ...(authenticated && cookie ? { Cookie: cookie } : {}),
       ...(etag ? { 'If-Match': etag } : {}),
       ...(authorization !== undefined ? { Authorization: authorization } : {}),
       ...(origin !== undefined ? { Origin: origin } : {}),
     },
-    ...(value !== undefined ? { body: JSON.stringify(value) } : {}),
+    ...(body !== undefined ? { body } : value !== undefined ? { body: JSON.stringify(value) } : {}),
   });
 }
 async function create(value = { hello: 'world' }) {
@@ -129,12 +129,12 @@ test('metadata editing changes ETag without changing JSON or version history', a
   assert.notEqual(updated.etag, bin.etag);
   assert.equal(saved.headers.get('etag'), updated.etag);
   assert.equal((await request(path, { method: 'PATCH', etag: bin.etag, value: { name: 'stale' } })).status, 412);
-  assert.equal((await request('/bins/' + bin.meta.id, { authenticated: false })).status, 401);
+  assert.equal((await request('/bins/' + bin.meta.id, { authenticated: false })).status, 200);
 });
 test('metadata validation rejects empty, oversized, unknown and invalid fields', async () => {
   const bin = await create(); const path = '/bins/' + bin.meta.id + '/meta';
   for (const value of [{}, { name: ' ' }, { name: 'a'.repeat(161) }, { description: 'a'.repeat(1001) },
-    { visibility: 'invalid' }, { currentVersion: 9 }, { locked: false }]) {
+    { visibility: 'invalid' }, { currentVersion: 9 }, { locked: 'false' }]) {
     assert.equal((await request(path, { method: 'PATCH', value })).status, 422, JSON.stringify(value));
   }
   assert.equal((await request(path, { method: 'PATCH', authenticated: false, value: { name: 'x' } })).status, 401);
@@ -213,7 +213,10 @@ test('history and restore enforce authentication, version validation, ETags and 
   await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify({ ...updated.meta, locked: true }));
   assert.equal((await request(path + '/versions/1/restore', { method: 'POST', etag: updated.etag })).status, 423);
   assert.equal((await request(path + '/versions/1')).status, 200);
-  await request(path, { method: 'DELETE' });
+  assert.equal((await request(path, { method: 'DELETE' })).status, 423);
+  const locked = await (await request(path)).json();
+  const unlocked = await (await request(path + '/meta', { method: 'PATCH', etag: locked.etag, value: { locked: false } })).json();
+  assert.equal((await request(path, { method: 'DELETE', etag: unlocked.etag })).status, 200);
   for (const suffix of ['/versions', '/versions/1', '/versions/1/restore']) {
     assert.equal((await request(path + suffix, { method: suffix.endsWith('restore') ? 'POST' : 'GET', etag: updated.etag })).status, 404);
   }
@@ -611,6 +614,9 @@ test('every existing resource route enforces the exact Bearer scopes, including 
   const routes = [
     ['/bins', 'GET', ['bin:read'], undefined, 200], ['/bins', 'POST', ['bin:create'], {}, 422],
     [`/bins/${id}`, 'GET', ['bin:read'], undefined, 404], [`/bins/${id}`, 'PUT', ['bin:update'], { value: null }, 404],
+    [`/bins/${id}`, 'PATCH', ['bin:update'], {}, 404],
+    [`/bins/${id}/value`, 'GET', ['bin:read'], undefined, 404], [`/bins/${id}/value/child`, 'GET', ['bin:read'], undefined, 404],
+    [`/bins/${id}/value`, 'PUT', ['bin:update'], { value: null }, 404], [`/bins/${id}/value/child`, 'PUT', ['bin:update'], { value: null }, 404],
     [`/bins/${id}/meta`, 'PATCH', ['bin:update'], { name: 'x' }, 404], [`/bins/${id}`, 'DELETE', ['bin:delete'], undefined, 404],
     [`/bins/${id}/versions`, 'GET', ['history:read'], undefined, 404], [`/bins/${id}/versions/1`, 'GET', ['history:read'], undefined, 404],
     [`/bins/${id}/versions/1/restore`, 'POST', ['bin:update', 'history:read'], undefined, 404],
@@ -707,4 +713,214 @@ test('Cookie writes reject foreign or null Origins while trusted Session scripts
   const external = await bearerRequest(key.token, '/bins', { method: 'POST', origin: 'https://external.example', value: { name: '脚本创建', value: null } });
   assert.equal(external.status, 201);
   assert.equal((await request('/keys', { method: 'POST', value: { name: '可信脚本', scopes: ['bin:read'] } })).status, 201);
+});
+
+test('Merge Patch follows RFC 7396 examples and always appends immutable versions', async () => {
+  const cases = [
+    [{ a: 'b' }, { a: 'c' }, { a: 'c' }], [{ a: 'b' }, { b: 'c' }, { a: 'b', b: 'c' }],
+    [{ a: 'b' }, { a: null }, {}], [{ a: 'b', b: 'c' }, { a: null }, { b: 'c' }],
+    [{ a: ['b'] }, { a: 'c' }, { a: 'c' }], [{ a: 'c' }, { a: ['b'] }, { a: ['b'] }],
+    [{ a: { b: 'c' } }, { a: { b: 'd', c: null } }, { a: { b: 'd' } }],
+    [{ a: [{ b: 'c' }] }, { a: [1] }, { a: [1] }], [['a', 'b'], ['c', 'd'], ['c', 'd']],
+    [{ a: 'b' }, ['c'], ['c']], [{ a: 'foo' }, null, null], [{ a: 'foo' }, 'bar', 'bar'],
+    [{ e: null }, { a: 1 }, { e: null, a: 1 }], [[1, 2], { a: 'b', c: null }, { a: 'b' }],
+    [{}, { a: { bb: { ccc: null } } }, { a: { bb: {} } }],
+  ];
+  for (const [original, patch, expected] of cases) {
+    const bin = await create(original), path = '/bins/' + bin.meta.id;
+    const response = await request(path, { method: 'PATCH', etag: bin.etag, value: patch, contentType: 'application/merge-patch+json' });
+    assert.equal(response.status, 200); const record = await response.json();
+    assert.deepEqual(record.value, expected); assert.equal(record.meta.currentVersion, 2);
+    assert.equal(response.headers.get('etag'), record.etag); assert.equal(response.headers.get('x-jsonbin-version'), '2');
+    assert.deepEqual((await (await request(path + '/versions/1')).json()).value, original);
+  }
+});
+
+test('deep paths read and update objects, empty keys, escaped keys and array elements, append with dash and replace root', async () => {
+  const value = { settings: { theme: 'dark' }, items: [{ count: 1 }, false], 'a/b': { '~key': 'escaped' }, '': null, '中文 空格': 'unicode', '%2F': 'once' };
+  let bin = await create(value); const path = '/bins/' + bin.meta.id;
+  for (const [suffix, expected] of [['', value], ['/settings/theme', 'dark'], ['/items/1', false], ['/a~1b/~0key', 'escaped'], ['/', null], ['/' + encodeURIComponent('中文 空格'), 'unicode'], ['/%252F', 'once']]) {
+    const response = await request(path + '/value' + suffix); assert.equal(response.status, 200);
+    const record = await response.json(); assert.deepEqual(record.value, expected);
+    assert.equal(record.etag, bin.etag); assert.equal(response.headers.get('etag'), bin.etag); assert.equal(record.version, 1);
+  }
+  for (const [suffix, value] of [['/items/0/count', 2], ['/settings/new', null], ['/items/-', { appended: true }], ['/a~1b/~0key', 9], ['/', 'empty']]) {
+    const response = await request(path + '/value' + suffix, { method: 'PUT', etag: bin.etag, value: { value } });
+    assert.equal(response.status, 200); bin = await response.json();
+    const readSuffix = suffix === '/items/-' ? '/items/2' : suffix;
+    assert.deepEqual((await (await request(path + '/value' + readSuffix)).json()).value, value);
+  }
+  assert.deepEqual(bin.value.items, [{ count: 2 }, false, { appended: true }]);
+  assert.equal(bin.value.settings.theme, 'dark'); assert.equal(bin.meta.currentVersion, 6);
+  const root = await request(path + '/value', { method: 'PUT', etag: bin.etag, value: { value: false } });
+  assert.equal(root.status, 200); assert.equal((await root.json()).value, false);
+  assert.deepEqual((await (await request(path + '/versions/1')).json()).value, value);
+});
+
+test('paths never traverse prototypes, create missing parents or sparse arrays; invalid JSON and paths leave versions unchanged', async () => {
+  const bin = await create({ items: [1], scalar: null }), path = '/bins/' + bin.meta.id;
+  for (const suffix of ['/absent/child', '/items/01', '/items/-1', '/items/1', '/items/1e0', '/items/9007199254740992', '/scalar/child', '/constructor/prototype', '/__proto__/polluted']) {
+    assert.equal((await request(path + '/value' + suffix)).status, 404, suffix);
+    assert.equal((await request(path + '/value' + suffix, { method: 'PUT', etag: bin.etag, value: { value: true } })).status, 404, suffix);
+  }
+  for (const suffix of ['/bad~2', '/bad~', '/bad%ZZ', '/bad%FF', '/' + Array(129).fill('x').join('/')]) {
+    assert.equal((await request(path + '/value' + suffix)).status, 422);
+    assert.equal((await request(path + '/value' + suffix, { method: 'PUT', etag: bin.etag, value: { value: true } })).status, 422);
+  }
+  for (const [suffix, method] of [['', 'PATCH'], ['/value/items/0', 'PUT']]) {
+    assert.equal((await request(path + suffix, { method, value: {} })).status, 428);
+    for (const body of ['', '{bad']) assert.equal((await request(path + suffix, { method, etag: bin.etag, body })).status, 422);
+  }
+  for (const value of [{}, { value: null, extra: true }, null]) {
+    assert.equal((await request(path + '/value/items/0', { method: 'PUT', etag: bin.etag, value })).status, 422);
+  }
+  let patch = { x: true }; for (let i = 0; i < 130; i++) patch = { x: patch };
+  assert.equal((await request(path, { method: 'PATCH', etag: bin.etag, value: patch })).status, 422);
+  assert.deepEqual(await (await request(path)).json(), bin);
+  assert.equal((await (await request(path + '/versions')).json()).total, 1);
+});
+
+test('prototype-related keys remain literal JSON data in merges and path writes', async () => {
+  const original = JSON.parse('{"__proto__":{"existing":true},"constructor":{"prototype":{"safe":true}}}');
+  let bin = await create(original); const path = '/bins/' + bin.meta.id;
+  let response = await request(path, { method: 'PATCH', etag: bin.etag, body: '{"__proto__":{"new":true},"constructor":{"prototype":{"added":true}}}' });
+  assert.equal(response.status, 200); bin = await response.json();
+  assert.deepEqual(bin.value.__proto__, { existing: true, new: true });
+  assert.deepEqual(bin.value.constructor.prototype, { safe: true, added: true });
+  response = await request(path + '/value/__proto__/new', { method: 'PUT', etag: bin.etag, value: { value: false } });
+  assert.equal(response.status, 200); bin = await response.json(); assert.equal(bin.value.__proto__.new, false);
+  const clean = await create({});
+  assert.equal((await request('/bins/' + clean.meta.id + '/value/new')).status, 404);
+  assert.equal((await request('/bins/' + clean.meta.id + '/value/added')).status, 404);
+});
+
+test('Merge Patch and deep writes validate the complete pinned schema before reserving a version', async () => {
+  const schema = await model(), bin = await boundBin(schema, { count: 2 }, true), path = '/bins/' + bin.meta.id;
+  for (const [suffix, method, value] of [['', 'PATCH', { count: null }], ['', 'PATCH', { count: 'bad' }], ['/value/count', 'PUT', { value: 'bad' }]]) {
+    const response = await request(path + suffix, { method, value, etag: bin.etag });
+    assert.equal(response.status, 422); const body = await response.json();
+    assert.equal(body.error, 'schema_validation_failed'); assert.ok(body.issues.some(issue => issue.path === '#/count'));
+  }
+  assert.deepEqual(await (await request(path)).json(), bin); assert.equal((await (await request(path + '/versions')).json()).total, 1);
+  let saved = await (await request(path, { method: 'PATCH', value: { count: 5 }, etag: bin.etag })).json();
+  const response = await request(path + '/value/count', { method: 'PUT', value: { value: 6 }, etag: saved.etag });
+  assert.equal(response.status, 200); saved = await response.json();
+  assert.equal(saved.meta.schemaLocked, true); assert.equal(saved.meta.schemaRevision, 1); assert.deepEqual(saved.value, { count: 6 });
+});
+
+test('data lock blocks all mutations and deletion, requires isolated conditional unlock, and preserves the schema lock', async () => {
+  const schema = await model(), bin = await boundBin(schema, { count: 2 }, true), path = '/bins/' + bin.meta.id;
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { locked: true } })).status, 428);
+  const response = await request(path + '/meta', { method: 'PATCH', value: { locked: true }, etag: bin.etag });
+  assert.equal(response.status, 200); const locked = await response.json(); assert.equal(locked.meta.currentVersion, 1);
+  assert.notEqual(locked.etag, bin.etag); assert.equal(locked.meta.locked, true);
+  for (const [suffix, method, value] of [['', 'PUT', { value: { count: 3 } }], ['', 'PATCH', { count: 3 }], ['/value/count', 'PUT', { value: 3 }],
+    ['/meta', 'PATCH', { name: 'changed' }], ['/meta', 'PATCH', { locked: false, name: 'bypass' }], ['/meta', 'PATCH', { locked: false, schemaLocked: false }],
+    ['/versions/1/restore', 'POST'], ['', 'DELETE']]) {
+    assert.equal((await request(path + suffix, { method, value, etag: locked.etag })).status, 423, `${method} ${suffix}`);
+  }
+  for (const suffix of ['', '/value/count', '/versions', '/versions/1']) assert.equal((await request(path + suffix)).status, 200);
+  assert.deepEqual(await (await request(path)).json(), locked);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { locked: false } })).status, 428);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { locked: false }, etag: bin.etag })).status, 412);
+  const unlocked = await (await request(path + '/meta', { method: 'PATCH', value: { locked: false }, etag: locked.etag })).json();
+  assert.equal(unlocked.meta.locked, false); assert.equal(unlocked.meta.schemaLocked, true); assert.equal(unlocked.meta.currentVersion, 1);
+  assert.equal((await request(path, { method: 'PATCH', value: { count: 4 }, etag: unlocked.etag })).status, 200);
+});
+
+test('public access exposes only the current snapshot and paths, respects explicit credentials and immediately follows visibility changes', async () => {
+  const bin = await create({ secret: 'old private version' }), path = '/bins/' + bin.meta.id;
+  const privateRead = await request(path, { authenticated: false }); assert.equal(privateRead.status, 401);
+  assert.equal(privateRead.headers.get('cache-control'), 'no-store');
+  const updated = await (await request(path, { method: 'PUT', etag: bin.etag, value: { value: { shared: true } } })).json();
+  const published = await (await request(path + '/meta', { method: 'PATCH', etag: updated.etag, value: { visibility: 'public' } })).json();
+  for (const suffix of ['', '/value', '/value/shared']) {
+    const response = await request(path + suffix, { authenticated: false }); assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store'); assert.equal(response.headers.get('etag'), published.etag);
+    assert.deepEqual((await response.json()).value, suffix === '/value/shared' ? true : { shared: true });
+    assert.equal((await request(path + suffix, { authenticated: false, authorization: 'Bearer invalid' })).status, 401);
+  }
+  for (const suffix of ['/versions', '/versions/1']) assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
+  assert.equal((await request('/bins', { authenticated: false })).status, 401);
+  for (const [suffix, method, value] of [['', 'PUT', { value: {} }], ['', 'PATCH', {}], ['/value/shared', 'PUT', { value: false }], ['/meta', 'PATCH', { locked: false }], ['', 'DELETE'], ['/versions/1/restore', 'POST']]) {
+    assert.equal((await request(path + suffix, { authenticated: false, method, value, etag: published.etag })).status, 401);
+  }
+  const lowScope = await apiKey(['bin:create']), readScope = await apiKey(['bin:read']);
+  for (const suffix of ['', '/value/shared']) {
+    assert.equal((await bearerRequest(lowScope.token, path + suffix, { authenticated: true })).status, 403);
+    assert.equal((await bearerRequest(readScope.token, path + suffix)).status, 200);
+  }
+  await request('/keys/' + readScope.key.id, { method: 'DELETE' });
+  assert.equal((await bearerRequest(readScope.token, path)).status, 401);
+  const locked = await (await request(path + '/meta', { method: 'PATCH', etag: published.etag, value: { locked: true } })).json();
+  assert.equal((await request(path + '/value/shared', { authenticated: false })).status, 200);
+  const unlocked = await (await request(path + '/meta', { method: 'PATCH', etag: locked.etag, value: { locked: false } })).json();
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: unlocked.etag, value: { visibility: 'private' } })).status, 200);
+  for (const suffix of ['', '/value/shared']) assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
+});
+
+test('concurrent partial writes have one winner and a retry explicitly merges against the latest snapshot', async () => {
+  const bin = await create({ left: 0, right: 0 }), path = '/bins/' + bin.meta.id;
+  const responses = await Promise.all([
+    request(path, { method: 'PATCH', value: { left: 1 }, etag: bin.etag }),
+    request(path + '/value/right', { method: 'PUT', value: { value: 2 }, etag: bin.etag }),
+  ]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 412]);
+  const winner = await responses.find(response => response.status === 200).json();
+  assert.deepEqual(await (await request(path)).json(), winner);
+  const loserIndex = responses.findIndex(response => response.status === 412);
+  const response = await request(path, { method: 'PATCH', value: loserIndex === 0 ? { left: 1 } : { right: 2 }, etag: winner.etag });
+  assert.equal(response.status, 200); assert.deepEqual((await response.json()).value, { left: 1, right: 2 });
+  assert.deepEqual((await (await request(path + '/versions/1')).json()).value, bin.value);
+});
+
+test('public authorization and response share a snapshot when visibility and JSON change during a read', async () => {
+  const { default: app } = await import('../dist/jsonbin/index.js');
+  for (const suffix of ['', '/value/message']) {
+    const bin = await (await request('/bins', { method: 'POST', value: { name: 'snapshot', visibility: 'public', value: { message: 'public' } } })).json();
+    const path = '/bins/' + bin.meta.id; let changed = false;
+    const data = { get: async (key, ...args) => {
+      const object = await bucket.get(key, ...args);
+      if (key === `bins/${bin.meta.id}/meta.json` && !changed) {
+        changed = true;
+        const privateBin = await (await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { visibility: 'private' } })).json();
+        assert.equal((await request(path, { method: 'PUT', etag: privateBin.etag, value: { value: { message: 'private secret' } } })).status, 200);
+      }
+      return object;
+    } };
+    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix), { DATA: data });
+    assert.equal(response.status, 200); assert.equal(changed, true);
+    assert.deepEqual((await response.json()).value, suffix ? 'public' : { message: 'public' });
+    assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
+  }
+});
+
+test('locking competes atomically with partial writes and deletion; deleted Bins cannot reappear in reads or collection counts', async () => {
+  const collection = await (await request('/collections', { method: 'POST', value: { name: 'lock races' } })).json();
+  for (const method of ['PATCH', 'DELETE']) {
+    const bin = await (await request('/bins', { method: 'POST', value: { name: 'race', value: { count: 0 }, collectionId: collection.meta.id } })).json();
+    const path = '/bins/' + bin.meta.id;
+    const responses = await Promise.all([
+      request(path + '/meta', { method: 'PATCH', value: { locked: true }, etag: bin.etag }),
+      request(path, { method, value: method === 'PATCH' ? { count: 1 } : undefined, etag: bin.etag }),
+    ]);
+    assert.equal(responses.filter(response => response.status === 200).length, 1);
+    assert.ok(responses.every(response => [200, 404, 412, 423].includes(response.status)));
+    const currentResponse = await request(path);
+    if (currentResponse.status === 200) {
+      let current = await currentResponse.json();
+      if (responses[0].status === 200) { assert.equal(current.meta.locked, true); assert.deepEqual(current.value, bin.value); }
+      if (current.meta.locked) current = await (await request(path + '/meta', { method: 'PATCH', value: { locked: false }, etag: current.etag })).json();
+      assert.equal((await request(path, { method: 'DELETE', etag: current.etag })).status, 200);
+    } else assert.equal(currentResponse.status, 404);
+    assert.equal((await request(path, { method: 'DELETE' })).status, 200); // Archive completion is retryable.
+    assert.equal((await request(path, { method: 'PATCH', etag: bin.etag, value: {} })).status, 404);
+    assert.equal((await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { locked: false } })).status, 404);
+    for (const suffix of ['', '/value', '/versions', '/versions/1']) assert.equal((await request(path + suffix)).status, 404);
+    assert.ok(!(await (await request('/bins')).json()).items.some(item => item.id === bin.meta.id));
+    assert.ok((await (await bucket.get(`bins/${bin.meta.id}/meta.json`)).json()).deletedAt);
+    assert.ok(await bucket.head(`bins/${bin.meta.id}/versions/000001.json`));
+  }
+  assert.equal((await (await request('/collections/' + collection.meta.id + '/bins')).json()).total, 0);
+  assert.equal((await (await request('/collections')).json()).items.find(item => item.id === collection.meta.id).binCount, 0);
 });
