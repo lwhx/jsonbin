@@ -20,7 +20,9 @@ type SessionPayload = SessionUser & {
   exp: number;
 };
 
-function sessionSecret(c: Context<{ Bindings: Env }>) {
+type JsonBinContextEnv = { Bindings: Env };
+
+function sessionSecret<T extends JsonBinContextEnv>(c: Context<T>) {
   const secret = c.env.SESSION_SECRET;
   if (!secret || secret.length < 32) {
     throw new Error("SESSION_SECRET must be configured with at least 32 characters");
@@ -28,8 +30,8 @@ function sessionSecret(c: Context<{ Bindings: Env }>) {
   return secret;
 }
 
-export async function issueSession(
-  c: Context<{ Bindings: Env }>,
+export async function issueSession<T extends JsonBinContextEnv>(
+  c: Context<T>,
   user: SessionUser,
 ) {
   const payload: SessionPayload = {
@@ -54,8 +56,8 @@ export function clearSession(c: Context) {
   deleteCookie(c, COOKIE_NAME, { path: "/" });
 }
 
-export async function readSession(
-  c: Context<{ Bindings: Env }>,
+export async function readSession<T extends JsonBinContextEnv>(
+  c: Context<T>,
 ): Promise<SessionUser | null> {
   const token = getCookie(c, COOKIE_NAME);
   if (!token) return null;
