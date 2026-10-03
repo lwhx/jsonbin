@@ -40,7 +40,14 @@ const metadataSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
+  collectionId: z.string().uuid().nullable().optional(),
 }).strict().refine((input) => Object.keys(input).length > 0);
+
+app.onError((error, c) => {
+  if (error.message === "collection_unavailable") return c.json({ error: "collection_unavailable" }, 409);
+  if (error.message === "collection_delete_conflict") return c.json({ error: "collection_delete_conflict" }, 409);
+  throw error;
+});
 
 function parseVersion(value: string) {
   if (!/^[1-9]\d*$/.test(value)) return null;

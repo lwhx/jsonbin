@@ -5,6 +5,7 @@ const messages: Record<number, string> = {
   0: "无法连接 Worker API，请检查网络后重试。",
   401: "登录已过期，请重新登录。",
   404: "数据仓不存在或已被删除。",
+  409: "集合已删除或正在删除，请重新选择集合。当前草稿已保留。",
   412: "数据已被其他请求修改。请重新加载后再保存；当前草稿已保留。",
   422: "内容校验失败，请检查输入。",
   423: "数据仓已锁定，无法修改。当前草稿已保留。",
@@ -40,7 +41,7 @@ export async function saveBin(id: string, value: unknown, etag: string, base = e
     body: JSON.stringify({ value }),
   }));
 }
-export async function saveBinMetadata(id: string, input: MetadataInput, etag: string, base = endpoint) {
+export async function saveBinMetadata(id: string, input: Partial<MetadataInput>, etag: string, base = endpoint) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}/meta`, {
     method: "PATCH", headers: { "Content-Type": "application/json", "If-Match": etag },
     body: JSON.stringify(input),

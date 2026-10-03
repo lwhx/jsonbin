@@ -5,13 +5,14 @@ import { BinApiError, getBin, removeBin, saveBin, saveBinMetadata, restoreBinVer
 import { createDraft, isDirty, parseJson, receiveRecord, savedDraft } from "./editor-state";
 import type { Draft } from "./editor-state";
 import type { BinRecord, MetadataInput } from "./types";
+import { listCollections } from "../collections/api";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
 type Tab = "编辑器" | "历史版本" | "API" | "设置";
 function metadataOf(record: BinRecord): MetadataInput {
-  const { name, description, visibility } = record.meta;
-  return { name, description, visibility };
+  const { name, description, visibility, collectionId } = record.meta;
+  return { name, description, visibility, collectionId };
 }
 
 export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
@@ -20,6 +21,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
 }) {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBin(id, undefined, signal), retry: false });
+  const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -112,7 +114,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       setDraft(previous => previous ? savedDraft(previous, record, previous.savedText) : createDraft(record));
       setMetadata(metadataOf(record)); client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
-      setNotice("设置保存成功，JSON 版本保持不变。");
+      await client.invalidateQueries({ queryKey: ["collections"] });
+      await client.invalidateQueries({ queryKey: ["collection-bins"] });
+      setNotice(metadata.collectionId && record.meta.collectionId === null ? "集合已删除，数据仓已保留在未分组中；JSON 版本保持不变。" : "设置保存成功，JSON 版本保持不变。");
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
   async function restore(version: number) {
@@ -139,6 +143,8 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       await removeBin(id);
       await client.invalidateQueries({ queryKey: ["bins"] });
       client.removeQueries({ queryKey: ["bin", id] });
+      await client.invalidateQueries({ queryKey: ["collections"] });
+      await client.invalidateQueries({ queryKey: ["collection-bins"] });
       if (!mounted.current) return;
       onDirtyChange(false); onDeleted();
     } catch (caught) { report(caught); setDeleteOpen(false); } finally { setBusy(null); }
@@ -208,6 +214,13 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <label>名称<input required maxLength={160} value={metadata.name} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, name: event.target.value })} /></label>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
         <label>可见性<select aria-label="可见性" value={metadata.visibility} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, visibility: event.target.value as "private" | "public" })}><option value="private">私有</option><option value="public">公开</option></select></label>
+        <label>集合<select aria-label="集合" value={metadata.collectionId ?? ""} disabled={Boolean(busy) || locked || collections.isPending || collections.isError}
+          onChange={event => setMetadata({ ...metadata, collectionId: event.target.value || null })}>
+          <option value="">未分组</option>
+          {metadata.collectionId && !collections.data?.items.some(item => item.id === metadata.collectionId && item.status === "active") && <option value={metadata.collectionId}>当前集合不可用</option>}
+          {collections.data?.items.filter(item => item.status === "active").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></label>
+        {collections.isError && <p role="alert">{collections.error.message}<button type="button" className="secondary-button" onClick={() => collections.refetch()}>重试集合选项</button></p>}
         <p>当前所有读取仍需登录；公开只读访问将在后续阶段提供。</p>
         <button type="submit" className="primary-button" disabled={!metadataDirty || !metadata.name.trim() || Boolean(busy) || locked}><Save size={15} />保存设置</button>
       </form>}

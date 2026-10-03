@@ -30,3 +30,16 @@ export async function putJson(
     ...options,
   });
 }
+
+export async function listJsonObjects<T>(bucket: R2Bucket, prefix: string) {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    const records = await Promise.all(page.objects.filter(object => object.key.endsWith("/meta.json"))
+      .map(object => getJson<T>(bucket, object.key)));
+    for (const record of records) if (record) items.push(record.value);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return items;
+}

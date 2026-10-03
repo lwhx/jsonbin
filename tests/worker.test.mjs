@@ -245,3 +245,143 @@ test('version listing traverses R2 pages, sorts numerically and ignores noncanon
   assert.equal(new Set(listing.items.map(item => item.version)).size, 1003);
   assert.equal(listing.currentVersion, 1);
 });
+
+async function collectionRequest(path = '', { method = 'GET', value, etag, authenticated = true } = {}) {
+  return mf.dispatchFetch('http://localhost/api/v1/collections' + path, {
+    method, headers: { 'Content-Type': 'application/json', ...(authenticated && cookie ? { Cookie: cookie } : {}), ...(etag ? { 'If-Match': etag } : {}) },
+    ...(value !== undefined ? { body: JSON.stringify(value) } : {}),
+  });
+}
+async function createCollection(name = 'collection test') {
+  const response = await collectionRequest('', { method: 'POST', value: { name, description: 'description' } });
+  assert.equal(response.status, 201); const record = await response.json();
+  assert.equal(response.headers.get('etag'), record.etag); return record;
+}
+
+test('collections CRUD validates inputs, uses stable unique slugs and requires ETags', async () => {
+  const first = await createCollection(' first '); const second = await createCollection('first');
+  assert.equal(first.meta.name, 'first'); assert.notEqual(first.meta.slug, second.meta.slug);
+  assert.equal(first.meta.status, 'active');
+  const path = '/' + first.meta.id;
+  const detail = await collectionRequest(path); assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).binCount, 0);
+  assert.equal((await collectionRequest(path, { method: 'PATCH', value: { name: 'renamed' } })).status, 428);
+  const edited = await collectionRequest(path, { method: 'PATCH', etag: first.etag, value: { name: 'renamed', description: 'updated' } });
+  assert.equal(edited.status, 200); const updated = await edited.json();
+  assert.equal(updated.meta.name, 'renamed'); assert.equal(updated.meta.description, 'updated');
+  assert.equal(updated.meta.slug, first.meta.slug); assert.equal(updated.meta.createdAt, first.meta.createdAt);
+  assert.equal((await collectionRequest(path, { method: 'PATCH', etag: first.etag, value: { name: 'stale' } })).status, 412);
+  assert.equal((await collectionRequest(path, { method: 'DELETE' })).status, 428);
+  assert.equal((await collectionRequest(path, { method: 'DELETE', etag: first.etag })).status, 412);
+  for (const value of [{}, { name: ' ' }, { name: 'x'.repeat(161) }, { name: 'ok', description: 'x'.repeat(1001) }, { name: 'ok', status: 'deleted' }]) {
+    assert.equal((await collectionRequest('', { method: 'POST', value })).status, 422);
+  }
+  for (const value of [{}, { name: '' }, { slug: 'change' }, { binCount: 10 }]) {
+    assert.equal((await collectionRequest(path, { method: 'PATCH', etag: updated.etag, value })).status, 422);
+  }
+  for (const [suffix, method, value] of [['', 'GET'], ['', 'POST', { name: 'secret' }], [path, 'GET'], [path, 'PATCH', { name: 'secret' }], [path, 'DELETE'], [path + '/bins', 'GET']]) {
+    assert.equal((await collectionRequest(suffix, { method, value, etag: updated.etag, authenticated: false })).status, 401);
+  }
+  assert.equal((await collectionRequest('/missing')).status, 404);
+  assert.equal((await collectionRequest('/missing/bins')).status, 404);
+  assert.equal((await collectionRequest('/missing', { method: 'PATCH', value: { name: 'missing' }, etag: '"unknown"' })).status, 404);
+  assert.equal((await collectionRequest('/missing', { method: 'DELETE', etag: '"unknown"' })).status, 404);
+  assert.equal((await collectionRequest(path, { method: 'DELETE', etag: updated.etag })).status, 200);
+  assert.equal((await collectionRequest(path)).status, 404);
+  assert.equal((await collectionRequest(path, { method: 'DELETE', etag: updated.etag })).status, 200);
+  assert.ok(!(await (await collectionRequest()).json()).items.some(item => item.id === first.meta.id));
+});
+
+test('Bin membership moves and clears without changing JSON or version history', async () => {
+  const first = await createCollection(); const second = await createCollection();
+  const createdResponse = await request('/bins', { method: 'POST', value: { name: 'member', value: false, collectionId: first.meta.id } });
+  assert.equal(createdResponse.status, 201); const bin = await createdResponse.json(); const path = '/bins/' + bin.meta.id;
+  assert.equal(bin.meta.collectionId, first.meta.id);
+  assert.equal((await (await collectionRequest('/' + first.meta.id + '/bins')).json()).total, 1);
+  let list = await (await collectionRequest()).json(); assert.equal(list.items.find(item => item.id === first.meta.id).binCount, 1);
+  const movedResponse = await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { collectionId: second.meta.id } });
+  assert.equal(movedResponse.status, 200); const moved = await movedResponse.json();
+  assert.equal(moved.meta.collectionId, second.meta.id); assert.equal(moved.value, false); assert.equal(moved.meta.currentVersion, 1);
+  assert.equal((await (await collectionRequest('/' + first.meta.id + '/bins')).json()).total, 0);
+  assert.equal((await (await collectionRequest('/' + second.meta.id + '/bins')).json()).total, 1);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { collectionId: null } })).status, 412);
+  const cleared = await request(path + '/meta', { method: 'PATCH', etag: moved.etag, value: { collectionId: null } });
+  assert.equal(cleared.status, 200); const detached = await cleared.json();
+  assert.equal(detached.meta.collectionId, null); assert.equal(detached.meta.currentVersion, 1); assert.equal(detached.value, false);
+  assert.equal((await (await collectionRequest('/' + second.meta.id + '/bins')).json()).total, 0);
+  assert.equal((await (await request(path + '/versions')).json()).total, 1);
+  for (const collectionId of ['not-a-uuid', 1]) assert.equal((await request(path + '/meta', { method: 'PATCH', etag: detached.etag, value: { collectionId } })).status, 422);
+  const missing = crypto.randomUUID();
+  assert.equal((await request('/bins', { method: 'POST', value: { name: 'bad member', value: {}, collectionId: missing } })).status, 409);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', etag: detached.etag, value: { collectionId: missing } })).status, 409);
+  assert.equal((await (await request(path)).json()).meta.collectionId, null);
+});
+
+test('collection deletion detaches locked and unlocked Bins while retaining immutable versions', async () => {
+  const collection = await createCollection();
+  const bins = [];
+  for (const name of ['unlocked', 'locked']) {
+    const bin = await (await request('/bins', { method: 'POST', value: { name, value: { name }, collectionId: collection.meta.id } })).json();
+    bins.push(bin);
+  }
+  await bucket.put(`bins/${bins[1].meta.id}/meta.json`, JSON.stringify({ ...bins[1].meta, locked: true }));
+  const originals = await Promise.all(bins.map(async bin => (await bucket.get(`bins/${bin.meta.id}/versions/000001.json`)).text()));
+  const deleted = await collectionRequest('/' + collection.meta.id, { method: 'DELETE', etag: collection.etag });
+  assert.equal(deleted.status, 200); assert.equal((await deleted.json()).detached, 2);
+  for (let i = 0; i < bins.length; i++) {
+    const after = await (await request('/bins/' + bins[i].meta.id)).json();
+    assert.equal(after.meta.collectionId, null); assert.equal(after.meta.currentVersion, 1);
+    assert.equal(after.meta.locked, i === 1); assert.deepEqual(after.value, bins[i].value);
+    assert.equal(await (await bucket.get(`bins/${bins[i].meta.id}/versions/000001.json`)).text(), originals[i]);
+  }
+  assert.equal((await collectionRequest('/' + collection.meta.id)).status, 404);
+  assert.equal((await collectionRequest('/' + collection.meta.id + '/bins')).status, 404);
+  assert.equal((await request('/bins/' + bins[0].meta.id + '/meta', { method: 'PATCH', value: { collectionId: collection.meta.id } })).status, 409);
+});
+
+test('deleting marker blocks new members, remains visible, and deletion cleanup can resume', async () => {
+  const collection = await createCollection();
+  const bin = await (await request('/bins', { method: 'POST', value: { name: 'resume', value: null, collectionId: collection.meta.id } })).json();
+  await bucket.put(`collections/${collection.meta.id}/meta.json`, JSON.stringify({ ...collection.meta, status: 'deleting' }));
+  assert.equal((await (await collectionRequest('/' + collection.meta.id)).json()).meta.status, 'deleting');
+  assert.ok((await (await collectionRequest()).json()).items.some(item => item.id === collection.meta.id));
+  assert.equal((await collectionRequest('/' + collection.meta.id, { method: 'PATCH', etag: collection.etag, value: { name: 'resurrect' } })).status, 409);
+  assert.equal((await request('/bins', { method: 'POST', value: { name: 'new member', value: {}, collectionId: collection.meta.id } })).status, 409);
+  const result = await collectionRequest('/' + collection.meta.id, { method: 'DELETE', etag: collection.etag });
+  assert.equal(result.status, 200); assert.equal((await result.json()).detached, 1);
+  assert.equal((await (await request('/bins/' + bin.meta.id)).json()).meta.collectionId, null);
+});
+
+test('concurrent membership change and collection deletion leave no dangling relation', async () => {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const collection = await createCollection(); const bin = await create({ concurrent: true });
+    const [moved, deleted] = await Promise.all([
+      request('/bins/' + bin.meta.id + '/meta', { method: 'PATCH', etag: bin.etag, value: { collectionId: collection.meta.id } }),
+      collectionRequest('/' + collection.meta.id, { method: 'DELETE', etag: collection.etag }),
+    ]);
+    assert.ok([200, 409].includes(moved.status)); assert.equal(deleted.status, 200);
+    const current = await (await request('/bins/' + bin.meta.id)).json();
+    assert.equal(current.meta.collectionId, null); assert.deepEqual(current.value, bin.value); assert.equal(current.meta.currentVersion, 1);
+  }
+});
+
+test('collection cleanup never overwrites concurrent JSON saves or a move to another collection', async () => {
+  for (const operation of ['json', 'move']) {
+    const source = await createCollection(); const destination = await createCollection();
+    const original = await (await request('/bins', { method: 'POST', value: { name: 'concurrent cleanup', value: { original: true }, collectionId: source.meta.id } })).json();
+    const path = '/bins/' + original.meta.id;
+    const [change, deletion] = await Promise.all([
+      operation === 'json'
+        ? request(path, { method: 'PUT', etag: original.etag, value: { value: { saved: true } } })
+        : request(path + '/meta', { method: 'PATCH', etag: original.etag, value: { collectionId: destination.meta.id } }),
+      collectionRequest('/' + source.meta.id, { method: 'DELETE', etag: source.etag }),
+    ]);
+    assert.ok([200, 412].includes(change.status)); assert.equal(deletion.status, 200);
+    const final = await (await request(path)).json();
+    assert.notEqual(final.meta.collectionId, source.meta.id);
+    if (change.status === 200) {
+      if (operation === 'json') { assert.deepEqual(final.value, { saved: true }); assert.equal(final.meta.currentVersion, 2); }
+      else { assert.equal(final.meta.collectionId, destination.meta.id); assert.deepEqual(final.value, original.value); }
+    } else { assert.deepEqual(final.value, original.value); assert.equal(final.meta.currentVersion, 1); }
+  }
+});

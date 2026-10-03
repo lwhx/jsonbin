@@ -1,4 +1,5 @@
-import { getJson, putJson, requireDataBucket } from "./r2";
+import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
+import { assertCollectionAvailable, getCollection, detachBinFromCollection } from "./collections";
 
 export type BinMeta = {
   id: string;
@@ -74,32 +75,7 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
 }
 
 export async function listBins(env: Env): Promise<BinMeta[]> {
-  const bucket = requireDataBucket(env);
-  const items: BinMeta[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const page = await bucket.list({
-      prefix: "bins/",
-      cursor,
-      limit: 1000,
-    });
-
-    const metaKeys = page.objects
-      .map((object) => object.key)
-      .filter((key) => key.endsWith("/meta.json"));
-
-    const records = await Promise.all(
-      metaKeys.map((key) => getJson<BinMeta>(bucket, key)),
-    );
-
-    for (const record of records) {
-      if (record) items.push(record.value);
-    }
-
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
-
+  const items = await listJsonObjects<BinMeta>(requireDataBucket(env), "bins/");
   return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
@@ -114,6 +90,7 @@ export async function createBin(
   },
 ): Promise<BinRecord> {
   const bucket = requireDataBucket(env);
+  await assertCollectionAvailable(env, input.collectionId);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const json = JSON.stringify(input.value);
@@ -136,6 +113,12 @@ export async function createBin(
 
   await putJson(bucket, versionKey(id, 1), input.value);
   const metaObject = await putJson(bucket, metaKey(id), meta);
+
+  if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
+    await detachBinFromCollection(env, id, input.collectionId);
+    const latest = await getBin(env, id);
+    if (latest) return latest;
+  }
 
   return {
     meta,
@@ -258,6 +241,7 @@ export type BinMetadataInput = {
   name?: string;
   description?: string;
   visibility?: "private" | "public";
+  collectionId?: string | null;
 };
 
 export async function updateBinMetadata(
@@ -267,10 +251,15 @@ export async function updateBinMetadata(
   const current = await getBin(env, id);
   if (!current) return null;
   assertWritable(current.meta, current.etag, expectedEtag);
+  await assertCollectionAvailable(env, input.collectionId);
   const meta = { ...current.meta, ...input, updatedAt: new Date().toISOString() };
   const written = await putJson(bucket, metaKey(id), meta, {
     onlyIf: { etagMatches: normalizeEtag(current.etag) },
   });
   if (!written) throw new Error("etag_conflict");
+  if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
+    await detachBinFromCollection(env, id, input.collectionId);
+    return getBin(env, id);
+  }
   return { meta, value: current.value, etag: written.httpEtag };
 }

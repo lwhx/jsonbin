@@ -27,6 +27,9 @@ import type { LucideIcon } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { BinDetailPage } from "./features/bins/BinDetailPage";
 import { binHash, binIdFromHash } from "./features/bins/navigation";
+import { CollectionsPage } from "./features/collections/CollectionsPage";
+import { CollectionDetailPage } from "./features/collections/CollectionDetailPage";
+import { collectionHash, collectionIdFromHash, listCollections } from "./features/collections/api";
 
 type Health = {
   ok: boolean;
@@ -70,7 +73,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins";
+type Section = "Overview" | "Bins" | "Collections";
 
 type NavLink = {
   label: string;
@@ -93,7 +96,7 @@ type NavItem = NavLink | NavDivider;
 const nav: NavItem[] = [
   { label: "概览", icon: LayoutDashboard, section: "Overview" },
   { label: "数据仓", icon: FileJson2, section: "Bins" },
-  { label: "集合", icon: Boxes, disabled: true },
+  { label: "集合", icon: Boxes, section: "Collections" },
   { label: "数据模型", icon: Braces, disabled: true },
   { divider: true, label: "开发者" },
   { label: "API 密钥", icon: KeyRound, disabled: true },
@@ -339,9 +342,10 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : "Overview";
+  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : "Overview";
   const binId = binIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : "/"; };
+  const collectionId = collectionIdFromHash(route);
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
@@ -397,6 +401,9 @@ function AuthenticatedApp({
     queryClient.setQueryData(["auth-me"], null);
     queryClient.removeQueries({ queryKey: ["bins"] });
     queryClient.removeQueries({ queryKey: ["bin"] });
+    queryClient.removeQueries({ queryKey: ["collections"] });
+    queryClient.removeQueries({ queryKey: ["collection"] });
+    queryClient.removeQueries({ queryKey: ["collection-bins"] });
   }
 
   const totalStorage =
@@ -506,6 +513,13 @@ function AuthenticatedApp({
                 window.history.pushState(null, "", "#/bins");
                 setRoute("#/bins");
               }} />
+          ) : section === "Collections" ? (collectionId || route === "#/collections/new" ?
+            <CollectionDetailPage key={collectionId ?? "new"} id={collectionId} onDirtyChange={setDetailDirty}
+              onBack={() => setSection("Collections")} onOpenBin={id => { window.location.hash = binHash(id); }}
+              onSaved={id => { setDetailDirty(false); const next = collectionHash(id); window.history.pushState(null, "", next); setRoute(next); }}
+              onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/collections"); setRoute("#/collections"); }} />
+            : <CollectionsPage onCreate={() => { window.location.hash = "/collections/new"; }}
+              onOpen={id => { window.location.hash = collectionHash(id); }} />
           ) : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
@@ -534,6 +548,8 @@ function AuthenticatedApp({
           onCreated={async (id) => {
             setCreateOpen(false);
             await queryClient.invalidateQueries({ queryKey: ["bins"] });
+            await queryClient.invalidateQueries({ queryKey: ["collections"] });
+            await queryClient.invalidateQueries({ queryKey: ["collection-bins"] });
             window.location.hash = binHash(id);
           }}
         />
@@ -790,6 +806,8 @@ function CreateBinDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
+  const [collectionId, setCollectionId] = useState("");
+  const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const [jsonText, setJsonText] = useState(`{
   "hello": "world"
 }`);
@@ -818,6 +836,7 @@ function CreateBinDialog({
           name,
           description,
           visibility,
+          collectionId: collectionId || null,
           value,
         }),
       });
@@ -894,6 +913,10 @@ function CreateBinDialog({
             />
           </label>
 
+          <label>集合<select aria-label="集合" value={collectionId} onChange={event => setCollectionId(event.target.value)} disabled={collections.isPending || collections.isError}>
+            <option value="">未分组</option>{collections.data?.items.filter(item => item.status === "active").map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select></label>
+          {collections.isError && <p role="alert">{collections.error.message} 可先创建未分组数据仓。</p>}
           <label>
             JSON
             <textarea

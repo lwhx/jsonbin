@@ -14,7 +14,7 @@ export type BinMeta = {
   expiresAt: string | null;
 };
 export type BinRecord = { meta: BinMeta; value: unknown; etag: string };
-export type MetadataInput = Pick<BinMeta, "name" | "description" | "visibility">;
+export type MetadataInput = Pick<BinMeta, "name" | "description" | "visibility" | "collectionId">;
 export type BinVersionSummary = { version: number; createdAt: string; size: number };
 export type BinVersionRecord = BinVersionSummary & { id: string; value: unknown; etag: string };
 export type BinVersionList = { items: BinVersionSummary[]; currentVersion: number; total: number };

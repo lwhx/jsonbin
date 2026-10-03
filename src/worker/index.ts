@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import authRoutes from "./routes/auth";
 import binRoutes from "./routes/bins";
+import collectionRoutes from "./routes/collections";
 import { version } from "../../package.json";
 
 type Bindings = Env;
@@ -28,6 +29,7 @@ app.use(
 
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/bins", binRoutes);
+app.route("/api/v1/collections", collectionRoutes);
 
 app.get("/api/v1/system/health", (c) => {
   return c.json({
