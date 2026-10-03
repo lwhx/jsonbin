@@ -1,0 +1,17 @@
+import type { JsonSchema } from './schema-validation.ts';
+import type { UserDefaults } from './system.ts';
+export type BackupCollectionMeta = { id: string; name: string; description: string; slug: string; status: 'active' | 'deleted'; createdAt: string; updatedAt: string };
+export type BackupSchemaMeta = { id: string; name: string; description: string; currentRevision: number; status: 'active' | 'deleted'; createdAt: string; updatedAt: string };
+export type BackupBinMeta = { id: string; name: string; description: string; visibility: 'private' | 'public'; collectionId: string | null; schemaId: string | null; schemaRevision: number | null; currentVersion: number; size: number; locked: boolean; schemaLocked: boolean; createdAt: string; updatedAt: string; expiresAt: string | null; deletedAt?: string; deletionReason?: 'manual' | 'expired' };
+export type BackupCollection = { meta: BackupCollectionMeta };
+export type BackupSchema = { meta: BackupSchemaMeta; revisions: { revision: number; uploadedAt: string; schema: JsonSchema }[] };
+export type BackupBin = { meta: BackupBinMeta; versions: { version: number; uploadedAt: string; value: unknown }[] };
+export type BackupPurged = { id: string; deletedAt: string };
+export type BackupScope = { kind: 'all' } | { kind: 'config' } | { kind: 'bin'; id: string };
+export type BackupPackage = { format: 'jsonbin-backup'; schemaVersion: 1; appVersion: string; exportedAt: string; scope: BackupScope; settings: UserDefaults; collections: BackupCollection[]; schemas: BackupSchema[]; bins: BackupBin[]; purged: BackupPurged[] };
+export type RestoreResource = { kind: 'collection'; data: BackupCollection } | { kind: 'schema'; data: BackupSchema } | { kind: 'bin'; data: BackupBin } | { kind: 'purged'; data: BackupPurged };
+export type ResourceKind = RestoreResource['kind'];
+export type RestoreDependency = { kind: 'collection' | 'schema'; id: string; fingerprint: string };
+export type RestoreRequest = { resource: RestoreResource; dependencies: RestoreDependency[] };
+export type ImportMarker = { importState: 'pending'; kind: ResourceKind; id: string; fingerprint: string; startedAt: string };
+export type RestoreResult = { kind: ResourceKind; id: string; status: 'created' | 'unchanged' | 'skipped' | 'dependency_skipped' | 'failed'; error?: string; warnings?: ('collection_detached' | 'collection_cleanup_failed')[] };

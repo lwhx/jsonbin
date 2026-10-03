@@ -1,5 +1,5 @@
 Source: https://github.com/json-schema-org/json-schema-spec/blob/main/LICENSE
-Applies to the official Draft 7 meta-schema bundled in src/worker/validation/draft7-meta-schema.json.
+Applies to the official Draft 7 meta-schema bundled in src/shared/draft7-meta-schema.json.
 
 Copyright (c) 2022 JSON Schema Specification Authors
 

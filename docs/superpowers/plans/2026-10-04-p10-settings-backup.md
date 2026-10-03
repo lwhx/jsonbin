@@ -88,14 +88,14 @@
 
 **Interfaces:** 消费 UserDefaults / SystemError；产出 `validateBackup(value:unknown):BackupPackage`、`validateRestoreRequest(value:unknown):RestoreRequest`、`validateBusinessValue(value:unknown):void`、`fingerprintResource(resource:RestoreResource):Promise<string>`、`isImportMarker(value:unknown):value is ImportMarker`、`encodeBackupZip(backup:BackupPackage):Promise<Uint8Array>`、`decodeBackupZip(bytes:Uint8Array):Promise<BackupPackage>`。占位判别用于拒绝正常读取；恢复入口另做完整 marker 校验。fixtures 定义 minimalBackup / richBackup，包含 spec 的完整字段和独立 UUID。
 
-- [ ] 写 RED：严格管理白名单、格式版本、字节/对象/深度上限、唯一 ID/版本、缺当前文件/引用、模型定义及当前值约束；正常 value 的 null/false/数组、__proto__/format/空键/Unicode 原样往返，拒绝非有限数值。示例：`assert.deepEqual(validateBackup(minimalBackup(null)).bins[0].versions[0].value,null);`。
-- [ ] Run `node --test tests/backup-format.test.mjs`。Expected: 缺失 API 或格式行为断言 RED。测试引入缺失模块后明确断言，不掩盖语法/fixture 错误。
-- [ ] 实现格式接口和 SHA-256 指纹（对象键排序、数组顺序不变，无原型赋值）；提取现有纯 Draft 7 校验原逻辑，JSON 导入用 `with {type:'json'}` 兼容 Node 原生 TS，Worker 的已有函数名及 SchemaError 保持。
-- [ ] 写 ZIP 测试：真实往返和 Python zipfile 读取 bytes，核对 CRC/JSON/null/中文；变异重复/额外/路径条目、offset 重叠、头部不一致、截断、压缩、加密、ZIP64、描述符、CRC/SHA/长度错误全部拒绝。
-- [ ] Run `node --test tests/zip.test.mjs`。Expected: 缺 ZIP API 或格式行为 RED，变异用例触及实际解析，而非仅检查生成字符串。
-- [ ] 实现固定两条目 STORE 编解码，先检查真实大小再分配/解码，fatal UTF-8、CRC32、manifest 封闭字段/版本/摘要及图校验；不把任意 ZIP 交给无界解压器。
-- [ ] Run `node --test tests/backup-format.test.mjs tests/zip.test.mjs`、`npm run typecheck`、`npm test`。Expected: ZIP 独立工具与完整现有 Schema/Worker 回归 GREEN。
-- [ ] 提交 `feat: define validated business backups and bounded ZIP format`。
+- [x] 写 RED：严格管理白名单、格式版本、字节/对象/深度上限、唯一 ID/版本、缺当前文件/引用、模型定义及当前值约束；正常 value 的 null/false/数组、__proto__/format/空键/Unicode 原样往返，拒绝非有限数值。示例：`assert.deepEqual(validateBackup(minimalBackup(null)).bins[0].versions[0].value,null);`。
+- [x] Run `node --test tests/backup-format.test.mjs`。Expected: 缺失 API 或格式行为断言 RED。测试引入缺失模块后明确断言，不掩盖语法/fixture 错误。
+- [x] 实现格式接口和 SHA-256 指纹（对象键排序、数组顺序不变，无原型赋值）；提取现有纯 Draft 7 校验原逻辑，JSON 导入用 `with {type:'json'}` 兼容 Node 原生 TS，Worker 的已有函数名及 SchemaError 保持。
+- [x] 写 ZIP 测试：真实往返和 Python zipfile 读取 bytes，核对 CRC/JSON/null/中文；变异重复/额外/路径条目、offset 重叠、头部不一致、截断、压缩、加密、ZIP64、描述符、CRC/SHA/长度错误全部拒绝。
+- [x] Run `node --test tests/zip.test.mjs`。Expected: 缺 ZIP API 或格式行为 RED，变异用例触及实际解析，而非仅检查生成字符串。
+- [x] 实现固定两条目 STORE 编解码，先检查真实大小再分配/解码，fatal UTF-8、CRC32、manifest 封闭字段/版本/摘要及图校验；不把任意 ZIP 交给无界解压器。
+- [x] Run `node --test tests/backup-format.test.mjs tests/zip.test.mjs`、`npm run typecheck`、`npm test`。Expected: ZIP 独立工具与完整现有 Schema/Worker 回归 GREEN。
+- [x] 提交 `feat: define validated business backups and bounded ZIP format`。
 
 ## Task 3: 白名单导出和逐资源快照验证
 
