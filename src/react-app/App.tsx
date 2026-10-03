@@ -89,23 +89,23 @@ type NavDivider = {
 type NavItem = NavLink | NavDivider;
 
 const nav: NavItem[] = [
-  { label: "Overview", icon: LayoutDashboard, section: "Overview" },
-  { label: "Bins", icon: FileJson2, section: "Bins" },
-  { label: "Collections", icon: Boxes, disabled: true },
-  { label: "Schemas", icon: Braces, disabled: true },
-  { divider: true, label: "Developer" },
-  { label: "API Keys", icon: KeyRound, disabled: true },
-  { label: "Activity", icon: Activity, disabled: true },
-  { label: "API Docs", icon: TerminalSquare, disabled: true },
-  { divider: true, label: "System" },
-  { label: "Trash", icon: Archive, disabled: true },
-  { label: "Settings", icon: Settings, disabled: true },
+  { label: "概览", icon: LayoutDashboard, section: "Overview" },
+  { label: "数据仓", icon: FileJson2, section: "Bins" },
+  { label: "集合", icon: Boxes, disabled: true },
+  { label: "数据模型", icon: Braces, disabled: true },
+  { divider: true, label: "开发者" },
+  { label: "API 密钥", icon: KeyRound, disabled: true },
+  { label: "活动记录", icon: Activity, disabled: true },
+  { label: "API 文档", icon: TerminalSquare, disabled: true },
+  { divider: true, label: "系统" },
+  { label: "回收站", icon: Archive, disabled: true },
+  { label: "设置", icon: Settings, disabled: true },
 ];
 
 function apiErrorMessage(status: number) {
-  if (status === 401) return "Username or password is incorrect.";
-  if (status === 503) return "This login method is not configured yet.";
-  return "Something went wrong. Please try again.";
+  if (status === 401) return "用户名或密码不正确。";
+  if (status === 503) return "当前登录方式尚未配置。";
+  return "发生错误，请稍后重试。";
 }
 
 function formatBytes(bytes: number) {
@@ -117,12 +117,12 @@ function formatBytes(bytes: number) {
 function timeAgo(value: string) {
   const ms = Date.now() - new Date(value).getTime();
   const minutes = Math.max(0, Math.floor(ms / 60_000));
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
+  if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
-  return `${days} d ago`;
+  return `${days} 天前`;
 }
 
 function App() {
@@ -145,7 +145,7 @@ function App() {
         credentials: "include",
       });
       if (response.status === 401) return null;
-      if (!response.ok) throw new Error("Unable to check session");
+      if (!response.ok) throw new Error("无法检查登录状态");
       const data = (await response.json()) as {
         authenticated: boolean;
         user: AuthUser;
@@ -184,7 +184,7 @@ function BootScreen() {
       <div className="brand-mark large">
         <Code2 size={24} />
       </div>
-      <span>Loading JSONBin…</span>
+      <span>正在加载 JSONBin…</span>
     </div>
   );
 }
@@ -207,7 +207,7 @@ function LoginScreen({
     queryKey: ["auth-config"],
     queryFn: async (): Promise<AuthConfig> => {
       const response = await fetch("/api/v1/auth/config");
-      if (!response.ok) throw new Error("Unable to load auth configuration");
+      if (!response.ok) throw new Error("无法加载登录配置");
       return response.json();
     },
   });
@@ -232,7 +232,7 @@ function LoginScreen({
 
       onAuthenticated();
     } catch {
-      setError("Unable to reach the Worker API.");
+      setError("无法连接 Worker API。");
     } finally {
       setSubmitting(false);
     }
@@ -247,7 +247,7 @@ function LoginScreen({
         className="login-theme-button"
         type="button"
         onClick={onToggleTheme}
-        aria-label="Toggle color theme"
+        aria-label="切换明暗主题"
       >
         {dark ? <Sun size={18} /> : <Moon size={18} />}
       </button>
@@ -259,20 +259,20 @@ function LoginScreen({
           </div>
           <div>
             <strong>JSONBin</strong>
-            <span>Private Cloud</span>
+            <span>私有云</span>
           </div>
         </div>
 
         <div className="login-heading">
-          <span className="eyebrow">Private workspace</span>
-          <h1>Welcome back</h1>
-          <p>Sign in to manage your JSON, configs and automation data.</p>
+          <span className="eyebrow">私人工作区</span>
+          <h1>欢迎回来</h1>
+          <p>登录后管理你的 JSON、配置和自动化数据。</p>
         </div>
 
         {config.data?.passwordEnabled !== false && (
           <form className="login-form" onSubmit={submit}>
             <label>
-              Username
+              用户名
               <input
                 autoComplete="username"
                 value={username}
@@ -283,7 +283,7 @@ function LoginScreen({
             </label>
 
             <label>
-              Password
+              密码
               <input
                 type="password"
                 autoComplete="current-password"
@@ -298,7 +298,7 @@ function LoginScreen({
 
             <button className="login-submit" type="submit" disabled={submitting}>
               <LockKeyhole size={16} />
-              {submitting ? "Signing in…" : "Sign in"}
+              {submitting ? "正在登录…" : "登录"}
             </button>
           </form>
         )}
@@ -306,17 +306,17 @@ function LoginScreen({
         {config.data?.githubEnabled && (
           <>
             <div className="login-separator">
-              <span>or</span>
+              <span>或</span>
             </div>
             <a className="github-login" href="/api/v1/auth/github">
               <Code2 size={17} />
-              Continue with GitHub
+              使用 GitHub 登录
             </a>
           </>
         )}
 
         <div className="login-footnote">
-          Single-user mode · Cloudflare Workers · R2
+          单用户模式 · Cloudflare Workers · R2
         </div>
       </div>
     </div>
@@ -340,7 +340,7 @@ function AuthenticatedApp({
     queryKey: ["system-health"],
     queryFn: async (): Promise<Health> => {
       const response = await fetch("/api/v1/system/health");
-      if (!response.ok) throw new Error("Health check failed");
+      if (!response.ok) throw new Error("健康检查失败");
       return response.json();
     },
   });
@@ -351,19 +351,19 @@ function AuthenticatedApp({
       const response = await fetch("/api/v1/bins", {
         credentials: "include",
       });
-      if (!response.ok) throw new Error("Unable to load bins");
+      if (!response.ok) throw new Error("无法加载数据仓");
       return response.json();
     },
     retry: false,
   });
 
   const storageLabel = useMemo(() => {
-    if (!health.data) return "Checking bindings";
+    if (!health.data) return "正在检查绑定";
     if (health.data.storage.r2 && health.data.storage.kv) {
-      return "R2 + KV connected";
+      return "R2 + KV 已连接";
     }
-    if (health.data.storage.r2) return "R2 connected · KV pending";
-    return "Storage setup required";
+    if (health.data.storage.r2) return "R2 已连接 · KV 待配置";
+    return "需要配置存储";
   }, [health.data]);
 
   async function logout() {
@@ -387,11 +387,11 @@ function AuthenticatedApp({
           </div>
           <div>
             <strong>JSONBin</strong>
-            <span>Private Cloud</span>
+            <span>私有云</span>
           </div>
         </div>
 
-        <nav className="nav-list" aria-label="Main navigation">
+        <nav className="nav-list" aria-label="主导航">
           {nav.map((item, index) => {
             if (item.divider) {
               return (
@@ -414,7 +414,7 @@ function AuthenticatedApp({
                 <Icon size={17} />
                 <span>{item.label}</span>
                 {active && <span className="nav-dot" />}
-                {item.disabled && <span className="soon-badge">Soon</span>}
+                {item.disabled && <span className="soon-badge">即将推出</span>}
               </button>
             );
           })}
@@ -425,7 +425,7 @@ function AuthenticatedApp({
             <span
               className={`status-indicator ${health.data?.storage.r2 ? "" : "warning"}`}
             />
-            <span>{health.isError ? "API unavailable" : "Worker online"}</span>
+            <span>{health.isError ? "API 不可用" : "Worker 在线"}</span>
           </div>
           <div className="status-meta">{storageLabel}</div>
           <div className="status-version">
@@ -438,7 +438,7 @@ function AuthenticatedApp({
         <header className="topbar">
           <button className="search-button" type="button">
             <Search size={16} />
-            <span>Search bins, collections, schemas…</span>
+            <span>搜索数据仓、集合、数据模型…</span>
             <kbd>⌘ K</kbd>
           </button>
 
@@ -447,14 +447,14 @@ function AuthenticatedApp({
               className="icon-button"
               type="button"
               onClick={onToggleTheme}
-              aria-label="Toggle color theme"
+              aria-label="切换明暗主题"
             >
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <button
               className="user-chip"
               type="button"
-              title={`Signed in with ${user.provider}`}
+              title={`登录方式：${user.provider === "password" ? "密码" : "GitHub"}`}
             >
               <span className="avatar">
                 {user.username.slice(0, 1).toUpperCase()}
@@ -465,8 +465,8 @@ function AuthenticatedApp({
               className="icon-button"
               type="button"
               onClick={logout}
-              aria-label="Sign out"
-              title="Sign out"
+              aria-label="退出登录"
+              title="退出登录"
             >
               <LogOut size={17} />
             </button>
@@ -532,29 +532,29 @@ function Overview({
     <>
       <section className="hero">
         <div>
-          <span className="eyebrow">Private workspace</span>
-          <h1>JSON control center</h1>
-          <p>Your JSON storage, configuration and automation data in one place.</p>
+          <span className="eyebrow">私人工作区</span>
+          <h1>JSON 控制中心</h1>
+          <p>集中管理 JSON 存储、配置和自动化数据。</p>
         </div>
         <button className="primary-button" type="button" onClick={onCreate}>
           <Zap size={16} fill="currentColor" />
-          Create bin
+          新建数据仓
         </button>
       </section>
 
-      <section className="metrics-grid" aria-label="Overview metrics">
+      <section className="metrics-grid" aria-label="概览指标">
         <MetricCard
-          label="Total Bins"
+          label="数据仓总数"
           value={binsLoading ? "—" : String(bins.length)}
-          note={binsError ? "Storage unavailable" : "R2 objects"}
+          note={binsError ? "存储不可用" : "R2 对象"}
           icon={FileJson2}
         />
-        <MetricCard label="Collections" value="0" note="Coming next" icon={Boxes} />
-        <MetricCard label="Versions" value={String(bins.reduce((n, b) => n + b.currentVersion, 0))} note="Immutable history" icon={Activity} />
+        <MetricCard label="集合" value="0" note="即将推出" icon={Boxes} />
+        <MetricCard label="版本数" value={String(bins.reduce((n, b) => n + b.currentVersion, 0))} note="不可变历史" icon={Activity} />
         <MetricCard
-          label="Storage"
+          label="存储用量"
           value={formatBytes(totalStorage)}
-          note="Current JSON"
+          note="当前 JSON"
           icon={Database}
         />
       </section>
@@ -563,19 +563,19 @@ function Overview({
         <div className="panel requests-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">Workspace</span>
-              <h2>Recently updated</h2>
+              <span className="panel-kicker">工作区</span>
+              <h2>最近更新</h2>
             </div>
             <button className="ghost-button" type="button" onClick={onOpenBins}>
-              View bins
+              查看数据仓
               <ChevronRight size={15} />
             </button>
           </div>
 
           {binsError ? (
             <EmptyState
-              title="R2 is not ready"
-              description="Configure the DATA binding to start storing bins."
+              title="R2 尚未就绪"
+              description="请先配置 DATA 绑定，然后才能存储数据仓。"
             />
           ) : recent.length ? (
             <div className="activity-table compact">
@@ -586,7 +586,7 @@ function Overview({
                   </div>
                   <div className="activity-name">
                     <strong>{item.name}</strong>
-                    <span>Version {item.currentVersion}</span>
+                    <span>版本 {item.currentVersion}</span>
                   </div>
                   <span className="activity-action">{formatBytes(item.size)}</span>
                   <time>{timeAgo(item.updatedAt)}</time>
@@ -596,9 +596,9 @@ function Overview({
             </div>
           ) : (
             <EmptyState
-              title="No bins yet"
-              description="Create your first JSON bin to start using the workspace."
-              action="Create bin"
+              title="还没有数据仓"
+              description="创建第一个 JSON 数据仓，开始使用工作区。"
+              action="新建数据仓"
               onAction={onCreate}
             />
           )}
@@ -607,8 +607,8 @@ function Overview({
         <div className="panel health-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">Infrastructure</span>
-              <h2>System health</h2>
+              <span className="panel-kicker">基础设施</span>
+              <h2>系统状态</h2>
             </div>
             <ShieldCheck size={19} className="success-icon" />
           </div>
@@ -619,19 +619,19 @@ function Overview({
             ready={Boolean(health?.ok)}
           />
           <HealthItem
-            name="R2 storage"
-            detail="Source of truth"
+            name="R2 存储"
+            detail="主数据源"
             ready={Boolean(health?.storage.r2)}
           />
           <HealthItem
-            name="KV cache"
-            detail="Index & edge cache"
+            name="KV 缓存"
+            detail="索引与边缘缓存"
             ready={Boolean(health?.storage.kv)}
           />
 
           <div className="health-note">
             <CircleCheck size={16} />
-            <span>v3 CI is passing with TypeScript and production build checks.</span>
+            <span>v3 已通过 TypeScript 类型检查和生产构建检查。</span>
           </div>
         </div>
       </section>
@@ -665,13 +665,13 @@ function BinsPage({
     <>
       <section className="hero bins-hero">
         <div>
-          <span className="eyebrow">Data</span>
-          <h1>Bins</h1>
-          <p>Independent versioned JSON documents stored in R2.</p>
+          <span className="eyebrow">数据</span>
+          <h1>数据仓</h1>
+          <p>存储在 R2 中、支持独立版本管理的 JSON 文档。</p>
         </div>
         <button className="primary-button" type="button" onClick={onCreate}>
           <Plus size={16} />
-          New bin
+          新建数据仓
         </button>
       </section>
 
@@ -681,17 +681,17 @@ function BinsPage({
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search bins…"
+            placeholder="搜索数据仓…"
           />
         </div>
-        <span>{bins.length} total</span>
+        <span>共 {bins.length} 个</span>
       </div>
 
       {error ? (
         <div className="panel">
           <EmptyState
-            title="Unable to load bins"
-            description="Check that the R2 DATA binding is configured."
+            title="无法加载数据仓"
+            description="请检查 R2 的 DATA 绑定是否已正确配置。"
           />
         </div>
       ) : loading ? (
@@ -708,14 +708,14 @@ function BinsPage({
                 <div className="file-icon large">
                   <FileJson2 size={19} />
                 </div>
-                <span className={`visibility-pill ${bin.visibility}`}>
+                <span className={`visibility-pill ${bin.visibility === "private" ? "私有" : "公开"}`}>
                   {bin.visibility === "private" && <LockKeyhole size={11} />}
-                  {bin.visibility}
+                  {bin.visibility === "private" ? "私有" : "公开"}
                 </span>
               </div>
 
               <h3>{bin.name}</h3>
-              <p>{bin.description || "No description"}</p>
+              <p>{bin.description || "暂无描述"}</p>
 
               <div className="bin-meta-row">
                 <span>v{bin.currentVersion}</span>
@@ -730,13 +730,13 @@ function BinsPage({
       ) : (
         <div className="panel">
           <EmptyState
-            title={search ? "No matching bins" : "No bins yet"}
+            title={search ? "没有匹配的数据仓" : "还没有数据仓"}
             description={
               search
-                ? "Try another search term."
-                : "Create your first versioned JSON document."
+                ? "换一个关键词试试。"
+                : "创建你的第一个版本化 JSON 文档。"
             }
-            action={search ? undefined : "Create bin"}
+            action={search ? undefined : "新建数据仓"}
             onAction={search ? undefined : onCreate}
           />
         </div>
@@ -769,7 +769,7 @@ function CreateBinDialog({
     try {
       value = JSON.parse(jsonText);
     } catch {
-      setError("The JSON content is not valid.");
+      setError("JSON 内容格式不正确。");
       return;
     }
 
@@ -790,15 +790,15 @@ function CreateBinDialog({
       if (!response.ok) {
         setError(
           response.status === 500
-            ? "R2 storage is not configured yet."
-            : "Unable to create the bin.",
+            ? "R2 存储尚未配置。"
+            : "无法创建数据仓。",
         );
         return;
       }
 
       onCreated();
     } catch {
-      setError("Unable to reach the Worker API.");
+      setError("无法连接 Worker API。");
     } finally {
       setSaving(false);
     }
@@ -815,8 +815,8 @@ function CreateBinDialog({
       >
         <div className="dialog-heading">
           <div>
-            <span className="eyebrow">New document</span>
-            <h2 id="create-bin-title">Create bin</h2>
+            <span className="eyebrow">新建文档</span>
+            <h2 id="create-bin-title">新建数据仓</h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose}>
             <X size={17} />
@@ -826,7 +826,7 @@ function CreateBinDialog({
         <form className="create-form" onSubmit={submit}>
           <div className="form-grid">
             <label>
-              Name
+              名称
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -836,25 +836,25 @@ function CreateBinDialog({
             </label>
 
             <label>
-              Visibility
+              可见性
               <select
                 value={visibility}
                 onChange={(event) =>
                   setVisibility(event.target.value as "private" | "public")
                 }
               >
-                <option value="private">Private</option>
-                <option value="public">Public</option>
+                <option value="private">私有</option>
+                <option value="public">公开</option>
               </select>
             </label>
           </div>
 
           <label>
-            Description
+            描述
             <input
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="Optional note about this JSON document"
+              placeholder="可选：填写这个 JSON 文档的说明"
             />
           </label>
 
@@ -872,11 +872,11 @@ function CreateBinDialog({
 
           <div className="dialog-actions">
             <button className="secondary-button" type="button" onClick={onClose}>
-              Cancel
+              取消
             </button>
             <button className="primary-button" type="submit" disabled={saving}>
               <Plus size={16} />
-              {saving ? "Creating…" : "Create bin"}
+              {saving ? "Creating…" : "新建数据仓"}
             </button>
           </div>
         </form>
@@ -952,7 +952,7 @@ function HealthItem({
         <strong>{name}</strong>
         <span>{detail}</span>
       </div>
-      <span className="health-state">{ready ? "Ready" : "Setup"}</span>
+      <span className="health-state">{ready ? "正常" : "待配置"}</span>
     </div>
   );
 }
