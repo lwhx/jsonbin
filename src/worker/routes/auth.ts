@@ -1,4 +1,5 @@
-import { Hono } from "hono";
+import { auditRequest } from "../activity";
+import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
@@ -9,6 +10,11 @@ import {
 import { base64UrlEncode } from "../lib/crypto";
 
 const app = new Hono<{ Bindings: Env }>();
+
+async function loginFailure(c: Context<{ Bindings: Env }>, error: string, status: 400 | 401 | 403 | 502 | 503) {
+  await auditRequest(c, "auth.login_failed", null, { actor: { type: "anonymous", id: null }, provider: "anonymous" });
+  return c.json({ error }, status);
+}
 
 const loginSchema = z.object({
   username: z.string().min(1).max(128),
@@ -31,7 +37,7 @@ app.get("/config", (c) => {
 app.post("/login", async (c) => {
   const body = loginSchema.safeParse(await c.req.json().catch(() => null));
   if (!body.success) {
-    return c.json({ error: "invalid_request" }, 400);
+    return loginFailure(c, "invalid_request", 400);
   }
 
   const configuredUsername = c.env.ADMIN_USERNAME;
@@ -41,7 +47,7 @@ app.post("/login", async (c) => {
     Boolean(c.env.ADMIN_PASSWORD) && body.data.password === c.env.ADMIN_PASSWORD;
 
   if (!usernameMatches || !passwordMatches) {
-    return c.json({ error: "invalid_credentials" }, 401);
+    return loginFailure(c, "invalid_credentials", 401);
   }
 
   await issueSession(c, {
@@ -50,6 +56,7 @@ app.post("/login", async (c) => {
     provider: "password",
   });
 
+  await auditRequest(c, "auth.login_succeeded", null, { actor: { type: "session", id: "local-admin" }, provider: "password" });
   return c.json({
     ok: true,
     user: {
@@ -101,7 +108,7 @@ app.get("/github/callback", async (c) => {
   const expectedState = getCookie(c, "jsonbin_oauth_state");
 
   if (!code || !state || !expectedState || state !== expectedState) {
-    return c.json({ error: "invalid_oauth_state" }, 400);
+    return loginFailure(c, "invalid_oauth_state", 400);
   }
 
   deleteCookie(c, "jsonbin_oauth_state", { path: "/" });
@@ -111,7 +118,7 @@ app.get("/github/callback", async (c) => {
     !c.env.GITHUB_CLIENT_SECRET ||
     !c.env.GITHUB_ALLOWED_USER_ID
   ) {
-    return c.json({ error: "github_oauth_not_configured" }, 503);
+    return loginFailure(c, "github_oauth_not_configured", 503);
   }
 
   const callback = new URL("/api/v1/auth/github/callback", c.req.url).toString();
@@ -135,7 +142,7 @@ app.get("/github/callback", async (c) => {
   );
 
   if (!tokenResponse.ok) {
-    return c.json({ error: "github_token_exchange_failed" }, 502);
+    return loginFailure(c, "github_token_exchange_failed", 502);
   }
 
   const tokenData = (await tokenResponse.json()) as {
@@ -144,7 +151,7 @@ app.get("/github/callback", async (c) => {
   };
 
   if (!tokenData.access_token) {
-    return c.json({ error: tokenData.error ?? "github_token_missing" }, 401);
+    return loginFailure(c, tokenData.error ?? "github_token_missing", 401);
   }
 
   const userResponse = await fetch("https://api.github.com/user", {
@@ -157,7 +164,7 @@ app.get("/github/callback", async (c) => {
   });
 
   if (!userResponse.ok) {
-    return c.json({ error: "github_user_lookup_failed" }, 502);
+    return loginFailure(c, "github_user_lookup_failed", 502);
   }
 
   const githubUser = (await userResponse.json()) as {
@@ -166,7 +173,7 @@ app.get("/github/callback", async (c) => {
   };
 
   if (String(githubUser.id) !== String(c.env.GITHUB_ALLOWED_USER_ID)) {
-    return c.json({ error: "github_user_not_allowed" }, 403);
+    return loginFailure(c, "github_user_not_allowed", 403);
   }
 
   await issueSession(c, {
@@ -175,6 +182,7 @@ app.get("/github/callback", async (c) => {
     provider: "github",
   });
 
+  await auditRequest(c, "auth.login_succeeded", null, { actor: { type: "session", id: String(githubUser.id) }, provider: "github" });
   return c.redirect("/");
 });
 

@@ -1,3 +1,4 @@
+import { auditRequest } from "../activity";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
@@ -118,6 +119,7 @@ app.post("/:id/versions/:version/restore", requireAccess(["bin:update", "history
     if (!record) return c.json({ error: "not_found" }, 404);
     c.header("ETag", record.etag);
     c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    await auditRequest(c, "bin.version_restored", record.meta.id);
     return c.json(record);
   } catch (error) {
     if (error instanceof Error && error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
@@ -147,6 +149,7 @@ app.post("/", requireAccess("bin:create"), async (c) => {
 
   c.header("ETag", created.etag);
   c.header("X-JSONBin-Version", String(created.meta.currentVersion));
+  await auditRequest(c, "bin.created", created.meta.id);
   return c.json(created, 201);
 });
 
@@ -178,7 +181,8 @@ app.patch("/:id", requireAccess("bin:update"), async (c) => {
   if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.currentVersion));
-  return c.json(record);
+  await auditRequest(c, "bin.updated", record.meta.id);
+    return c.json(record);
 });
 
 app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), async (c) => {
@@ -191,7 +195,8 @@ app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), async
   if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.currentVersion));
-  return c.json(record);
+  await auditRequest(c, "bin.updated", record.meta.id);
+    return c.json(record);
 });
 
 app.put("/:id", requireAccess("bin:update"), async (c) => {
@@ -215,6 +220,7 @@ app.put("/:id", requireAccess("bin:update"), async (c) => {
 
     c.header("ETag", record.etag);
     c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    await auditRequest(c, "bin.updated", record.meta.id);
     return c.json(record);
   } catch (error) {
     if (error instanceof Error && error.message === "bin_locked") {
@@ -232,6 +238,7 @@ app.put("/:id", requireAccess("bin:update"), async (c) => {
 app.delete("/:id", requireAccess("bin:delete"), async (c) => {
   const deleted = await deleteBin(c.env, c.req.param("id"), c.req.header("If-Match"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
+  await auditRequest(c, "bin.deleted", c.req.param("id"));
   return c.json({ ok: true });
 });
 
@@ -246,6 +253,7 @@ app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
     if (!record) return c.json({ error: "not_found" }, 404);
     c.header("ETag", record.etag);
     c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    await auditRequest(c, "bin.metadata_updated", record.meta.id);
     return c.json(record);
   } catch (error) {
     if (error instanceof Error && error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);

@@ -15,6 +15,7 @@ type Bindings = Env;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+app.use("/api/*", async (c, next) => { c.set("requestId", crypto.randomUUID()); await next(); });
 app.use("/api/*", secureHeaders());
 
 app.use(

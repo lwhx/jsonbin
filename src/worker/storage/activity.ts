@@ -77,3 +77,22 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
   }
   return result(true);
 }
+
+export async function appendActivity(env: Env, input: import('../../shared/activity').ActivityInput): Promise<ActivityEntry> {
+  const checked = z.object({ action: z.enum(actions), resourceId: uuid.nullable(), identity: identitySchema, requestId: uuid }).strict().parse(input);
+  const [resourceType, summary] = ACTIVITY_ACTIONS[checked.action];
+  if ((resourceType === 'auth') !== (checked.resourceId === null)) throw new Error('invalid_activity');
+  const bucket = requireDataBucket(env), timestamp = Date.now();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const id = crypto.randomUUID();
+    const entry: ActivityEntry = { id, action: checked.action, resourceType, resourceId: checked.resourceId,
+      actor: { type: checked.identity.actor.type, id: checked.identity.actor.id }, provider: checked.identity.provider,
+      timestamp: new Date(timestamp).toISOString(), summary, requestId: checked.requestId };
+    const written = await bucket.put(activityKey(timestamp, id), JSON.stringify(entry), {
+      onlyIf: { etagDoesNotMatch: '*' }, httpMetadata: { contentType: 'application/json; charset=utf-8' },
+      customMetadata: { action: entry.action, resourceType: entry.resourceType },
+    });
+    if (written) return entry;
+  }
+  throw new Error('activity_create_conflict');
+}
