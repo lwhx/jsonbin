@@ -47,7 +47,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
-| 活动记录 | ⬜ 未开始 | 只有导航占位 |
+| 活动记录 | ✅ 本地验收通过，远端检查待核对 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
 | 设置 | ⬜ 未开始 | 只有导航占位 |
@@ -867,39 +867,45 @@ TTL 规则：
 
 ## P8 活动记录
 
-记录重要操作：
+状态：✅ 实现与本地验收完成；GitHub CI / Workers Builds 推送后核对，生产功能及真实 Cron 手动验收待确认。
 
-- 登录成功/失败
-- 创建 Bin
-- 更新 Bin
-- 删除/恢复 Bin
-- 创建/撤销 API Key
-- Schema 修改
-- Collection 修改
+- [x] 密码/GitHub 登录成功、失败（失败身份为匿名，不采集提交的用户名）
+- [x] Bin 创建、完整/局部 JSON 更新、元数据/锁/TTL 修改、历史恢复、删除/回收站恢复/永久删除
+- [x] 集合与模型创建、修改、删除；API Key 创建/撤销
+- [x] Cron 真实到期归档、purging→purged 迁移；幂等 tombstone 续作不重复记迁移
+- [x] 中文活动入口、刷新/深链接、操作/资源筛选、分页、Loading/Empty/Error/重试、手机及深色布局
+- [x] R2 保存记录，每 15 分钟 Cron 最终清理至最近 2000 条
 
-禁止记录：
-
-- 明文密码
-- Session Cookie
-- Authorization Header
-- 完整 API Token
-- 敏感 JSON 内容
-
-建议记录：
+接口：
 
 ~~~text
-id
-action
-resourceType
-resourceId
-actor
-provider
-timestamp
-summary
-requestId
+GET /api/v1/activity?limit=50&cursor=...&action=...&resourceType=...
+=> {items: ActivityEntry[], nextCursor: string|null, retentionLimit: 2000}
 ~~~
 
-个人版可限制保留最近 1000～5000 条，避免无限增长。
+字段：`id / action / resourceType / resourceId / actor:{type,id} / provider / timestamp / summary / requestId`。action/resourceType/中文 summary 来自封闭映射；只使用真实资源 UUID、经过验证的用户 ID 或 key UUID，失败登录 actor.id 为 null。每个请求由服务端产生 requestId，批量成功项共享该 ID，各有独立 activity id。
+
+权限与分页：
+
+- 仅管理 Session 可读，匿名/过期 Session 返回 401；显式 Authorization 返回 401 `session_required`，即使带 Cookie 也不回退。不新增活动 Scope，所有现有 API Key 权限均不能读取活动列表。
+- `Cache-Control: no-store`；limit 默认 50、范围 1–100，action/resourceType 为封闭枚举。非法/重复/未知参数及错误/过长/跨筛选游标返回 400；存储错误返回通用 500。
+- 游标绑定筛选条件和标准对象键；新记录进入不重复已读页，清理后的旧锚点可继续读取。每请求最多扫描 1000 个对象、最多 40 次正文读取；达到预算可能返回少于 limit 或空页，nextCursor 非 null 时继续分页。
+- `activity/<反向毫秒时间>-<UUID>.json` 使用条件创建，避免同毫秒/并发覆盖；时间来源是服务端时钟，不承诺严格跨请求提交顺序。读取严格校验，异常对象不回传任意字段。
+
+隐私及故障语义：
+
+- 不记录密码、Cookie、Authorization、完整 Token、Token 摘要、OAuth code/state、请求/响应正文、JSON 值、资源名/描述、字段路径或提交的用户名。customMetadata 仅包含 action/resourceType 枚举。创建密钥只取 key.id，不采集 token 响应。
+- 普通读操作及失败业务写入不记成功事件；登录失败单独记录。批量回收站部分失败只记录实际成功项目。
+- 业务与活动对象没有跨对象事务。业务提交后尝试记录，条件创建最多三次；活动失败保留原业务结果，固定诊断不打印异常内容。不承诺完整审计链，Worker/R2 故障可能缺少记录；不伪装为一次新的业务失败诱发危险重试。
+- 保留清理在系统事件提交后独立尝试，即使 Bin 维护失败也会执行。清理失败后下一次 Cron 重试；两次 Cron 之间或故障期间可暂时超过 2000 条，仅删除标准 activity 键，不影响业务对象。
+- UI 取消旧查询，筛选/刷新重置分页；加载更多失败或 401 时保留已有活动，原有详情草稿离页确认保持。
+
+本地验收（2026-10-03）：
+
+- `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 **83 项通过，0 失败、0 跳过**。
+- Chromium 浏览器测试 **36 项通过，0 失败、0 跳过**，包含全部 P0–P7 回归与 5 项活动页验收。
+- 已覆盖可信身份、登录/OAuth、全操作矩阵、Scope 边界、Secret canary 排除、记录故障/条件冲突、同毫秒并发、跨 R2 页过滤/损坏记录读取预算、页尾无效键、2000 条保留、故障续作、后台 CAS 与幂等迁移、并发新增/清理。
+- GitHub CI / Workers Builds：推送后核对具体提交；生产功能及真实 Cron 手动验收仍待公开 URL 和适用认证。
 
 ---
 
@@ -1041,4 +1047,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-下一阶段为 **P8 活动记录**：记录登录、Bin/集合/模型及密钥管理操作，控制记录量，严格排除 Secret、Cookie、Authorization、完整 Token 和敏感 JSON 内容。
+P8 活动记录已实现并通过本地验收，待本次提交的 CI / Workers Builds 核对；生产功能/真实 Cron 手动验收仍单独保留。下一开发阶段为 **P9 API 文档**。

@@ -198,3 +198,14 @@ The first stable v3 release is planned to include:
 - import/export
 - search
 - polished desktop/mobile dashboard
+
+
+## Activity records
+
+P8 adds the Chinese **活动记录** dashboard at `/#/activity`, with refresh, operation/resource filters and cursor pagination. `GET /api/v1/activity` requires a management Session; explicit Authorization headers are rejected even with a valid Cookie. API Keys cannot read this list.
+
+Records are immutable R2 objects containing fixed action summaries, safe resource/user/key IDs, timestamps and server-generated request IDs. Passwords, Cookie/Authorization values, tokens or digests, OAuth code/state, names/descriptions, JSON values and field paths are excluded. Successful management operations and anonymous login failures are recorded; partial trash batches record only successful items.
+
+Business commits and activity writes are separate. A failed activity write preserves the business result and may leave a missing record; this is a recent operation list, not a guaranteed audit chain. The existing 15-minute Cron retries cleanup to the newest 2000 records, with temporary overflow possible. Queries are bounded and may return fewer items or empty pages with a continuation cursor.
+
+Local typecheck/build, 83 Worker/client tests and 36 Chromium tests pass. CI/Workers Builds are checked after push; production interaction and real Cron execution remain unverified. See [P8 development notes](docs/DEVELOPMENT.md#p8-活动记录). Next phase: P9 API documentation.
