@@ -708,7 +708,7 @@ function BinsPage({
                 <div className="file-icon large">
                   <FileJson2 size={19} />
                 </div>
-                <span className={`visibility-pill ${bin.visibility === "private" ? "私有" : "公开"}`}>
+                <span className={`visibility-pill ${bin.visibility}`}>
                   {bin.visibility === "private" && <LockKeyhole size={11} />}
                   {bin.visibility === "private" ? "私有" : "公开"}
                 </span>

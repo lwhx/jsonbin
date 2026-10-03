@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import authRoutes from "./routes/auth";
 import binRoutes from "./routes/bins";
+import { version } from "../../package.json";
 
 type Bindings = Env;
 
@@ -32,7 +33,7 @@ app.get("/api/v1/system/health", (c) => {
   return c.json({
     ok: true,
     service: "jsonbin",
-    version: "3.0.0-alpha.3",
+    version,
     runtime: "cloudflare-workers",
     storage: {
       r2: Boolean(c.env.DATA),

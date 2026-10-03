@@ -30,6 +30,38 @@ function versionKey(id: string, version: number) {
   return `bins/${id}/versions/${String(version).padStart(6, "0")}.json`;
 }
 
+export function normalizeEtag(value: string) {
+  return value.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1");
+}
+
+function assertWritable(meta: BinMeta, etag: string, expectedEtag?: string) {
+  if (meta.locked) throw new Error("bin_locked");
+  if (expectedEtag && normalizeEtag(expectedEtag) !== normalizeEtag(etag)) {
+    throw new Error("etag_conflict");
+  }
+}
+
+async function appendVersion(bucket: R2Bucket, id: string, currentVersion: number, value: unknown) {
+  let nextVersion = currentVersion + 1;
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor });
+    for (const object of page.objects) {
+      const number = Number(object.key.split("/").pop()?.replace(/\.json$/, ""));
+      if (Number.isSafeInteger(number)) nextVersion = Math.max(nextVersion, number + 1);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  // Never overwrite an existing version, including an orphan from a failed CAS.
+  for (let attempt = 0; attempt < 8; attempt++, nextVersion++) {
+    const written = await putJson(bucket, versionKey(id, nextVersion), value, {
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (written) return nextVersion;
+  }
+  throw new Error("etag_conflict");
+}
+
 export async function listBins(env: Env): Promise<BinMeta[]> {
   const bucket = requireDataBucket(env);
   const items: BinMeta[] = [];
@@ -132,15 +164,8 @@ export async function updateBin(
   const bucket = requireDataBucket(env);
   const current = await getJson<BinMeta>(bucket, metaKey(id));
   if (!current) return null;
-  if (current.value.locked) {
-    throw new Error("bin_locked");
-  }
-
-  if (expectedEtag && expectedEtag !== current.etag) {
-    throw new Error("etag_conflict");
-  }
-
-  const nextVersion = current.value.currentVersion + 1;
+  assertWritable(current.value, current.etag, expectedEtag);
+  const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value);
   const now = new Date().toISOString();
   const json = JSON.stringify(value);
 
@@ -151,20 +176,13 @@ export async function updateBin(
     updatedAt: now,
   };
 
-  await putJson(bucket, versionKey(id, nextVersion), value);
-
   const written = await putJson(
     bucket,
     metaKey(id),
     nextMeta,
-    expectedEtag
-      ? {
-          onlyIf: {
-            etagMatches: expectedEtag.replace(/^W\//, "").replaceAll('"', ""),
-          },
-        }
-      : undefined,
+    { onlyIf: { etagMatches: normalizeEtag(current.etag) } },
   );
+  if (!written) throw new Error("etag_conflict");
 
   return {
     meta: nextMeta,
@@ -186,4 +204,25 @@ export async function deleteBin(env: Env, id: string) {
 
   await bucket.delete(metaKey(id));
   return true;
+}
+
+export type BinMetadataInput = {
+  name?: string;
+  description?: string;
+  visibility?: "private" | "public";
+};
+
+export async function updateBinMetadata(
+  env: Env, id: string, input: BinMetadataInput, expectedEtag?: string,
+): Promise<BinRecord | null> {
+  const bucket = requireDataBucket(env);
+  const current = await getBin(env, id);
+  if (!current) return null;
+  assertWritable(current.meta, current.etag, expectedEtag);
+  const meta = { ...current.meta, ...input, updatedAt: new Date().toISOString() };
+  const written = await putJson(bucket, metaKey(id), meta, {
+    onlyIf: { etagMatches: normalizeEtag(current.etag) },
+  });
+  if (!written) throw new Error("etag_conflict");
+  return { meta, value: current.value, etag: written.httpEtag };
 }

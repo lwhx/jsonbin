@@ -7,6 +7,7 @@ import {
   getBin,
   listBins,
   updateBin,
+  updateBinMetadata,
 } from "../storage/bins";
 
 type Variables = {
@@ -31,6 +32,12 @@ const createSchema = z.object({
 const updateSchema = z.object({
   value: z.unknown(),
 });
+
+const metadataSchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().max(1000).optional(),
+  visibility: z.enum(["private", "public"]).optional(),
+}).strict().refine((input) => Object.keys(input).length > 0);
 
 app.get("/", async (c) => {
   const items = await listBins(c.env);
@@ -104,6 +111,24 @@ app.delete("/:id", async (c) => {
   const deleted = await deleteBin(c.env, c.req.param("id"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
+});
+
+app.patch("/:id/meta", async (c) => {
+  const parsed = metadataSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
+  }
+  try {
+    const record = await updateBinMetadata(c.env, c.req.param("id"), parsed.data, c.req.header("If-Match"));
+    if (!record) return c.json({ error: "not_found" }, 404);
+    c.header("ETag", record.etag);
+    c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    return c.json(record);
+  } catch (error) {
+    if (error instanceof Error && error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
+    if (error instanceof Error && error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    throw error;
+  }
 });
 
 export default app;
