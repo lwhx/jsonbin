@@ -756,9 +756,9 @@ function CreateBinDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
-  const [jsonText, setJsonText] = useState('{
+  const [jsonText, setJsonText] = useState(`{
   "hello": "world"
-}');
+}`);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
