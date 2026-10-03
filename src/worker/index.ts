@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import activityRoutes from "./routes/activity";
 import keyRoutes from "./routes/keys";
 import authRoutes from "./routes/auth";
 import binRoutes from "./routes/bins";
@@ -31,6 +32,7 @@ app.use(
   }),
 );
 
+app.route("/api/v1/activity", activityRoutes);
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/keys", keyRoutes);
 app.route("/api/v1/bins", binRoutes);
