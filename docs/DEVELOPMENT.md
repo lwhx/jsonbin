@@ -46,7 +46,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
-| 高级 Bin API | ✅ 本地验收完成，CI 待验证 | Merge Patch、深层路径、数据锁、公开当前读取；新增接口沿用 Scope/ETag/Schema |
+| 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | 回收站 | ⬜ 未开始 | 后端有最基础 trash 写入，无 UI/恢复 |
@@ -717,7 +717,7 @@ P5 完成后，JSONBin 具备脚本/自动化工具调用能力；后续 P6 的�
 
 ## P6 高级 Bin API
 
-状态：✅ 后端、界面和本地验收完成；CI / Workers Builds 待本次提交验证，生产功能验收待确认。
+状态：✅ 后端、界面、本地验收及 GitHub CI 完成；Cloudflare Workers Builds 成功，生产功能验收待确认。
 
 功能：
 
@@ -790,7 +790,8 @@ curl -X PUT "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID/value/settings/theme" \
 - `npm run typecheck` 与生产构建通过；后者由 `npm test` 执行。Monaco 大 chunk 提示保留为既有优化项。
 - Worker/客户端测试 58 项通过，0 失败、0 跳过；新增 RFC 7396 示例、路径/数组/转义/null、原型键、非法输入不写版本、Schema/锁/Scope、公开转私有、并发快照和删除/锁定竞争测试。Scope 矩阵覆盖 9 种单权限 × 26 个资源路由及组合权限。
 - Chromium 浏览器验收 26 项通过，0 失败、0 跳过；新增数据锁持久化/只读/解锁保存、公开与私有切换/匿名读取、API 示例、锁定网络错误和过期 ETag 重试，既有编辑、历史、集合、模型和密钥验收继续通过。
-- GitHub CI / Cloudflare Workers Builds：待功能提交后补充验证记录。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37129864342) 成功，验证功能提交 `7ef26a5`；Node 22 中类型检查、生产构建、58 项 Worker/客户端测试和 26 项浏览器验收全部通过。
+- Cloudflare：[Workers Builds: jsonbin](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/15a47920-25c6-4727-a4e2-7b8429815376) 对同一提交报告 success，Version ID `0d05555e-aabc-4632-b688-026200639764`。
 - 生产功能验收：待确认；构建通过与生产功能验收分别记录。
 
 ---
@@ -996,6 +997,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P6 高级 Bin API 已实现，当前完成本地验收并等待本次提交的 CI / Workers Builds 结果。生产功能验收单独保留待确认状态。
+P6 高级 Bin API 已完成本地开发、验收及 CI。P1 / P2 / P3 / P4 / P5 / P6 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态。
 
 下一阶段为 **P7 TTL 与回收站**：expiresAt 设置与到期访问控制、定时清理、回收站列表/恢复/永久删除。恢复流程需兼容 P6 的 R2 条件删除标记，并继续遵守版本不可变、模型约束和 API 权限。
