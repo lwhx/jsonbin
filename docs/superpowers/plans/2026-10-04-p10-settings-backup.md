@@ -103,13 +103,13 @@
 
 **Interfaces:** 消费 Task 1 设置/鉴权、Task 2 BackupPackage/validateBackup；产出 `exportData(env:Env,query:ExportQuery):Promise<ExportPayload>`。内部只收集规范路径和允许字段，返回前完成快照复查；route 根据 payload 设置 attachment 并 auditRequest。
 
-- [ ] 写 RED：用真实 Worker 创建集合、模型两修订、Bin 多版本/间隙/孤立版本、锁、过期/删除、旧 trash 和 purged；scope=value 返回已保存的 false/null，scope=bin 包含依赖/历史，config 仅设置，all 包含声明的全部业务状态。示例：`assert.equal((await h.request('/system/export?scope=all&format=backup')).status,200);`。
-- [ ] Run build + `node --test tests/backup-export.test.mjs`。Expected: 路由 404/缺导出行为 RED。
-- [ ] 实现 `exportData`、封闭参数解析、源元数据规范化（只补已知缺省字段）、逻辑历史时间与终止标记投影；GET 成功后只记固定 system.exported/bin.exported，不输出目录、源 ETag 或内部收据作为恢复字段。
-- [ ] 写并观察 RED：注入 metadata 改写、目录成员改变、缺版本/模型、deleting/purging/pending；active/purged canonical 压过旧 trash；系统/Key/未知命名空间 canary 不在包中、业务 canary 保留；超限 413 无截断下载。Expected: 检测遗漏/泄露时失败。
-- [ ] 实现读取前后 ETag、最终 metadata/目录核对和计数/字节限制；过渡或损坏源返回明确 409，检测修改为 backup_changed；说明扫描后新资源可能未捕获，不宣称全局事务。
-- [ ] Run `npm run build`、`node --test tests/backup-export.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN、标准 Content-Type/文件名/no-store 正确。
-- [ ] 提交 `feat: export consistent business snapshots without credentials`。
+- [x] 写 RED：用真实 Worker 创建集合、模型两修订、Bin 多版本/间隙/孤立版本、锁、过期/删除、旧 trash 和 purged；scope=value 返回已保存的 false/null，scope=bin 包含依赖/历史，config 仅设置，all 包含声明的全部业务状态。示例：`assert.equal((await h.request('/system/export?scope=all&format=backup')).status,200);`。
+- [x] Run build + `node --test tests/backup-export.test.mjs`。Expected: 路由 404/缺导出行为 RED。
+- [x] 实现 `exportData`、封闭参数解析、源元数据规范化（只补已知缺省字段）、逻辑历史时间与终止标记投影；GET 成功后只记固定 system.exported/bin.exported，不输出目录、源 ETag 或内部收据作为恢复字段。
+- [x] 写并观察 RED：注入 metadata 改写、目录成员改变、缺版本/模型、deleting/purging/pending；active/purged canonical 压过旧 trash；系统/Key/未知命名空间 canary 不在包中、业务 canary 保留；超限 413 无截断下载。Expected: 检测遗漏/泄露时失败。
+- [x] 实现读取前后 ETag、最终 metadata/目录核对和计数/字节限制；过渡或损坏源返回明确 409，检测修改为 backup_changed；说明扫描后新资源可能未捕获，不宣称全局事务。
+- [x] Run `npm run build`、`node --test tests/backup-export.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN、标准 Content-Type/文件名/no-store 正确。
+- [x] 提交 `feat: export consistent business snapshots without credentials`。
 
 ## Task 4: 保留 ID 恢复、占位隔离和故障续作
 

@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { exportData } from '../storage/backup-export';
+import type { ExportQuery } from '../../shared/system.ts';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { SystemError, type SettingsPatch } from '../../shared/system.ts';
@@ -19,4 +22,13 @@ app.patch('/settings', managementSession, async c => {
   c.header('ETag', record.etag); await auditRequest(c, 'system.settings_updated', null); return c.json(record);
 });
 app.get('/info', managementSession, async c => c.json(await getSystemInfo(c.env)));
+app.get('/export', managementSession, async c => {
+  const params = new URL(c.req.url).searchParams;
+  if ([...params.keys()].some(key => !['scope', 'format', 'id'].includes(key) || params.getAll(key).length !== 1)) throw new SystemError(400, 'invalid_query');
+  const scope = params.get('scope'), format = params.get('format'), id = params.get('id');
+  if (!((scope === 'all' || scope === 'config') && format === 'backup' && id === null) && !(scope === 'bin' && z.string().uuid().safeParse(id).success && (format === 'value' || format === 'backup'))) throw new SystemError(400, 'invalid_query');
+  const result = await exportData(c.env, { scope, format, ...(id === null ? {} : { id }) } as ExportQuery);
+  await auditRequest(c, result.activity.action, result.activity.resourceId);
+  return new Response(Uint8Array.from(result.body), { headers: { 'Content-Type': result.contentType, 'Content-Disposition': `attachment; filename="${result.fileName}"`, 'Cache-Control': 'no-store' } });
+});
 export default app;
