@@ -66,3 +66,23 @@ test('detail hashes support refresh and reject malformed encodings', () => {
   assert.equal(navigation.binIdFromHash('#/bins'), null);
   assert.equal(navigation.binIdFromHash('#/bins/%ZZ'), null);
 });
+
+const activityApi = await import('../src/react-app/features/activity/api.ts').catch(() => null);
+test('activity client encodes filters and cursor and preserves cancellation and error status', async () => {
+  assert.equal(typeof activityApi?.listActivity, 'function'); let status = 200;
+  const server = createServer((req, res) => {
+    const params = new URL(req.url, 'http://localhost').searchParams;
+    assert.equal(params.get('cursor'), 'cursor+/='); assert.equal(params.get('resourceType'), 'key');
+    assert.equal(params.get('action'), 'key.created'); assert.equal(params.get('limit'), '20');
+    res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ items: [], nextCursor: null, retentionLimit: 2000 }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/activity`;
+  const query = { limit: 20, action: 'key.created', resourceType: 'key', cursor: 'cursor+/=' };
+  try {
+    assert.equal((await activityApi.listActivity(query, undefined, base)).nextCursor, null);
+    for (status of [400, 401, 500]) await assert.rejects(activityApi.listActivity(query, undefined, base), e => e.status === status && /[\u4e00-\u9fff]/.test(e.message));
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(activityApi.listActivity(query, controller.signal, base), e => e.name === 'AbortError');
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});

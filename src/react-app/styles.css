@@ -1330,3 +1330,18 @@ kbd {
 .key-disclosure input { font-family: ui-monospace, monospace; }
 .key-example { overflow-x: auto; font-size: 12px; }
 @media (max-width: 640px) { .key-list li { flex-direction: column; } }
+
+.activity-page { min-width: 0; overflow-wrap: anywhere; }
+.activity-filters { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; }
+.activity-filters label { display: flex; flex-direction: column; gap: 6px; }
+.activity-filters select { max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-solid); color: var(--text); }
+.activity-policy { color: var(--muted); font-size: 13px; }
+.activity-entries { display: grid; gap: 12px; margin: 16px 0; }
+.activity-entry { padding: 18px; min-width: 0; }
+.activity-entry-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.activity-entry-heading h2 { margin: 0; font-size: 16px; }
+.activity-entry time { color: var(--muted); font-size: 13px; }
+.activity-entry dl { display: grid; gap: 8px; margin-bottom: 0; font-size: 13px; }
+.activity-entry dl div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 8px; }
+.activity-entry dt { color: var(--muted); }
+.activity-entry dd { margin: 0; }
