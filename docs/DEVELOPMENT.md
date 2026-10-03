@@ -48,7 +48,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
-| API 文档 | ✅ 本地实现及审查完成，远端检查待核对 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
+| API 文档 | ✅ 已完成；CI / Workers Builds 通过 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
 | TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
 | 设置 | ⬜ 未开始 | 只有导航占位 |
 | 全局搜索 | ⬜ 未开始 | 顶部仅 UI 占位 |
@@ -941,7 +941,12 @@ Dashboard 内提供可直接复制的文档：
 - Schema validate 不匹配仍返回 HTTP 200 + valid:false；绑定模型的 Bin 写入不匹配为 422。批量清理 HTTP 200 须逐项检查 results[].status；活动分页以 nextCursor 判断结束。
 - 文档仅展示与复制，不执行业务请求。剪贴板拒绝保留可选择代码；旧的复制结果不会污染新语言/代码或已离开的页面。原有 JSON/设置草稿和离页确认保持。
 
-验收状态（2026-10-04，Asia/Shanghai）：类型检查及构建通过；91 项 Worker/客户端测试通过（真实 Worker/R2 契约与三语言执行），40 项 Chromium 浏览器测试通过；独立审查发现的 Python UTF-8 兼容性问题已修复并通过回归，真实 requests/urllib3 两组版本验证完整正文，修复后完整 91 项测试、40 项浏览器验收和类型检查/构建再次通过。CI / Workers Builds 推送后核对；生产交互及真实 Cron 手动验收未执行。
+验收状态（2026-10-04，Asia/Shanghai）：类型检查及构建通过；91 项 Worker/客户端测试通过（真实 Worker/R2 契约与三语言执行），40 项 Chromium 浏览器测试通过；独立审查发现的 Python UTF-8 兼容性问题已修复并通过回归，真实 requests/urllib3 两组版本验证完整正文，修复后完整 91 项测试、40 项浏览器验收和类型检查/构建再次通过。
+
+- 功能提交：`1073436` 已合并并推送到 main。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37141128306) 对功能提交 `1073436` 报告 success，类型检查、生产构建、Worker/客户端测试和浏览器验收全部通过。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/b37a3f07-8da5-4def-9ab2-d277d323dc3d) 对 `1073436` 报告 success，版本 ID 为 `dec2c317-bfff-4d0b-ad48-0a9dab596247`。
+- 生产认证/CORS、部署页面交互及真实 Cron 未手动验收：缺少公开生产 URL 和适用认证，部署配置差异仍待验证。
 
 ---
 
@@ -1062,4 +1067,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录已实现，已合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P9 API 文档正在完成最终验收，随后进入 **P10 设置、导入与导出**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。下一阶段为 **P10 设置、导入与导出**。
