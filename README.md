@@ -208,4 +208,13 @@ Records are immutable R2 objects containing fixed action summaries, safe resourc
 
 Business commits and activity writes are separate. A failed activity write preserves the business result and may leave a missing record; this is a recent operation list, not a guaranteed audit chain. The existing 15-minute Cron retries cleanup to the newest 2000 records, with temporary overflow possible. Queries are bounded and may return fewer items or empty pages with a continuation cursor.
 
-Local typecheck/build, 84 Worker/client tests and 36 Chromium tests pass. The feature commit `2ea35a6` passed [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37136840897) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/53499be9-9162-4b9c-ab17-46c98afad16c); production interaction and real Cron execution remain unverified. See [P8 development notes](docs/DEVELOPMENT.md#p8-活动记录). Next phase: P9 API documentation.
+Local typecheck/build, 84 Worker/client tests and 36 Chromium tests pass. The feature commit `2ea35a6` passed [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37136840897) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/53499be9-9162-4b9c-ab17-46c98afad16c); production interaction and real Cron execution remain unverified. See [P8 development notes](docs/DEVELOPMENT.md#p8-活动记录). P9 documentation is described below.
+
+
+## API documentation
+
+P9 adds the Chinese **API 文档** dashboard at `/#/docs` and shared examples in each Bin’s **API** tab. It documents authentication, scopes, resource requests/responses, ETags, Merge Patch, JSON Pointer paths and errors. Copyable curl, JavaScript fetch and Python requests examples use the current deployment origin. Replace the marked credentials and demo resource IDs before running them.
+
+Bin examples use the saved ID/ETag/state and fixed demo JSON; they never include saved JSON, names, descriptions or drafts. Public current reads can omit credentials, while history and writes retain their authentication requirements. Viewing or copying examples executes no business requests and preserves editor drafts.
+
+The sequential example creates a demo Bin and reads fresh ETags before both writes. It requires bin:create/read/update; its curl version also needs Python 3 for JSON parsing. Python samples require requests on the caller’s machine. CI and Workers Builds will be checked after push; production interaction remains unverified. Next phase: P10 settings, import and export.

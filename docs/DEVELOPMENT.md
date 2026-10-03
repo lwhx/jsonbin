@@ -48,7 +48,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
-| API 文档 | ⬜ 未开始 | 只有导航占位 |
+| API 文档 | ✅ 本地实现，最终验收进行中 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
 | TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
 | 设置 | ⬜ 未开始 | 只有导航占位 |
 | 全局搜索 | ⬜ 未开始 | 顶部仅 UI 占位 |
@@ -916,20 +916,32 @@ GET /api/v1/activity?limit=50&cursor=...&action=...&resourceType=...
 
 Dashboard 内提供可直接复制的文档：
 
-- [ ] 登录/认证说明
-- [ ] API Key 使用
-- [ ] Bin CRUD
-- [ ] ETag 示例
-- [ ] PATCH 示例
-- [ ] deep-path 示例
-- [ ] Collection API
-- [ ] Schema API
-- [ ] 错误码
-- [ ] curl 示例
-- [ ] JavaScript fetch 示例
-- [ ] Python requests 示例
+- [x] 登录/认证说明
+- [x] API Key 使用
+- [x] Bin CRUD
+- [x] ETag 示例
+- [x] PATCH 示例
+- [x] deep-path 示例
+- [x] Collection API
+- [x] Schema API
+- [x] 错误码
+- [x] curl 示例
+- [x] JavaScript fetch 示例
+- [x] Python requests 示例
 
-每个 Bin 的详情页还要提供“此 Bin 的 API”页签，自动生成对应 URL 和示例。
+每个 Bin 的详情页已提供「API」页签，自动生成当前 URL 和示例。
+
+实现说明：
+
+- 登录后访问 `/#/docs`，目录页内导航保持应用路由；curl、JavaScript fetch 和 Python requests 共用请求描述。
+- 文档覆盖 P0–P8 的现有资源接口、权限/Scope、请求与响应形状、错误处理、生命周期及活动分页。GitHub OAuth 提供浏览器入口，不生成重放 callback 的示例。
+- 「此数据仓的 API」使用当前 origin、实际 ID、已保存 ETag/可见性/锁定/TTL；内容是固定演示 JSON，不包含已存内容、资源名称、描述或未保存草稿。保存/重新加载后的示例更新；公开 Bin 只对当前与路径读取省略 Authorization。
+- 所有资源 UUID、Token、ETag、登录占位符都需要替换。curl 单请求面向 Bash；顺序入门示例额外需要 Python 3 标准库解析 JSON。Python 示例需使用者安装 requests，项目不新增依赖。Session Python 代码复用登录时建立的 session，curl 复用登录 cookie jar。
+- 顺序示例会创建一个演示 Bin 并修改两次；每次重新 GET 取得 ETag。独立写入示例只代表当前快照。412 后重新读取并由调用者处理冲突，不自动覆盖。普通 Bin PUT/DELETE 允许省略 If-Match，局部更新、历史恢复、Collection/Schema 修改删除及回收站操作要求携带；元数据修改 locked/expiresAt 要求携带。
+- Schema validate 不匹配仍返回 HTTP 200 + valid:false；绑定模型的 Bin 写入不匹配为 422。批量清理 HTTP 200 须逐项检查 results[].status；活动分页以 nextCursor 判断结束。
+- 文档仅展示与复制，不执行业务请求。剪贴板拒绝保留可选择代码；旧的复制结果不会污染新语言/代码或已离开的页面。原有 JSON/设置草稿和离页确认保持。
+
+验收状态（2026-10-04，Asia/Shanghai）：类型检查及构建通过；91 项 Worker/客户端测试通过（真实 Worker/R2 契约与三语言执行），40 项 Chromium 浏览器测试通过，独立审查进行中。CI / Workers Builds 推送后核对；生产交互及真实 Cron 手动验收未执行。
 
 ---
 
@@ -1050,4 +1062,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录已实现，已合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。下一开发阶段为 **P9 API 文档**。
+P8 活动记录已实现，已合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P9 API 文档正在完成最终验收，随后进入 **P10 设置、导入与导出**。
