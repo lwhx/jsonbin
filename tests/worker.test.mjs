@@ -1183,3 +1183,150 @@ test('an in-flight append finishing after permanent deletion removes its late or
   assert.equal((await bucket.list({ prefix: `bins/${id}/versions/` })).objects.length, 0);
   assert.equal((await request('/bins/' + id)).status, 404); assert.equal(await trashItem(id), undefined);
 });
+
+async function activityFixture(timestamp, action = 'bin.created') {
+  const id = crypto.randomUUID(), resourceId = crypto.randomUUID();
+  const entry = { id, action, resourceType: action.startsWith('key.') ? 'key' : 'bin', resourceId,
+    actor: { type: 'session', id: 'local-admin' }, provider: 'password', timestamp: new Date(timestamp).toISOString(),
+    summary: action === 'key.created' ? '创建 API 密钥' : '创建数据仓', requestId: crypto.randomUUID() };
+  const key = `activity/${String(8640000000000000 - timestamp).padStart(16, '0')}-${id}.json`;
+  await bucket.put(key, JSON.stringify(entry), { customMetadata: { action, resourceType: entry.resourceType } });
+  return { key, entry };
+}
+async function clearActivities() {
+  let cursor;
+  do { const page = await bucket.list({ prefix: 'activity/', cursor });
+    if (page.objects.length) await bucket.delete(page.objects.map(o => o.key)); cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+}
+test('activity is Session-only and rejects malformed or foreign cursors', async () => {
+  await clearActivities();
+  const response = await request('/activity'); assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await response.json(), { items: [], nextCursor: null, retentionLimit: 2000 });
+  assert.equal((await request('/activity', { authenticated: false })).status, 401);
+  for (const scopes of [...keyScopes.map(scope => [scope]), keyScopes, ['bin:update', 'history:read']]) {
+    const key = await apiKey(scopes);
+    assert.equal((await bearerRequest(key.token, '/activity', { authenticated: true })).status, 401);
+  }
+  for (const suffix of ['?limit=0', '?limit=101', '?limit=1.5', '?limit=01', '?limit=1&limit=2', '?action=no', '?resourceType=no', '?unknown=x', '?cursor=bad', '?cursor=' + 'x'.repeat(2049)]) {
+    assert.equal((await request('/activity' + suffix)).status, 400, suffix.slice(0, 50));
+  }
+  const forged = Buffer.from(JSON.stringify({ v: 1, after: 'keys/private/meta.json', action: null, resourceType: null })).toString('base64url');
+  assert.equal((await request('/activity?cursor=' + forged)).status, 400);
+});
+test('activity pagination is ordered, filtered and bounded with damaged or removed anchors', async () => {
+  await clearActivities(); const now = Date.now();
+  const fixtures = await Promise.all(Array.from({ length: 1005 }, (_, i) => activityFixture(now - i, i === 1004 ? 'key.created' : 'bin.created')));
+  await activityFixture(now, 'bin.created');
+  const first = await (await request('/activity?limit=2')).json(); assert.equal(first.items.length, 2);
+  assert.ok(first.nextCursor); assert.ok(first.items[0].timestamp >= first.items[1].timestamp);
+  await bucket.delete(fixtures.find(f => f.entry.id === first.items[1].id)?.key ?? `activity/${String(8640000000000000 - now).padStart(16, '0')}-${first.items[1].id}.json`);
+  await activityFixture(now + 1);
+  const second = await (await request('/activity?limit=2&cursor=' + first.nextCursor)).json();
+  assert.equal(second.items.length, 2); assert.ok(second.items.every(e => !first.items.some(old => old.id === e.id)));
+  assert.ok(second.items[0].timestamp <= first.items[1].timestamp);
+  assert.equal((await request('/activity?action=key.created&cursor=' + first.nextCursor)).status, 400);
+  const sparse = await (await request('/activity?action=key.created')).json();
+  assert.equal(sparse.items.length, 0); assert.ok(sparse.nextCursor);
+  const tail = await (await request('/activity?action=key.created&cursor=' + sparse.nextCursor)).json();
+  assert.equal(tail.items.length, 1); assert.equal(tail.items[0].action, 'key.created');
+  for (const { key } of fixtures.slice(0, 45)) await bucket.put(key, '{invalid', { customMetadata: { action: 'bin.created', resourceType: 'bin' } });
+  const damaged = await (await request('/activity')).json(); assert.ok(damaged.nextCursor);
+  assert.ok(damaged.items.length < 40);
+  await clearActivities();
+});
+
+async function allActivities(query = '') {
+  const entries = []; let cursor;
+  do { const response = await request('/activity?limit=100' + query + (cursor ? '&cursor=' + cursor : ''));
+    assert.equal(response.status, 200); const page = await response.json(); entries.push(...page.items); cursor = page.nextCursor;
+  } while (cursor);
+  return entries;
+}
+test('activity records login and Bin writes with trustworthy identities and no sensitive payload', async () => {
+  await clearActivities(); const canary = randomBytes(24).toString('hex');
+  assert.equal((await request('/auth/login', { method: 'POST', value: { username: canary, password: canary } })).status, 401);
+  assert.equal((await request('/auth/login', { method: 'POST', value: { username: 'test', password } })).status, 200);
+  const created = await (await request('/bins', { method: 'POST', value: { name: canary, description: canary, value: { [canary]: canary } } })).json();
+  const key = await apiKey(['bin:update']); const path = '/bins/' + created.meta.id;
+  let current = created;
+  for (const [method, suffix, value] of [['PUT', '', { value: { [canary]: 'old' } }], ['PATCH', '', { changed: canary }], ['PUT', '/value/' + canary, { value: canary }]]) {
+    const response = await bearerRequest(key.token, path + suffix, { method, etag: current.etag, value });
+    assert.equal(response.status, 200); current = await response.json();
+  }
+  const metadata = await request(path + '/meta', { method: 'PATCH', etag: current.etag, value: { description: canary } });
+  assert.equal(metadata.status, 200); current = await metadata.json();
+  assert.equal((await request(path, { method: 'PUT', etag: created.etag, value: { value: canary } })).status, 412);
+  assert.equal((await request(path, { method: 'PUT', value: {} })).status, 422);
+  const restored = await request(path + '/versions/1/restore', { method: 'POST', etag: current.etag }); assert.equal(restored.status, 200);
+  const events = await allActivities(); const binEvents = events.filter(e => e.resourceId === created.meta.id);
+  assert.deepEqual(binEvents.map(e => e.action).sort(), ['bin.created', 'bin.metadata_updated', 'bin.updated', 'bin.updated', 'bin.updated', 'bin.version_restored'].sort());
+  assert.ok(binEvents.filter(e => e.action === 'bin.updated').every(e => e.actor.type === 'api_key' && e.actor.id === key.key.id));
+  assert.ok(binEvents.filter(e => e.action !== 'bin.updated').every(e => e.actor.type === 'session' && e.actor.id === 'local-admin'));
+  assert.ok(events.some(e => e.action === 'auth.login_failed' && e.actor.type === 'anonymous' && e.actor.id === null));
+  assert.ok(events.some(e => e.action === 'auth.login_succeeded' && e.provider === 'password'));
+  for (const secret of [canary, password, cookie, key.token]) assert.ok(!JSON.stringify(events).includes(secret));
+  const pages = await bucket.list({ prefix: 'activity/', include: ['customMetadata'] });
+  assert.ok(!JSON.stringify(pages.objects.map(o => o.customMetadata)).includes(canary));
+  const before = events.length; await request('/bins'); await request('/system/health'); await request('/auth/config');
+  assert.equal((await allActivities()).length, before);
+});
+
+test('activity covers resource administration and only successful trash batch items', async () => {
+  await clearActivities(); const marker = randomBytes(24).toString('hex');
+  const collection = await (await request('/collections', { method: 'POST', value: { name: marker, description: marker } })).json();
+  const renamed = await (await request('/collections/' + collection.meta.id, { method: 'PATCH', etag: collection.etag, value: { name: marker + '2' } })).json();
+  assert.equal((await request('/collections/' + collection.meta.id, { method: 'DELETE', etag: renamed.etag })).status, 200);
+  const schema = await (await request('/schemas', { method: 'POST', value: { name: marker, schema: { description: marker } } })).json();
+  const revised = await (await request('/schemas/' + schema.meta.id, { method: 'PUT', etag: schema.etag, value: { name: marker, schema: true } })).json();
+  assert.equal((await request('/schemas/' + schema.meta.id + '/validate', { method: 'POST', value: { value: marker } })).status, 200);
+  assert.equal((await request('/schemas/' + schema.meta.id, { method: 'DELETE', etag: revised.etag })).status, 200);
+  const key = await apiKey(keyScopes, { name: marker });
+  assert.equal((await request('/keys/' + key.key.id, { method: 'DELETE' })).status, 200);
+  const restored = await create(), purged = await create(), conflict = await create();
+  for (const bin of [restored, purged, conflict]) assert.equal((await request('/bins/' + bin.meta.id, { method: 'DELETE', etag: bin.etag })).status, 200);
+  const trash = (await (await request('/trash/bins')).json()).items;
+  const old = trash.find(item => item.meta.id === restored.meta.id);
+  assert.equal((await request('/trash/bins/' + old.meta.id + '/restore', { method: 'POST', etag: old.etag })).status, 200);
+  const batch = await (await request('/trash/bins/purge', { method: 'POST', value: { items: [
+    { id: purged.meta.id, etag: trash.find(i => i.meta.id === purged.meta.id).etag },
+    { id: conflict.meta.id, etag: '"stale"' },
+  ] } })).json(); assert.deepEqual(batch.results.map(r => r.status), [200, 412]);
+  const entries = await allActivities();
+  for (const [id, actions] of [[collection.meta.id, ['collection.created', 'collection.updated', 'collection.deleted']],
+    [schema.meta.id, ['schema.created', 'schema.updated', 'schema.deleted']], [key.key.id, ['key.created', 'key.revoked']]]) {
+    assert.deepEqual(entries.filter(e => e.resourceId === id).map(e => e.action).sort(), actions.sort());
+  }
+  assert.equal(entries.filter(e => e.action === 'bin.restored' && e.resourceId === restored.meta.id).length, 1);
+  assert.equal(entries.filter(e => e.action === 'bin.purged' && e.resourceId === purged.meta.id).length, 1);
+  assert.equal(entries.filter(e => e.action === 'bin.purged' && e.resourceId === conflict.meta.id).length, 0);
+  for (const secret of [marker, key.token, key.key.prefix]) assert.ok(!JSON.stringify(entries).includes(secret));
+});
+test('Cron retains newest 2000 activities and records actual lifecycle transitions only once', async () => {
+  await clearActivities(); const now = Date.now();
+  const fixtures = await Promise.all(Array.from({ length: 2010 }, (_, i) => activityFixture(now - 1000 - i)));
+  await bucket.put('activity/not-a-record.json', 'keep'); await bucket.put('other/untouched.json', 'keep');
+  const bin = await create();
+  await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify({ ...bin.meta, expiresAt: new Date(now - 10).toISOString() }));
+  await mf.getWorker('jsonbin-tests').then(worker => worker.scheduled({ scheduledTime: now, cron: '*/15 * * * *' }));
+  const events = await allActivities(); assert.equal(events.length, 2000);
+  assert.equal(events.filter(e => e.action === 'bin.expired' && e.resourceId === bin.meta.id && e.actor.type === 'system').length, 1);
+  assert.equal(await bucket.get(fixtures.at(-1).key), null); assert.ok(await bucket.get(fixtures[0].key));
+  assert.equal(await (await bucket.get('activity/not-a-record.json')).text(), 'keep'); assert.ok(await bucket.get('other/untouched.json'));
+  const trash = (await (await request('/trash/bins')).json()).items.find(i => i.meta.id === bin.meta.id);
+  assert.equal((await request('/trash/bins/' + bin.meta.id, { method: 'DELETE', etag: trash.etag })).status, 200);
+  await mf.getWorker('jsonbin-tests').then(worker => worker.scheduled({ scheduledTime: now, cron: '*/15 * * * *' }));
+  await mf.getWorker('jsonbin-tests').then(worker => worker.scheduled({ scheduledTime: now, cron: '*/15 * * * *' }));
+  assert.equal((await allActivities()).filter(e => e.action === 'bin.purged' && e.resourceId === bin.meta.id).length, 1);
+  await clearActivities();
+});
+
+test('activity skips an invalid key at an R2 page boundary without hiding older matches', async () => {
+  await clearActivities(); const now = Date.now();
+  await Promise.all(Array.from({ length: 201 }, (_, i) => activityFixture(now - i, i === 200 ? 'key.created' : 'bin.created')));
+  await bucket.put(`activity/${String(8640000000000000 - (now - 198)).padStart(16, '0')}-not-a-record.json`, 'not JSON');
+  const page = await (await request('/activity?resourceType=key')).json();
+  assert.equal(page.items.length, 1); assert.equal(page.items[0].action, 'key.created'); assert.equal(page.nextCursor, null);
+  await clearActivities();
+});

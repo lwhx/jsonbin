@@ -1,3 +1,5 @@
+import { recordActivity } from "./activity";
+import { pruneActivity } from "./storage/activity";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
@@ -78,6 +80,15 @@ app.onError((error, c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Env) {
-    await sweepBins(env);
+    const requestId = crypto.randomUUID();
+    const [sweep] = await Promise.allSettled([sweepBins(env, Date.now(), ({ action, id }) => recordActivity(env, {
+      action, resourceId: id, requestId, identity: { actor: { type: "system", id: null }, provider: "system" },
+    }))]);
+    // Prune after system events settle, even when Bin maintenance failed.
+    const [prune] = await Promise.allSettled([pruneActivity(env)]);
+    if (sweep.status === "rejected" || prune.status === "rejected") {
+      console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status });
+      throw new Error("scheduled_maintenance_failed");
+    }
   },
 };

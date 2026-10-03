@@ -1,3 +1,4 @@
+import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
@@ -21,6 +22,7 @@ app.post("/bins/:id/restore", requireAccess(["bin:update", "history:read"]), asy
   const record = await restoreTrashBin(c.env, c.req.param("id"), etag);
   if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag); c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  await auditRequest(c, "bin.restored", record.meta.id);
   return c.json(record);
 });
 app.delete("/bins/:id", requireAccess("bin:delete"), async c => {
@@ -28,6 +30,7 @@ app.delete("/bins/:id", requireAccess("bin:delete"), async c => {
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   const result = await purgeTrashBin(c.env, c.req.param("id"), etag);
   if (!result) return c.json({ error: "not_found" }, 404);
+  await auditRequest(c, "bin.purged", c.req.param("id"));
   return c.json(result);
 });
 const batchSchema = z.object({ items: z.array(z.object({ id: z.string().uuid(), etag: z.string().trim().min(1) }).strict()).min(1).max(100) }).strict()
@@ -40,6 +43,7 @@ app.post("/bins/purge", requireAccess("bin:delete"), async c => {
   for (const item of parsed.data.items) {
     try {
       const result = await purgeTrashBin(c.env, item.id, item.etag);
+      if (result) await auditRequest(c, "bin.purged", item.id);
       results.push({ id: item.id, status: result ? 200 : 404 });
     } catch (error) {
       results.push({ id: item.id, status: error instanceof Error && error.message === "etag_conflict" ? 412 : 500 });

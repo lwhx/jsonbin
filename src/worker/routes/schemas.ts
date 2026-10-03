@@ -1,3 +1,4 @@
+import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
@@ -17,7 +18,7 @@ app.post("/", requireAccess("schema:write"), async c => {
   const parsed = input.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const record = await createSchema(c.env, { ...parsed.data, schema: parsed.data.schema as JsonSchema });
-  c.header("ETag", record.etag); return c.json(record, 201);
+  c.header("ETag", record.etag); await auditRequest(c, "schema.created", record.meta.id); return c.json(record, 201);
 });
 app.get("/:id", requireAccess("schema:read"), async c => {
   const record = await getSchema(c.env, c.req.param("id"));
@@ -30,12 +31,12 @@ app.put("/:id", requireAccess("schema:write"), async c => {
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const record = await updateSchema(c.env, c.req.param("id"), { ...parsed.data, schema: parsed.data.schema as JsonSchema }, etag);
   if (!record) return c.json({ error: "not_found" }, 404);
-  c.header("ETag", record.etag); return c.json(record);
+  c.header("ETag", record.etag); await auditRequest(c, "schema.updated", record.meta.id); return c.json(record);
 });
 app.delete("/:id", requireAccess("schema:write"), async c => {
   const etag = c.req.header("If-Match"); if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   if (!await deleteSchema(c.env, c.req.param("id"), etag)) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true });
+  await auditRequest(c, "schema.deleted", c.req.param("id")); return c.json({ ok: true });
 });
 app.post("/:id/validate", requireAccess("schema:read"), async c => {
   const parsed = z.object({ value: z.unknown() }).strict().safeParse(await c.req.json().catch(() => null));

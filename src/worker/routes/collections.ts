@@ -1,3 +1,4 @@
+import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
@@ -16,7 +17,7 @@ app.post("/", requireAccess("collection:write"), async c => {
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const record = await createCollection(c.env, parsed.data); c.header("ETag", record.etag);
-  return c.json(record, 201);
+  await auditRequest(c, "collection.created", record.meta.id); return c.json(record, 201);
 });
 app.get("/:id/bins", requireAccess(["collection:read", "bin:read"]), async c => {
   const items = await listCollectionBins(c.env, c.req.param("id"));
@@ -37,13 +38,13 @@ app.patch("/:id", requireAccess("collection:write"), async c => {
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   const record = await updateCollection(c.env, c.req.param("id"), parsed.data, etag);
   if (!record) return c.json({ error: "not_found" }, 404);
-  c.header("ETag", record.etag); return c.json(record);
+  c.header("ETag", record.etag); await auditRequest(c, "collection.updated", record.meta.id); return c.json(record);
 });
 app.delete("/:id", requireAccess("collection:write"), async c => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   const result = await deleteCollection(c.env, c.req.param("id"), etag);
   if (!result) return c.json({ error: "not_found" }, 404);
-  return c.json(result);
+  await auditRequest(c, "collection.deleted", c.req.param("id")); return c.json(result);
 });
 export default app;

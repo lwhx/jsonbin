@@ -20,8 +20,8 @@ function request(path, options = {}, bindings = env) {
 function adaptedBucket(overrides) { return new Proxy(bucket, { get(target, key) {
   if (key in overrides) return overrides[key]; const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
 } }); }
-async function activities() { const entries = []; let cursor;
-  do { const page = await (await request('/activity?limit=100' + (cursor ? '&cursor=' + cursor : ''))).json(); entries.push(...page.items); cursor = page.nextCursor; } while (cursor);
+async function activities(query = '') { const entries = []; let cursor;
+  do { const page = await (await request('/activity?limit=100' + query + (cursor ? '&cursor=' + cursor : ''))).json(); entries.push(...page.items); cursor = page.nextCursor; } while (cursor);
   return entries;
 }
 test('failed activity writes preserve committed business success and never log exception secrets', async t => {
@@ -69,4 +69,57 @@ test('OAuth success and failures persist only verified identity and fixed summar
   assert.ok(entries.some(e => e.action === 'auth.login_succeeded' && e.actor.id === '123' && e.provider === 'github'));
   assert.equal(entries.filter(e => e.action === 'auth.login_failed' && e.actor.type === 'anonymous').length, 5);
   assert.ok(!JSON.stringify(entries).includes(marker)); assert.ok(!JSON.stringify(entries).includes(state));
+});
+
+test('Cron retries retention failures and still cleans activities when Bin maintenance fails', async t => {
+  const marker = randomBytes(24).toString('hex'), now = Date.now(); t.mock.method(console, 'error', () => {});
+  const keys = await Promise.all(Array.from({ length: 2010 }, async (_, i) => {
+    const id = crypto.randomUUID(), timestamp = now - 10000 - i;
+    const key = `activity/${String(8640000000000000 - timestamp).padStart(16, '0')}-${id}.json`;
+    await bucket.put(key, JSON.stringify({ id, action: 'bin.created', resourceType: 'bin', resourceId: crypto.randomUUID(),
+      actor: { type: 'session', id: 'local-admin' }, provider: 'password', timestamp: new Date(timestamp).toISOString(),
+      summary: '创建数据仓', requestId: crypto.randomUUID() }), { customMetadata: { action: 'bin.created', resourceType: 'bin' } });
+    return key;
+  }));
+  const failureEnv = { ...env, DATA: adaptedBucket({ delete: async keys => {
+    if (Array.isArray(keys) && keys.some(key => key.startsWith('activity/'))) throw new Error(marker);
+    return bucket.delete(keys);
+  } }) };
+  await assert.rejects(app.scheduled({}, failureEnv), /scheduled_maintenance_failed/);
+  assert.ok(await bucket.get(keys.at(-1)));
+  let inserted;
+  const raceEnv = { ...env, DATA: adaptedBucket({ delete: async keys => {
+    if (!inserted && Array.isArray(keys) && keys.some(key => key.startsWith('activity/'))) {
+      inserted = await (await request('/bins', { method: 'POST', value: { name: 'newest', value: null } })).json();
+    }
+    return bucket.delete(keys);
+  } }) };
+  await app.scheduled({}, raceEnv); assert.ok(inserted);
+  const independent = { ...env, DATA: adaptedBucket({ list: async options => {
+    if (options.prefix === 'bins/') throw new Error(marker); return bucket.list(options);
+  } }) };
+  await assert.rejects(app.scheduled({}, independent), /scheduled_maintenance_failed/);
+  const objects = []; let cursor;
+  do { const page = await bucket.list({ prefix: 'activity/', cursor }); objects.push(...page.objects); cursor = page.truncated ? page.cursor : undefined; } while (cursor);
+  assert.equal(objects.length, 2000);
+  const entries = (await (await request('/activity')).json()).items;
+  assert.ok(entries.some(e => e.resourceId === inserted.meta.id)); assert.equal(await bucket.get(keys.at(-1)), null);
+});
+test('Cron emits purged only for its own actual final CAS and never for tombstone retries', async () => {
+  const created = await (await request('/bins', { method: 'POST', value: { name: 'cron purge', value: false } })).json();
+  await request('/bins/' + created.meta.id, { method: 'DELETE' });
+  const path = `bins/${created.meta.id}/meta.json`, meta = await (await bucket.get(path)).json();
+  await bucket.put(path, JSON.stringify({ ...meta, purgeState: 'purging', purgeEtag: 'old' }));
+  await app.scheduled({}, env); await app.scheduled({}, env);
+  assert.equal((await activities('&action=bin.purged')).filter(e => e.resourceId === created.meta.id && e.action === 'bin.purged' && e.actor.type === 'system').length, 1);
+  const second = await (await request('/bins', { method: 'POST', value: { name: 'other CAS', value: null } })).json();
+  await request('/bins/' + second.meta.id, { method: 'DELETE' });
+  const secondPath = `bins/${second.meta.id}/meta.json`, secondMeta = await (await bucket.get(secondPath)).json();
+  await bucket.put(secondPath, JSON.stringify({ ...secondMeta, purgeState: 'purging', purgeEtag: 'old' }));
+  const raced = { ...env, DATA: adaptedBucket({ put: async (key, value, options) => {
+    if (key === secondPath && JSON.parse(value).purgeState === 'purged') { await bucket.put(key, value); return null; }
+    return bucket.put(key, value, options);
+  } }) };
+  await app.scheduled({}, raced);
+  assert.equal((await activities('&action=bin.purged')).filter(e => e.resourceId === second.meta.id && e.action === 'bin.purged' && e.actor.type === 'system').length, 0);
 });

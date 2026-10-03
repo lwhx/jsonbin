@@ -45,10 +45,11 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
   const bucket = requireDataBucket(env), items: ActivityEntry[] = [];
   const limit = query.limit ?? 50;
   let scanned = 0, gets = 0;
+  let cursor: string | undefined;
   const result = (more: boolean): ActivityPage => ({ items, retentionLimit: ACTIVITY_RETENTION,
     nextCursor: more && after ? base64UrlEncode(JSON.stringify({ v: 1, after, action: query.action ?? null, resourceType: query.resourceType ?? null })) : null });
   while (scanned < 1000) {
-    const page = await bucket.list({ prefix: 'activity/', startAfter: after, limit: 200, include: ['customMetadata'] });
+    const page = await bucket.list({ prefix: 'activity/', cursor, startAfter: cursor ? undefined : after, limit: 200, include: ['customMetadata'] });
     for (let index = 0; index < page.objects.length; index++) {
       const object = page.objects[index]; scanned++;
       // Invalid keys are never used as cursor anchors or read paths.
@@ -69,11 +70,7 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
       if (items.length >= limit || gets >= 40 || scanned >= 1000) return result(index < page.objects.length - 1 || page.truncated);
     }
     if (!page.truncated) return result(false);
-    // A page of invalid keys cannot produce a safe continuation anchor.
-    if (!after || after < page.objects.at(-1)!.key) {
-      // Continue with R2's cursor internally; return no attacker-controlled anchor.
-      return result(false);
-    }
+    cursor = page.cursor;
   }
   return result(true);
 }
@@ -95,4 +92,20 @@ export async function appendActivity(env: Env, input: import('../../shared/activ
     if (written) return entry;
   }
   throw new Error('activity_create_conflict');
+}
+
+export async function pruneActivity(env: Env): Promise<{ deleted: number }> {
+  const bucket = requireDataBucket(env);
+  let after: string | undefined, retained = 0, deleted = 0;
+  while (true) {
+    const page = await bucket.list({ prefix: 'activity/', startAfter: after, limit: 1000 });
+    const keys: string[] = [];
+    for (const object of page.objects) {
+      if (validKey(object.key) && ++retained > ACTIVITY_RETENTION) keys.push(object.key);
+    }
+    if (keys.length) { await bucket.delete(keys); deleted += keys.length; }
+    if (!page.truncated || page.objects.length === 0) break;
+    after = page.objects.at(-1)!.key;
+  }
+  return { deleted };
 }

@@ -77,7 +77,7 @@ async function removeContents(bucket: R2Bucket, id: string) {
   await bucket.delete(legacyTrashKey(id));
 }
 
-export async function purgeTrashBin(env: Env, id: string, expectedEtag: string) {
+export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, onCommitted?: () => Promise<void>) {
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
   if (canonical?.value.purgeState === "purged") {
@@ -98,11 +98,12 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string) 
   const written = await putJson(bucket, binMetaKey(id), { id, deletedAt: current.meta.deletedAt, purgeState: "purged" },
     { onlyIf: { etagMatches: normalizeEtag(etag) } });
   if (!written && (await getJson<StoredBinMeta>(bucket, binMetaKey(id)))?.value.purgeState !== "purged") throw new Error("etag_conflict");
+  if (written) { try { await onCommitted?.(); } catch { console.error("activity_notification_failed"); } }
   return { ok: true };
 }
 
 // Cron does not determine accessibility: all normal storage reads check the deadline.
-export async function sweepBins(env: Env, now = Date.now()) {
+export async function sweepBins(env: Env, now = Date.now(), onTransition?: (event: { action: "bin.expired" | "bin.purged"; id: string }) => Promise<void>) {
   const bucket = requireDataBucket(env);
   const items = await listJsonObjects<StoredBinMeta>(bucket, "bins/");
   const result = { expired: 0, purged: 0, conflicts: 0, failed: 0 };
@@ -112,10 +113,13 @@ export async function sweepBins(env: Env, now = Date.now()) {
       const current = await getJson<StoredBinMeta>(bucket, binMetaKey(item.id));
       if (!current) continue;
       if (current.value.purgeState) {
-        await purgeTrashBin(env, item.id, current.etag); result.purged++;
+        await purgeTrashBin(env, item.id, current.etag, () => onTransition?.({ action: "bin.purged", id: item.id }) ?? Promise.resolve()); result.purged++;
       } else if (!current.value.deletedAt && isExpired(current.value, now)) {
         const deleted = { ...current.value, deletedAt: current.value.expiresAt!, deletionReason: "expired" };
-        if (await putJson(bucket, binMetaKey(item.id), deleted, { onlyIf: { etagMatches: normalizeEtag(current.etag) } })) result.expired++;
+        if (await putJson(bucket, binMetaKey(item.id), deleted, { onlyIf: { etagMatches: normalizeEtag(current.etag) } })) {
+          result.expired++;
+          try { await onTransition?.({ action: "bin.expired", id: item.id }); } catch { console.error("activity_notification_failed"); }
+        }
         else result.conflicts++;
       }
     } catch { result.failed++; }

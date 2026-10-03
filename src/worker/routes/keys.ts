@@ -1,3 +1,4 @@
+import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../middleware/auth";
@@ -23,12 +24,15 @@ app.get("/", async c => { const items = await listKeys(c.env); return c.json({ i
 app.post("/", async c => {
   const parsed = input.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
-  return c.json(await createKey(c.env, parsed.data), 201);
+  const created = await createKey(c.env, parsed.data);
+  await auditRequest(c, "key.created", created.key.id);
+  return c.json(created, 201);
 });
 app.delete("/:id", async c => {
   if (!z.string().uuid().safeParse(c.req.param("id")).success) return c.json({ error: "not_found" }, 404);
   const key = await revokeKey(c.env, c.req.param("id"));
   if (!key) return c.json({ error: "not_found" }, 404);
+  await auditRequest(c, "key.revoked", key.id);
   return c.json({ key });
 });
 export default app;
