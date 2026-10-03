@@ -126,9 +126,30 @@ Collections use `GET/POST /api/v1/collections`, `GET/PATCH/DELETE /api/v1/collec
 
 Both partial-write endpoints require `bin:update` for Bearer clients and the current Bin ETag in `If-Match`. Missing preconditions return 428, stale ETags return 412, and missing paths return 404. They validate the complete resulting JSON against the pinned schema before appending an immutable version. Deep reads return `{id, path, value, etag, version}`; writes return a full BinRecord. See the detail page's API tab or the [P6 development notes](docs/DEVELOPMENT.md#p6-高级-bin-api) for examples and edge cases.
 
-Set `locked` through the metadata endpoint with `If-Match`, or use the detail settings controls. Data locks block JSON/settings changes, historical restoration and deletion. Unlock with a separate `{"locked":false}` request; the schema lock stays unchanged. Bin DELETE accepts optional `If-Match` and writes a conditional tombstone before archiving metadata to trash, preserving historical files and preventing concurrent updates from reviving deleted data. Retrying DELETE completes an interrupted archive. Trash restoration remains P7 work.
+Set `locked` through the metadata endpoint with `If-Match`, or use the detail settings controls. Data locks block JSON/settings changes, historical restoration and ordinary deletion. Unlock with a separate `{"locked":false}` request; the schema lock stays unchanged. Bin DELETE accepts optional `If-Match` and conditionally marks canonical metadata as deleted, preserving historical files and preventing concurrent updates from reviving deleted data. The deleted metadata is the authoritative trash record.
 
 Public Bins allow anonymous GET of their current record (JSON and metadata) and deep paths. Lists, history and writes still require authentication. Private Bins require a session or scoped key for every read. An explicit Authorization header must always be valid and sufficiently scoped, even on public Bins. All Bin responses use `Cache-Control: no-store`; new anonymous reads fail after switching to private. An already authorized in-flight read can return its original public snapshot. Existing APP_ORIGIN/CORS settings still govern browser cross-origin requests.
+
+## TTL and trash
+
+P7 supports `expiresAt` on Bin creation and metadata updates. Use a future ISO timestamp with a timezone, or `null` for no expiry. Metadata changes to this field require `If-Match`. Dashboard creation/settings use local time and show remaining time in the Bin list and detail page. Once expired, Bins immediately disappear from normal reads/writes, history and collection counts, including public access. Data locks do not extend a configured TTL.
+
+The Worker runs a scheduled task every 15 minutes (`*/15 * * * *` in UTC) to mark expired Bins as deleted and resume interrupted permanent deletion. Request-time expiry checks and the trash list work before the scheduled task runs. No extra service or secret is required.
+
+The dashboard's 回收站 page provides restore, permanent deletion, batch empty, timestamps and retry states:
+
+| Endpoint | Bearer scopes | Request |
+| --- | --- | --- |
+| `GET /api/v1/trash/bins` | `bin:read` | Returns `{items,total}`, each item includes metadata, ETag and status |
+| `POST /api/v1/trash/bins/:id/restore` | `bin:update` + `history:read` | Current trash ETag in `If-Match` |
+| `DELETE /api/v1/trash/bins/:id` | `bin:delete` | Current trash ETag in `If-Match` |
+| `POST /api/v1/trash/bins/purge` | `bin:delete` | `{"items":[{"id":"UUID","etag":"current ETag"}]}`; 1–100 unique items |
+
+All endpoints also accept an admin session and reject anonymous access. Restore validates the saved JSON against its pinned schema, keeps the same ID and immutable versions, clears expiry and returns the Bin to **private** visibility. Data/schema locks remain; unavailable collection associations are detached. Missing preconditions return 428, stale ETags 412, and missing records 404. Restore returns 409 for a record being purged or missing historical/model files and 422 for schema violations.
+
+Permanent deletion claims a `purging` state before deleting all versions and legacy archives, so it cannot race a successful restore. Failed cleanup is resumable through the API or cron. Completion retains only an internal `{id,deletedAt,purgeState:"purged"}` marker to prevent resurrection; JSON and descriptive metadata are removed. Batch responses use HTTP 200 with a status for each item; check every result. The dashboard deletes only the snapshots included in its confirmation, preserving newly trashed records and reporting conflicts.
+
+Legacy `trash/bins/<id>/meta.json` records remain readable and are conditionally migrated when restored or purged. New deletions use canonical metadata only. See the [P7 development notes](docs/DEVELOPMENT.md#p7-ttl-与回收站) for concurrency, cleanup and acceptance details.
 
 ## API keys
 

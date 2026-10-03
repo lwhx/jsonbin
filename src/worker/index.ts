@@ -6,6 +6,8 @@ import authRoutes from "./routes/auth";
 import binRoutes from "./routes/bins";
 import schemaRoutes from "./routes/schemas";
 import collectionRoutes from "./routes/collections";
+import trashRoutes from "./routes/trash";
+import { sweepBins } from "./storage/trash";
 import { version } from "../../package.json";
 
 type Bindings = Env;
@@ -34,6 +36,7 @@ app.route("/api/v1/keys", keyRoutes);
 app.route("/api/v1/bins", binRoutes);
 app.route("/api/v1/collections", collectionRoutes);
 app.route("/api/v1/schemas", schemaRoutes);
+app.route("/api/v1/trash", trashRoutes);
 
 app.get("/api/v1/system/health", (c) => {
   return c.json({
@@ -69,4 +72,9 @@ app.onError((error, c) => {
   return c.json({ error: "internal_server_error" }, 500);
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env) {
+    await sweepBins(env);
+  },
+};

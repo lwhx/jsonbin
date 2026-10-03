@@ -6,6 +6,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 let mf, cookie, bucket;
 const password = randomBytes(32).toString('hex');
+const sessionSecret = randomBytes(32).toString('hex');
 export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin, body, contentType = 'application/json' } = {}) {
   return mf.dispatchFetch('http://localhost/api/v1' + path, {
     method,
@@ -28,7 +29,7 @@ before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
     name: 'jsonbin-tests', modules: true, scriptPath: 'dist/jsonbin/index.js',
     compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
-    bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex') },
+    bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret },
   }] }));
   bucket = await mf.getR2Bucket('DATA', 'jsonbin-tests');
   const login = await request('/auth/login', { method: 'POST', value: { username: 'test', password } });
@@ -56,7 +57,7 @@ test('CRUD persists JSON, increments version, rejects stale ETag and retains del
   assert.equal((await request(path, { method: 'PUT', etag: bin.etag, value: { value: {} } })).status, 412);
   assert.equal((await request(path, { method: 'DELETE' })).status, 200);
   assert.equal((await request(path)).status, 404);
-  assert.ok(await bucket.get(`trash/bins/${bin.meta.id}/meta.json`));
+  assert.ok((await (await bucket.get(`bins/${bin.meta.id}/meta.json`)).json()).deletedAt);
   assert.deepEqual(await (await bucket.get(`bins/${bin.meta.id}/versions/000001.json`)).json(), { hello: 'world' });
 });
 test('KV supports write, read and delete', async () => {
@@ -620,6 +621,10 @@ test('every existing resource route enforces the exact Bearer scopes, including 
     [`/bins/${id}/meta`, 'PATCH', ['bin:update'], { name: 'x' }, 404], [`/bins/${id}`, 'DELETE', ['bin:delete'], undefined, 404],
     [`/bins/${id}/versions`, 'GET', ['history:read'], undefined, 404], [`/bins/${id}/versions/1`, 'GET', ['history:read'], undefined, 404],
     [`/bins/${id}/versions/1/restore`, 'POST', ['bin:update', 'history:read'], undefined, 404],
+    ['/trash/bins', 'GET', ['bin:read'], undefined, 200],
+    [`/trash/bins/${id}/restore`, 'POST', ['bin:update', 'history:read'], undefined, 404],
+    [`/trash/bins/${id}`, 'DELETE', ['bin:delete'], undefined, 404],
+    ['/trash/bins/purge', 'POST', ['bin:delete'], {}, 422],
     ['/collections', 'GET', ['collection:read'], undefined, 200], ['/collections', 'POST', ['collection:write'], {}, 422],
     [`/collections/${id}`, 'GET', ['collection:read'], undefined, 404], [`/collections/${id}/bins`, 'GET', ['collection:read', 'bin:read'], undefined, 404],
     [`/collections/${id}`, 'PATCH', ['collection:write'], { name: 'x' }, 404], [`/collections/${id}`, 'DELETE', ['collection:write'], undefined, 404],
@@ -639,6 +644,7 @@ test('every existing resource route enforces the exact Bearer scopes, including 
   for (const required of [['bin:update', 'history:read'], ['collection:read', 'bin:read']]) {
     const key = await apiKey(required), path = required[0] === 'bin:update' ? `/bins/${id}/versions/1/restore` : `/collections/${id}/bins`;
     assert.equal((await bearerRequest(key.token, path, { method: required[0] === 'bin:update' ? 'POST' : 'GET', etag: '"unused"' })).status, 404);
+    if (required[0] === 'bin:update') assert.equal((await bearerRequest(key.token, `/trash/bins/${id}/restore`, { method: 'POST', etag: '"unused"' })).status, 404);
   }
 });
 test('authorized external clients can CRUD models, collections and Bins while retaining ETag, JSON Schema, locks and restore checks', async () => {
@@ -703,7 +709,7 @@ test('concurrent authentication and revocation never reactivate a revoked key or
 test('Cookie writes reject foreign or null Origins while trusted Session scripts and scoped Bearer clients keep working', async () => {
   const id = crypto.randomUUID();
   for (const origin of ['https://foreign.example', 'null']) {
-    for (const [path, method] of [['/keys', 'POST'], ['/keys/' + id, 'DELETE'], ['/bins', 'POST'], ['/bins/' + id, 'PUT'], ['/collections', 'POST'], ['/schemas', 'POST']]) {
+    for (const [path, method] of [['/keys', 'POST'], ['/keys/' + id, 'DELETE'], ['/bins', 'POST'], ['/bins/' + id, 'PUT'], ['/collections', 'POST'], ['/schemas', 'POST'], ['/trash/bins/' + id + '/restore', 'POST'], ['/trash/bins/' + id, 'DELETE'], ['/trash/bins/purge', 'POST']]) {
       const response = await request(path, { method, origin, value: method === 'DELETE' ? undefined : {} });
       assert.equal(response.status, 403); assert.equal((await response.json()).error, 'origin_not_allowed');
     }
@@ -913,7 +919,7 @@ test('locking competes atomically with partial writes and deletion; deleted Bins
       if (current.meta.locked) current = await (await request(path + '/meta', { method: 'PATCH', value: { locked: false }, etag: current.etag })).json();
       assert.equal((await request(path, { method: 'DELETE', etag: current.etag })).status, 200);
     } else assert.equal(currentResponse.status, 404);
-    assert.equal((await request(path, { method: 'DELETE' })).status, 200); // Archive completion is retryable.
+    assert.equal((await request(path, { method: 'DELETE' })).status, 200); // The deleted state is idempotent.
     assert.equal((await request(path, { method: 'PATCH', etag: bin.etag, value: {} })).status, 404);
     assert.equal((await request(path + '/meta', { method: 'PATCH', etag: bin.etag, value: { locked: false } })).status, 404);
     for (const suffix of ['', '/value', '/versions', '/versions/1']) assert.equal((await request(path + suffix)).status, 404);
@@ -923,4 +929,257 @@ test('locking competes atomically with partial writes and deletion; deleted Bins
   }
   assert.equal((await (await request('/collections/' + collection.meta.id + '/bins')).json()).total, 0);
   assert.equal((await (await request('/collections')).json()).items.find(item => item.id === collection.meta.id).binCount, 0);
+});
+
+async function trashItem(id) {
+  const response = await request('/trash/bins'); assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  return (await response.json()).items.find(item => item.meta.id === id);
+}
+async function trashed(value = { retained: true }) {
+  const bin = await create(value);
+  assert.equal((await request('/bins/' + bin.meta.id, { method: 'DELETE', etag: bin.etag })).status, 200);
+  return trashItem(bin.meta.id);
+}
+function bucketProxy(overrides) {
+  return new Proxy(bucket, { get(target, property) {
+    if (Object.hasOwn(overrides, property)) return overrides[property];
+    const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
+  } });
+}
+async function nativeRequest(data, path, { method = 'GET', etag, value } = {}) {
+  const { default: worker } = await import('../dist/jsonbin/index.js');
+  return worker.fetch(new Request('https://example.test/api/v1' + path, {
+    method, headers: { Cookie: cookie, 'Content-Type': 'application/json', ...(etag ? { 'If-Match': etag } : {}) },
+    ...(value === undefined ? {} : { body: JSON.stringify(value) }),
+  }), { DATA: data, SESSION_SECRET: sessionSecret });
+}
+
+test('TTL creation and updates validate future ISO timestamps, require conditional changes and preserve JSON versions', async () => {
+  const future = new Date(Date.now() + 3600000).toISOString();
+  let response = await request('/bins', { method: 'POST', value: { name: 'TTL', value: false, expiresAt: future } });
+  assert.equal(response.status, 201); const bin = await response.json(), path = '/bins/' + bin.meta.id;
+  assert.equal(bin.meta.expiresAt, future);
+  for (const expiresAt of ['bad', '', '2000-01-01T00:00:00Z', '2099-01-01T00:00:00', 123, false]) {
+    assert.equal((await request('/bins', { method: 'POST', value: { name: 'invalid TTL', value: null, expiresAt } })).status, 422);
+    assert.equal((await request(path + '/meta', { method: 'PATCH', value: { expiresAt }, etag: bin.etag })).status, 422);
+  }
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { expiresAt: null } })).status, 428);
+  response = await request(path + '/meta', { method: 'PATCH', value: { expiresAt: null }, etag: bin.etag });
+  assert.equal(response.status, 200); const cleared = await response.json();
+  assert.equal(cleared.meta.expiresAt, null); assert.equal(cleared.meta.currentVersion, 1); assert.equal(cleared.value, false);
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { expiresAt: future }, etag: bin.etag })).status, 412);
+  const offset = '2099-01-01T08:00:00+08:00';
+  const normalized = await (await request(path + '/meta', { method: 'PATCH', value: { expiresAt: offset }, etag: cleared.etag })).json();
+  assert.equal(normalized.meta.expiresAt, '2099-01-01T00:00:00.000Z');
+  const locked = await (await request(path + '/meta', { method: 'PATCH', value: { locked: true }, etag: normalized.etag })).json();
+  assert.equal((await request(path + '/meta', { method: 'PATCH', value: { expiresAt: null }, etag: locked.etag })).status, 423);
+});
+
+test('expired public and locked Bins immediately disappear from normal APIs and collection counts before cron runs', async () => {
+  const collection = await (await request('/collections', { method: 'POST', value: { name: 'TTL members' } })).json();
+  const bin = await (await request('/bins', { method: 'POST', value: { name: 'expired', value: { private: true }, visibility: 'public', collectionId: collection.meta.id } })).json();
+  const path = '/bins/' + bin.meta.id, expiredAt = '2000-01-01T00:00:00.000Z';
+  await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify({ ...bin.meta, expiresAt: expiredAt, locked: true }));
+  for (const suffix of ['', '/value/private', '/versions', '/versions/1']) assert.equal((await request(path + suffix)).status, 404, suffix);
+  for (const suffix of ['', '/value/private']) assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
+  for (const [suffix, method, value] of [['', 'PUT', { value: {} }], ['', 'PATCH', {}], ['/value/private', 'PUT', { value: false }], ['/meta', 'PATCH', { expiresAt: null }], ['/versions/1/restore', 'POST'], ['', 'DELETE']]) {
+    assert.equal((await request(path + suffix, { method, value, etag: bin.etag })).status, 404, `${method} ${suffix}`);
+  }
+  assert.ok(!(await (await request('/bins')).json()).items.some(item => item.id === bin.meta.id));
+  assert.equal((await (await request('/collections/' + collection.meta.id + '/bins')).json()).total, 0);
+  assert.equal((await (await request('/collections')).json()).items.find(item => item.id === collection.meta.id).binCount, 0);
+  const item = await trashItem(bin.meta.id); assert.equal(item.status, 'expired'); assert.equal(item.meta.deletedAt, expiredAt);
+  assert.equal(item.meta.deletionReason, 'expired'); assert.equal(item.meta.locked, true);
+  const readKey = await apiKey(['bin:read']);
+  assert.equal((await bearerRequest(readKey.token, path)).status, 404);
+  const restoredResponse = await request('/trash/bins/' + bin.meta.id + '/restore', { method: 'POST', etag: item.etag });
+  assert.equal(restoredResponse.status, 200); const restored = await restoredResponse.json();
+  assert.equal(restored.meta.expiresAt, null); assert.equal(restored.meta.visibility, 'private'); assert.equal(restored.meta.locked, true);
+  assert.deepEqual(restored.value, bin.value); assert.equal(restored.meta.currentVersion, 1); assert.equal(await trashItem(bin.meta.id), undefined);
+});
+
+test('scheduled cleanup archives expired locked Bins conditionally and leaves active data untouched', async () => {
+  const { default: worker } = await import('../dist/jsonbin/index.js');
+  assert.equal(typeof worker.scheduled, 'function');
+  const active = await create({ active: true }), expired = await create({ expired: true });
+  await bucket.put(`bins/${expired.meta.id}/meta.json`, JSON.stringify({ ...expired.meta, locked: true, expiresAt: '2000-01-01T00:00:00Z' }));
+  await worker.scheduled({}, { DATA: bucket });
+  assert.deepEqual(await (await request('/bins/' + active.meta.id)).json(), active);
+  const item = await trashItem(expired.meta.id); assert.equal(item.status, 'deleted'); assert.equal(item.meta.deletionReason, 'expired');
+  assert.equal(item.meta.locked, true); assert.ok(await bucket.head(`bins/${expired.meta.id}/versions/000001.json`));
+  const before = item.etag; await worker.scheduled({}, { DATA: bucket });
+  assert.equal((await trashItem(expired.meta.id)).etag, before);
+});
+
+test('cron cannot overwrite a concurrent deadline extension after reading an expired snapshot', async () => {
+  const { default: worker } = await import('../dist/jsonbin/index.js');
+  const bin = await create(), key = `bins/${bin.meta.id}/meta.json`, future = new Date(Date.now() + 3600000).toISOString();
+  await bucket.put(key, JSON.stringify({ ...bin.meta, expiresAt: '2000-01-01T00:00:00Z' }));
+  let injected = false;
+  const data = bucketProxy({ put: async (path, value, options) => {
+    if (path === key && JSON.parse(value).deletionReason === 'expired') {
+      injected = true;
+      // Model a valid update that began before the deadline and commits while cron is running.
+      await bucket.put(key, JSON.stringify({ ...bin.meta, expiresAt: future }));
+    }
+    return bucket.put(path, value, options);
+  } });
+  await worker.scheduled({}, { DATA: data }); assert.equal(injected, true);
+  assert.equal((await (await request('/bins/' + bin.meta.id)).json()).meta.expiresAt, future);
+  assert.equal(await trashItem(bin.meta.id), undefined);
+});
+
+test('trash authentication and preconditions protect every mutation and active Bins cannot be purged', async () => {
+  const item = await trashed(), path = '/trash/bins/' + item.meta.id;
+  for (const [suffix, method, value] of [['', 'DELETE'], ['/restore', 'POST']]) {
+    assert.equal((await request(path + suffix, { method, value, authenticated: false, etag: item.etag })).status, 401);
+    assert.equal((await request(path + suffix, { method, value })).status, 428);
+    assert.equal((await request(path + suffix, { method, value, etag: 'stale' })).status, 412);
+  }
+  assert.equal((await request('/trash/bins', { authenticated: false })).status, 401);
+  assert.equal((await request('/trash/bins/purge', { method: 'POST', authenticated: false, value: { items: [{ id: item.meta.id, etag: item.etag }] } })).status, 401);
+  const active = await create();
+  assert.equal((await request('/trash/bins/' + active.meta.id, { method: 'DELETE', etag: active.etag })).status, 404);
+  assert.deepEqual(await (await request('/bins/' + active.meta.id)).json(), active);
+  assert.ok(await bucket.head(`bins/${active.meta.id}/versions/000001.json`));
+});
+
+test('restore keeps all versions and pinned schema locks, detaches unavailable collections, clears expiry and requires a fresh trash snapshot', async () => {
+  const schema = await model(), collection = await (await request('/collections', { method: 'POST', value: { name: 'restore relation' } })).json();
+  const bin = await (await request('/bins', { method: 'POST', value: { name: 'restore', value: { count: 1 }, visibility: 'public', schemaId: schema.meta.id, schemaLocked: true, collectionId: collection.meta.id, expiresAt: new Date(Date.now() + 3600000).toISOString() } })).json();
+  const path = '/bins/' + bin.meta.id;
+  const updated = await (await request(path, { method: 'PATCH', etag: bin.etag, value: { count: 2 } })).json();
+  await request(path, { method: 'DELETE', etag: updated.etag }); const item = await trashItem(bin.meta.id);
+  await request('/collections/' + collection.meta.id, { method: 'DELETE', etag: collection.etag });
+  await request('/schemas/' + schema.meta.id, { method: 'DELETE', etag: schema.etag });
+  const response = await request('/trash/bins/' + bin.meta.id + '/restore', { method: 'POST', etag: item.etag });
+  assert.equal(response.status, 200); const restored = await response.json();
+  assert.equal(restored.meta.currentVersion, 2); assert.equal(restored.meta.collectionId, null); assert.equal(restored.meta.expiresAt, null);
+  assert.equal(restored.meta.schemaLocked, true); assert.equal(restored.meta.schemaRevision, 1); assert.equal(restored.meta.visibility, 'private');
+  assert.equal(restored.meta.deletedAt, undefined); assert.deepEqual(restored.value, { count: 2 });
+  assert.equal(response.headers.get('etag'), restored.etag);
+  assert.deepEqual((await (await request(path + '/versions/1')).json()).value, { count: 1 });
+  assert.equal((await (await request(path + '/versions')).json()).total, 2);
+  assert.equal((await request(path, { method: 'PATCH', etag: restored.etag, value: { count: 'invalid' } })).status, 422);
+  await request(path, { method: 'DELETE', etag: restored.etag });
+  assert.equal((await request('/trash/bins/' + bin.meta.id, { method: 'DELETE', etag: item.etag })).status, 412);
+  assert.equal((await request('/trash/bins/' + bin.meta.id + '/restore', { method: 'POST', etag: item.etag })).status, 412);
+});
+
+test('missing versions and invalid schema data cannot be restored and remain available in trash', async () => {
+  const schema = await model(), bin = await boundBin(schema, { count: 2 }, true);
+  await request('/bins/' + bin.meta.id, { method: 'DELETE' }); const item = await trashItem(bin.meta.id), path = '/trash/bins/' + bin.meta.id + '/restore';
+  const versionKey = `bins/${bin.meta.id}/versions/000001.json`;
+  await bucket.put(versionKey, JSON.stringify({ count: 'invalid' }));
+  assert.equal((await request(path, { method: 'POST', etag: item.etag })).status, 422);
+  assert.equal((await trashItem(bin.meta.id)).etag, item.etag);
+  await bucket.delete(versionKey);
+  assert.equal((await request(path, { method: 'POST', etag: item.etag })).status, 409);
+  assert.equal((await trashItem(bin.meta.id)).etag, item.etag);
+});
+
+test('legacy trash records can be restored or purged while canonical active and terminal records suppress stale archives', async () => {
+  for (const action of ['restore', 'purge']) {
+    const bin = await create({ legacy: action }), key = `bins/${bin.meta.id}/meta.json`, legacyKey = `trash/bins/${bin.meta.id}/meta.json`;
+    const legacy = { ...bin.meta, deletedAt: '2026-01-01T00:00:00Z' };
+    await bucket.put(legacyKey, JSON.stringify(legacy)); await bucket.delete(key);
+    const item = await trashItem(bin.meta.id); assert.ok(item);
+    const path = '/trash/bins/' + bin.meta.id + (action === 'restore' ? '/restore' : '');
+    const response = await request(path, { method: action === 'restore' ? 'POST' : 'DELETE', etag: item.etag });
+    assert.equal(response.status, 200); assert.equal(await bucket.head(legacyKey), null);
+    await bucket.put(legacyKey, JSON.stringify(legacy)); // A stale P6 archival retry must not resurrect a record.
+    assert.equal(await trashItem(bin.meta.id), undefined);
+    if (action === 'restore') assert.deepEqual((await (await request('/bins/' + bin.meta.id)).json()).value, bin.value);
+    else {
+      assert.equal((await request(path + '/restore', { method: 'POST', etag: item.etag })).status, 404);
+      const { default: worker } = await import('../dist/jsonbin/index.js'); await worker.scheduled({}, { DATA: bucket });
+      assert.equal(await bucket.head(legacyKey), null);
+    }
+  }
+});
+
+test('permanent deletion paginates all versions and orphans, is retryable, and retains only a minimal non-restorable marker', async () => {
+  const item = await trashed({ confidential: true }), id = item.meta.id;
+  await bucket.put(`bins/${id}/versions/000002.json`, '"orphan"'); await bucket.put(`bins/${id}/versions/000003.json`, 'false');
+  await bucket.put(`trash/bins/${id}/meta.json`, JSON.stringify(item.meta));
+  let pages = 0;
+  const data = bucketProxy({ list: async options => {
+    if (options.prefix === `bins/${id}/versions/`) { pages++; return bucket.list({ ...options, limit: 1 }); }
+    return bucket.list(options);
+  } });
+  const response = await nativeRequest(data, '/trash/bins/' + id, { method: 'DELETE', etag: item.etag });
+  assert.equal(response.status, 200); assert.ok(pages >= 3);
+  assert.equal((await bucket.list({ prefix: `bins/${id}/versions/` })).objects.length, 0);
+  assert.equal(await bucket.head(`trash/bins/${id}/meta.json`), null);
+  assert.deepEqual(await (await bucket.get(`bins/${id}/meta.json`)).json(), { id, deletedAt: item.meta.deletedAt, purgeState: 'purged' });
+  assert.equal(await trashItem(id), undefined);
+  assert.equal((await request('/trash/bins/' + id, { method: 'DELETE', etag: item.etag })).status, 200);
+  assert.equal((await request('/trash/bins/' + id + '/restore', { method: 'POST', etag: item.etag })).status, 404);
+});
+
+test('failed physical deletion blocks restoration and cron resumes the cleanup without exposing JSON', async () => {
+  const item = await trashed(), id = item.meta.id;
+  const data = bucketProxy({ delete: async keys => {
+    if (Array.isArray(keys) && keys.some(key => key.startsWith(`bins/${id}/versions/`))) throw new Error('simulated_cleanup_failure');
+    return bucket.delete(keys);
+  } });
+  assert.equal((await nativeRequest(data, '/trash/bins/' + id, { method: 'DELETE', etag: item.etag })).status, 500);
+  assert.equal((await trashItem(id)).status, 'purging');
+  assert.equal((await request('/trash/bins/' + id + '/restore', { method: 'POST', etag: item.etag })).status, 409);
+  assert.equal((await request('/bins/' + id)).status, 404);
+  const { default: worker } = await import('../dist/jsonbin/index.js'); await worker.scheduled({}, { DATA: bucket });
+  assert.equal(await trashItem(id), undefined); assert.equal((await bucket.list({ prefix: `bins/${id}/versions/` })).objects.length, 0);
+});
+
+test('concurrent restore and permanent deletion have one winner and never delete a restored Bin', async () => {
+  for (const legacy of [false, true]) {
+    const item = await trashed({ race: true }), id = item.meta.id;
+    if (legacy) { await bucket.put(`trash/bins/${id}/meta.json`, JSON.stringify(item.meta, null, 2)); await bucket.delete(`bins/${id}/meta.json`); }
+    const current = await trashItem(id), path = '/trash/bins/' + id;
+    const responses = await Promise.all([
+      request(path + '/restore', { method: 'POST', etag: current.etag }), request(path, { method: 'DELETE', etag: current.etag }),
+    ]);
+    assert.equal(responses.filter(response => response.status === 200).length, 1);
+    assert.ok(responses.every(response => [200, 404, 409, 412].includes(response.status)));
+    if (responses[0].status === 200) {
+      const restored = await responses[0].json(); assert.deepEqual(await (await request('/bins/' + id)).json(), restored);
+      assert.deepEqual((await (await request('/bins/' + id + '/versions/1')).json()).value, { race: true });
+    } else {
+      assert.equal((await request('/bins/' + id)).status, 404); assert.equal((await bucket.list({ prefix: `bins/${id}/versions/` })).objects.length, 0);
+    }
+  }
+});
+
+test('bulk empty uses approved item ETags, reports partial conflicts and never includes newly trashed or restored records', async () => {
+  const first = await trashed(), second = await trashed(), later = await trashed();
+  const restored = await (await request('/trash/bins/' + first.meta.id + '/restore', { method: 'POST', etag: first.etag })).json();
+  await request('/bins/' + first.meta.id, { method: 'DELETE', etag: restored.etag }); // A new deletion generation must not be erased.
+  const response = await request('/trash/bins/purge', { method: 'POST', value: { items: [first, second].map(item => ({ id: item.meta.id, etag: item.etag })) } });
+  assert.equal(response.status, 200); assert.deepEqual((await response.json()).results, [{ id: first.meta.id, status: 412 }, { id: second.meta.id, status: 200 }]);
+  assert.ok(await trashItem(first.meta.id)); assert.equal(await trashItem(second.meta.id), undefined); assert.ok(await trashItem(later.meta.id));
+  for (const value of [{ items: [] }, { items: [{ id: later.meta.id }] }, { items: [{ id: 'bad', etag: 'tag' }] },
+    { items: [{ id: later.meta.id, etag: 'tag' }, { id: later.meta.id, etag: 'tag' }] }, { items: Array(101).fill({ id: later.meta.id, etag: 'tag' }) }, { all: true }]) {
+    assert.equal((await request('/trash/bins/purge', { method: 'POST', value })).status, 422);
+  }
+});
+
+test('an in-flight append finishing after permanent deletion removes its late orphan and cannot revive the Bin', async () => {
+  const bin = await create({ original: true }), id = bin.meta.id;
+  let release, reached;
+  const gate = new Promise(resolve => { release = resolve; }), waiting = new Promise(resolve => { reached = resolve; });
+  const data = bucketProxy({ put: async (key, value, options) => {
+    if (key === `bins/${id}/versions/000002.json`) { reached(); await gate; }
+    return bucket.put(key, value, options);
+  } });
+  const saving = nativeRequest(data, '/bins/' + id, { method: 'PUT', etag: bin.etag, value: { value: { late: true } } });
+  await waiting;
+  try {
+    assert.equal((await request('/bins/' + id, { method: 'DELETE', etag: bin.etag })).status, 200);
+    const item = await trashItem(id);
+    assert.equal((await request('/trash/bins/' + id, { method: 'DELETE', etag: item.etag })).status, 200);
+  } finally { release(); }
+  assert.equal((await saving).status, 412);
+  assert.equal((await bucket.list({ prefix: `bins/${id}/versions/` })).objects.length, 0);
+  assert.equal((await request('/bins/' + id)).status, 404); assert.equal(await trashItem(id), undefined);
 });

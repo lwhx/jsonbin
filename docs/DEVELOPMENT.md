@@ -40,7 +40,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓列表 | ✅ 基础完成 | 列表、搜索、创建 |
 | 数据仓读取 | ✅ 后端完成 | GET /api/v1/bins/:id |
 | 数据仓更新 | ✅ 本地验收通过 | PUT + ETag/If-Match；版本文件不可覆盖；meta 条件更新 |
-| 数据仓删除 | ✅ 后端基础完成 | 条件写入删除标记并归档到 trash；历史版本保留，锁定时拒绝删除 |
+| 数据仓删除 | ✅ 后端完成 | canonical meta 条件写入删除标记，作为回收记录；历史版本保留，锁定时拒绝普通删除 |
 | 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
@@ -49,7 +49,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
-| 回收站 | ⬜ 未开始 | 后端有最基础 trash 写入，无 UI/恢复 |
+| TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
 | 设置 | ⬜ 未开始 | 只有导航占位 |
 | 全局搜索 | ⬜ 未开始 | 顶部仅 UI 占位 |
 
@@ -121,20 +121,21 @@ versions 下已经写入的版本不得覆盖。
 
 普通删除：
 
-- 将 Bin 的元数据写入 trash/bins/<id>/meta.json。
-- 删除活动区 bins/<id>/meta.json。
+- 通过 R2 条件写入，在 bins/<id>/meta.json 标记 deletedAt，保留其为唯一权威回收记录。
+- P7 起不再另外写入 trash/bins/<id>/meta.json；读取兼容早期版本的归档文件，避免迟到的归档覆盖恢复或永久删除结果。
 - 版本文件暂时保留，以支持恢复。
 
 恢复：
 
-- 将回收站元数据恢复为活动 meta.json。
+- 检查回收记录 ETag、历史内容及绑定模型，条件清除删除标记。
+- 清除过期时间、恢复为 private，保留数据锁、模型锁及有效集合关联。
 - 不修改历史版本内容。
 
 永久删除：
 
-- 删除 trash 记录。
-- 删除 bins/<id>/versions/ 下所有版本。
-- 清理相关 KV 索引。
+- 先以 CAS 标记 purging，阻止并发恢复，再删除 bins/<id>/versions/ 下全部版本及旧 trash 记录。
+- 完成后只保留 ID、删除时间和 purged 状态的最小标记，阻止旧客户端/旧归档重新激活数据。原 JSON、名称、描述、模型关联等均移除。
+- 清理失败可重试，定时任务也会续作；目前无正式 KV 派生索引，P11 引入索引后须同步清理。
 
 ## 4. Cloudflare 配置约定
 
@@ -431,7 +432,7 @@ POST /api/v1/bins/:id/versions/:version/restore
 
 接口约定：
 
-- 三个接口都需要 Session 认证；未登录返回 401。已删除 Bin 的保留版本不能通过这些接口访问，回收站访问留给 P7。
+- 三个接口需要 Session 或相应 Scope 的 Bearer 认证；未认证返回 401。已删除或到期 Bin 的保留版本不能通过这些接口访问，P7 恢复后重新开放。
 - 版本列表返回 `{ items: [{ version, createdAt, size }], currentVersion, total }`，按版本号降序；跨 R2 分页读取所有保留版本。时间为对象上传时间，大小为 R2 保存的 JSON 文件字节数。
 - 列表包含并发冲突留下的孤立版本，不能将每个保留文件都认定为曾生效的最新版本；版本编号可能不连续。
 - 读取版本返回 `{ id, version, createdAt, size, value, etag }`，响应 ETag 属于该不可变版本对象。
@@ -672,10 +673,10 @@ Bearer 权限规则：
 
 | Scope | 允许的现有接口 |
 | --- | --- |
-| bin:read | Bin 列表、当前 JSON/元数据详情及深层路径读取 |
+| bin:read | Bin 列表、当前 JSON/元数据详情及深层路径读取、回收站列表 |
 | bin:create | 新建 Bin（含可选集合、模型绑定） |
-| bin:update | 替换 JSON、Merge Patch、深层路径写入、修改元数据/绑定/锁定；恢复历史还需 history:read |
-| bin:delete | 删除 Bin |
+| bin:update | 替换 JSON、Merge Patch、深层路径写入、修改元数据/绑定/锁定/TTL；恢复历史或回收记录还需 history:read |
+| bin:delete | 普通删除 Bin、回收站永久删除及批量清空 |
 | collection:read | 集合列表/详情；集合内 Bin 列表还需 bin:read |
 | collection:write | 集合创建、修改、删除（只解除成员关联） |
 | schema:read | 模型列表/详情、JSON 样本校验 |
@@ -774,8 +775,8 @@ curl -X PUT "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID/value/settings/theme" \
 
 - 元数据 PATCH 接受 `locked: true/false`，提供此字段时必须携带 `If-Match`。已锁定时，仅允许单独的 `{"locked":false}` 解锁；同请求携带名称、模型、可见性等任何额外修改均返回 423。解锁不改变 `schemaLocked`。
 - 数据锁阻止完整替换、Merge Patch、路径写入、历史恢复、元数据修改和删除；当前及历史读取继续按原权限开放。集合删除时清除成员关联延续 P3 的管理清理规则，可清除锁定 Bin 的失效关联，但不修改 JSON、模型或锁。
-- DELETE 接受可选 `If-Match`（界面始终发送），并检查数据锁；锁定返回 423，旧 ETag / 并发冲突返回 412。通过 R2 CAS 在 `bins/<id>/meta.json` 写入 `deletedAt`，随后归档 `trash/bins/<id>/meta.json`，历史文件保持不变。
-- 持久删除标记防止在途写入重新激活 Bin，并让删除与锁定竞争同一个 ETag；普通详情/路径/历史/列表及集合成员计数均排除已删除 Bin。归档失败后重试 DELETE 可完成归档，已有删除标记返回成功；完全不存在的 ID 返回 404。P7 恢复必须处理此标记，不能仅复制 trash 元数据。
+- DELETE 接受可选 `If-Match`（界面始终发送），并检查数据锁；锁定返回 423，旧 ETag / 并发冲突返回 412。通过 R2 CAS 在 `bins/<id>/meta.json` 写入 `deletedAt`，历史文件保持不变。P6 曾另外归档 `trash/bins/<id>/meta.json`；P7 起统一使用 canonical 删除记录并兼容旧归档。
+- 持久删除标记防止在途写入重新激活 Bin，并让删除与锁定竞争同一个 ETag；普通详情/路径/历史/列表及集合成员计数均排除已删除 Bin。重复普通 DELETE 对仍在回收站的记录返回成功；完全不存在、已到期但未归档或已永久删除的 ID 返回 404。P7 恢复通过 CAS 处理删除标记。
 - 设置页提供独立数据锁操作，存在草稿时先保存或显式重新加载；请求中禁用操作，失败保留状态并可重试。API 页提供局部写入示例和路径规则。
 
 公开访问边界：
@@ -798,20 +799,22 @@ curl -X PUT "$JSONBIN_ORIGIN/api/v1/bins/$BIN_ID/value/settings/theme" \
 
 ## P7 TTL 与回收站
 
+状态：✅ 后端、定时任务、界面及本地验收完成；CI / Workers Builds 待功能提交后核实，生产功能验收待确认。
+
 TTL：
 
-- [ ] 设置 expiresAt
-- [ ] 到期后禁止正常读取
-- [ ] 定时任务清理/移入回收站
-- [ ] Dashboard 显示剩余时间
+- [x] 创建和设置支持 expiresAt，支持清除期限
+- [x] 到期后禁止正常读取及写入，包括公开、深层路径及历史 API
+- [x] 定时任务清理/移入回收站（每 15 分钟，UTC）
+- [x] Dashboard 列表与详情显示剩余时间、到期时间，列表每 30 秒刷新
 
 回收站：
 
-- [ ] 列表
-- [ ] 恢复
-- [ ] 永久删除
-- [ ] 批量清空
-- [ ] 显示删除时间
+- [x] 列表、加载/空状态、错误重试及导航入口
+- [x] 恢复（同 ID、版本保留、私有且清除期限）
+- [x] 永久删除（确认、ETag、分页清理、失败续作）
+- [x] 批量清空（明确快照、逐项结果、部分失败提示）
+- [x] 显示删除/到期时间与删除原因
 
 API：
 
@@ -819,7 +822,46 @@ API：
 GET    /api/v1/trash/bins
 POST   /api/v1/trash/bins/:id/restore
 DELETE /api/v1/trash/bins/:id
+POST   /api/v1/trash/bins/purge
 ~~~
+
+TTL 规则：
+
+- 创建 Bin 或元数据 PATCH 接受 `expiresAt: null`（永不过期）或未来的带时区 ISO 时间，统一保存为 UTC。非法、无时区或过去的时间返回 422。元数据中携带 expiresAt 时必须提供 If-Match；缺少 428，过期 412，数据锁 423。
+- 到期判断为 `expiresAt <= 当前时间`，每个正常存储读写入口直接检查，不依赖 Cron/KV。到期 Bin 从列表、集合成员和计数排除；认证后的详情/路径/历史/更新返回 404，匿名当前读取返回 401，不泄露存在性。到期前已经授权的在途读取可以完成。
+- 到期但尚未归档的记录立即出现在回收站，status 为 expired、deletedAt 为到期时间，恢复/永久删除无需等待 Cron。数据锁不能延长已配置的 TTL，到期的锁定 Bin 也会归档。
+- Worker `scheduled` 处理器与 wrangler.jsonc 的 `*/15 * * * *` 定时触发器扫描 R2，以当前 ETag 写入过期删除标记；期限更新或其他并发状态变化导致 CAS 失败时保留新状态。已发起但中断的永久删除也在此续作；单项失败继续处理其他项，最终报告任务失败便于排查。
+- UI 使用本地时区 datetime-local 输入并转换为 ISO，留空清除 TTL；校验错误不丢草稿。列表与详情显示剩余时间和实际到期时间。
+
+回收站 API 与权限：
+
+| 操作 | Bearer Scope | 条件/响应 |
+| --- | --- | --- |
+| GET /trash/bins | bin:read | `{items, total}`；每项 `{meta, etag, status}` |
+| POST /trash/bins/:id/restore | bin:update + history:read | If-Match 必须；成功返回 BinRecord、ETag、版本号 |
+| DELETE /trash/bins/:id | bin:delete | If-Match 必须；成功 `{ok:true}` |
+| POST /trash/bins/purge | bin:delete | 请求体中的每个 ID 都必须有 ETag；返回逐项结果 |
+
+- Session 管理员可执行全部操作；所有回收站接口禁止匿名，public 状态不授予访问。Cookie 写入继续检查 Origin，显式 Bearer 不回退 Cookie。响应均为 `Cache-Control: no-store`。
+- 列表不返回 JSON 内容；meta 包含删除时间及 manual/expired 原因，status 为 deleted、expired 或 purging。每项 ETag 对应当前权威记录；单项操作缺少 If-Match 返回 428，过期返回 412，不存在/已恢复返回 404。
+- 恢复前验证当前版本文件和固定 Schema 修订；内容不匹配返回 422，文件/模型修订缺失或正在永久删除返回 409，记录保留。模型已归档仍按原绑定修订校验。
+- 恢复不新建 JSON 版本，保留所有历史、数据锁及模型锁；清除 expiresAt，设为 private，更新 lifecycleId 以区分不同删除/恢复轮次。原集合已删除或正在删除时解除关联，并处理集合删除的并发清理。
+- 永久删除先通过 CAS 将同一记录设为 purging，之后不可恢复。分页删除全部版本（含孤立版本）及旧归档，完成后保留最小 purged 标记；恢复与永久删除竞争时最多一个成功，不能物理删除已恢复的数据。
+- 物理清理失败时保留 purging 状态，可使用原批准 ETag 或列表的新 ETag 重试；Cron 也会续作。已完成的永久删除可幂等重试。极端中断留下的迟到写入文件由后续 Cron 再清理；正常在途写入 CAS 失败发现 purge 状态时会删除自己刚写入的文件。
+- 批量清空请求为 `{"items":[{"id":"UUID","etag":"当前回收记录 ETag"}]}`，每批 1–100 项、ID 不重复、未知字段拒绝。返回 HTTP 200 `{results:[{id,status}]}`，逐项 status 为 200/404/412/500；客户端须检查每项，不能把 HTTP 200 当作全部成功。界面按确认时的完整列表分批执行，之后新进入回收站的记录不纳入该次操作；部分失败会保留并刷新列表。
+
+存储兼容与约束：
+
+- P7 新普通删除及 TTL 归档只更新 `bins/<id>/meta.json`；删除标记本身就是权威回收记录，避免另写可被旧请求覆盖的归档副本。
+- 兼容只有 `trash/bins/<id>/meta.json` 的旧记录：首次操作条件创建 canonical 删除标记后继续；并发迁移/恢复/清理不能覆盖已有状态。已有 canonical 活动记录或 purged 标记时忽略陈旧的同 ID 归档。
+- 永久删除仅保留 `{id, deletedAt, purgeState:"purged"}`；没有 JSON、名称、描述、集合或模型关联。当前 Cron 扫描 R2，适用于个人仓库；P11 索引优化不得让到期/权限判断依赖最终一致的 KV。
+
+本地验收进度（2026-10-03）：
+
+- `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 71 项通过，0 失败、0 跳过。构建保留既有 Monaco 大 chunk 提示。
+- 覆盖 TTL 输入/锁/ETag、所有读取入口、Cron 幂等与期限竞争、旧记录迁移、模型约束、分页清理、故障续作、恢复/永久删除竞争、迟到写入清理和批量快照保护。Scope 矩阵扩展至 9 种单权限 × 30 个资源路由及组合权限。
+- Chromium 浏览器验收 31 项通过，0 失败、0 跳过；新增创建/设置 TTL、剩余时间、真实到期后恢复、永久删除确认/冲突、批量部分失败与重试、网络/Session 错误、手机深色布局。既有功能回归通过。
+- GitHub CI / Workers Builds 待提交后补充；生产功能及真实 Cron 运行结果仍待确认。
 
 ---
 
@@ -944,7 +986,7 @@ summary:dashboard
 - [ ] R2 storage 测试
 - [ ] ETag 并发测试
 - [ ] Session 测试
-- [x] API Key Scope 测试（P5 / P6 当前接口全矩阵；后续新增接口需扩展）
+- [x] API Key Scope 测试（P5 / P6 / P7 当前接口全矩阵；后续新增接口需扩展）
 - [ ] Schema 校验测试
 - [ ] Trash/Restore 测试
 - [ ] npm run typecheck 通过
@@ -997,6 +1039,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P6 高级 Bin API 已完成本地开发、验收及 CI。P1 / P2 / P3 / P4 / P5 / P6 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态。
+P7 TTL 与回收站已完成本地开发与验收，等待本次提交的 CI / Workers Builds 结果。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-下一阶段为 **P7 TTL 与回收站**：expiresAt 设置与到期访问控制、定时清理、回收站列表/恢复/永久删除。恢复流程需兼容 P6 的 R2 条件删除标记，并继续遵守版本不可变、模型约束和 API 权限。
+下一阶段为 **P8 活动记录**：记录登录、Bin/集合/模型及密钥管理操作，控制记录量，严格排除 Secret、Cookie、Authorization、完整 Token 和敏感 JSON 内容。

@@ -51,7 +51,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
   return <section className="keys-page"><header className="hero bins-hero"><div><span className="eyebrow">开发者</span><h1>API 密钥</h1>
-    <p>为脚本或应用创建 Bearer Token，按所需权限授予访问。明文只在创建成功时显示一次。</p></div>
+    <p>为脚本或应用创建 Bearer Token，按所需权限授予访问。明文只在创建成功时显示一次。bin:delete 包括回收站永久删除；恢复需 bin:update 和 history:read。</p></div>
     <button className="secondary-button" disabled={busy} onClick={() => query.refetch()}>刷新密钥列表</button></header>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}

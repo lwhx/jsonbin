@@ -3,6 +3,8 @@ import { assertCollectionAvailable, getCollection, detachBinFromCollection } fro
 
 import { resolveSchemaBinding, assertBoundSchema } from "./schemas";
 import { SchemaError } from "../validation/schema";
+import { isActiveBin, normalizeEtag, type StoredBinMeta } from "./bin-state";
+export { normalizeEtag } from "./bin-state";
 
 export type BinMeta = {
   id: string;
@@ -20,6 +22,10 @@ export type BinMeta = {
   updatedAt: string;
   expiresAt: string | null;
   deletedAt?: string;
+  deletionReason?: "manual" | "expired";
+  purgeState?: "purging";
+  purgeEtag?: string;
+  lifecycleId?: string;
 };
 
 export type BinRecord = {
@@ -45,10 +51,6 @@ function metaKey(id: string) {
 
 function versionKey(id: string, version: number) {
   return `bins/${id}/versions/${String(version).padStart(6, "0")}.json`;
-}
-
-export function normalizeEtag(value: string) {
-  return value.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1");
 }
 
 function assertWritable(meta: BinMeta, etag: string, expectedEtag?: string) {
@@ -80,8 +82,8 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
 }
 
 export async function listBins(env: Env): Promise<BinMeta[]> {
-  const items = await listJsonObjects<BinMeta>(requireDataBucket(env), "bins/");
-  return items.filter(item => !item.deletedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const items = await listJsonObjects<StoredBinMeta>(requireDataBucket(env), "bins/");
+  return items.filter(item => isActiveBin(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function createBin(
@@ -94,6 +96,7 @@ export async function createBin(
     collectionId?: string | null;
     schemaId?: string | null;
     schemaLocked?: boolean;
+    expiresAt?: string | null;
   },
 ): Promise<BinRecord> {
   const bucket = requireDataBucket(env);
@@ -117,7 +120,7 @@ export async function createBin(
     schemaLocked: input.schemaLocked ?? false,
     createdAt: now,
     updatedAt: now,
-    expiresAt: null,
+    expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
   };
 
   await putJson(bucket, versionKey(id, 1), input.value);
@@ -138,8 +141,8 @@ export async function createBin(
 
 export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
   const bucket = requireDataBucket(env);
-  const metaObject = await getJson<BinMeta>(bucket, metaKey(id));
-  if (!metaObject || metaObject.value.deletedAt) return null;
+  const metaObject = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  if (!metaObject || !isActiveBin(metaObject.value)) return null;
 
   const valueObject = await getJson<unknown>(
     bucket,
@@ -160,8 +163,8 @@ export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
 
 export async function listBinVersions(env: Env, id: string) {
   const bucket = requireDataBucket(env);
-  const current = await getJson<BinMeta>(bucket, metaKey(id));
-  if (!current || current.value.deletedAt) return null;
+  const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  if (!current || !isActiveBin(current.value)) return null;
   const items: BinVersionSummary[] = [];
   let cursor: string | undefined;
   do {
@@ -181,8 +184,8 @@ export async function listBinVersions(env: Env, id: string) {
 export async function getBinVersion(env: Env, id: string, version: number): Promise<BinVersionRecord | null> {
   const bucket = requireDataBucket(env);
   // Retained files of a deleted Bin are only accessible through future trash APIs.
-  const current = await getJson<BinMeta>(bucket, metaKey(id));
-  if (!current || current.value.deletedAt) return null;
+  const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  if (!current || !isActiveBin(current.value)) return null;
   const object = await bucket.get(versionKey(id, version));
   if (!object) return null;
   return { id, version, createdAt: object.uploaded.toISOString(), size: object.size,
@@ -203,8 +206,8 @@ export async function updateBin(
   expectedEtag?: string,
 ): Promise<BinRecord | null> {
   const bucket = requireDataBucket(env);
-  const current = await getJson<BinMeta>(bucket, metaKey(id));
-  if (!current || current.value.deletedAt) return null;
+  const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  if (!current || !isActiveBin(current.value)) return null;
   assertWritable(current.value, current.etag, expectedEtag);
   await assertBoundSchema(env, current.value, value);
   const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value);
@@ -224,7 +227,12 @@ export async function updateBin(
     nextMeta,
     { onlyIf: { etagMatches: normalizeEtag(current.etag) } },
   );
-  if (!written) throw new Error("etag_conflict");
+  if (!written) {
+    // A purge may have raced this in-flight append; don't leave its new orphan behind.
+    const latest = await getJson<StoredBinMeta>(bucket, metaKey(id));
+    if (latest?.value.purgeState) await bucket.delete(versionKey(id, nextVersion));
+    throw new Error("etag_conflict");
+  }
 
   return {
     meta: nextMeta,
@@ -243,22 +251,23 @@ export async function transformBin(env: Env, id: string, transform: (value: unkn
 
 export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
   const bucket = requireDataBucket(env);
-  const current = await getJson<BinMeta>(bucket, metaKey(id));
-  if (!current) return false;
+  const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  if (!current || current.value.purgeState === "purged") return false;
 
   // A CAS tombstone makes deletion compete atomically with locking and writes.
   // Retain it so no delayed writer can recreate an active Bin after deletion.
   let deleted = current.value;
   if (!deleted.deletedAt) {
+    if (!isActiveBin(deleted)) return false;
     assertWritable(deleted, current.etag, expectedEtag);
-    deleted = { ...deleted, deletedAt: new Date().toISOString() };
+    deleted = { ...deleted, deletedAt: new Date().toISOString(), deletionReason: "manual" };
     const written = await putJson(bucket, metaKey(id), deleted, {
       onlyIf: { etagMatches: normalizeEtag(current.etag) },
     });
     if (!written) throw new Error("etag_conflict");
   }
-  // A retry after an interrupted archive write can finish from the tombstone.
-  await putJson(bucket, `trash/bins/${id}/meta.json`, deleted);
+  // Canonical metadata is now the trash record. Avoid a second mutable archive
+  // which a delayed deletion could overwrite after restoration or permanent purge.
   return true;
 }
 
@@ -271,6 +280,7 @@ export type BinMetadataInput = {
   schemaLocked?: boolean;
   refreshSchema?: boolean;
   locked?: boolean;
+  expiresAt?: string | null;
 };
 
 export async function updateBinMetadata(

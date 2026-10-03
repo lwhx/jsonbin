@@ -38,6 +38,8 @@ import { SchemaIssues } from "./features/schemas/SchemaIssues";
 import type { SchemaIssue } from "./features/schemas/api";
 
 import { KeysPage } from "./features/keys/KeysPage";
+import { TrashPage } from "./features/trash/TrashPage";
+import { ExpiryLabel, expiryFromInput } from "./features/bins/expiry";
 
 type Health = {
   ok: boolean;
@@ -81,7 +83,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash";
 
 type NavLink = {
   label: string;
@@ -111,7 +113,7 @@ const nav: NavItem[] = [
   { label: "活动记录", icon: Activity, disabled: true },
   { label: "API 文档", icon: TerminalSquare, disabled: true },
   { divider: true, label: "系统" },
-  { label: "回收站", icon: Archive, disabled: true },
+  { label: "回收站", icon: Archive, section: "Trash" },
   { label: "设置", icon: Settings, disabled: true },
 ];
 
@@ -350,11 +352,11 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : "Overview";
+  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : "/"; };
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
@@ -382,6 +384,7 @@ function AuthenticatedApp({
 
   const bins = useQuery({
     queryKey: ["bins"],
+    refetchInterval: 30_000,
     queryFn: async (): Promise<BinList> => {
       const response = await fetch("/api/v1/bins", {
         credentials: "include",
@@ -416,6 +419,7 @@ function AuthenticatedApp({
     queryClient.removeQueries({ queryKey: ["schemas"] });
     queryClient.removeQueries({ queryKey: ["schema"] });
     queryClient.removeQueries({ queryKey: ["keys"] });
+    queryClient.removeQueries({ queryKey: ["trash-bins"] });
   }
 
   const totalStorage =
@@ -538,7 +542,8 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Overview" ? (
+          ) : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Trash" ?
+            <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
               binsLoading={bins.isLoading}
@@ -793,6 +798,7 @@ function BinsPage({
               </div>
 
               <div className="bin-id">{bin.id}</div>
+              <ExpiryLabel expiresAt={bin.expiresAt} />
             </button>
           ))}
         </div>
@@ -824,6 +830,7 @@ function CreateBinDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
+  const [expiryInput, setExpiryInput] = useState("");
   const [collectionId, setCollectionId] = useState("");
   const [schemaId, setSchemaId] = useState("");
   const [schemaLocked, setSchemaLocked] = useState(false);
@@ -839,6 +846,9 @@ function CreateBinDialog({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(""); setIssues([]);
+    if (expiryInput && new Date(expiryInput).getTime() <= Date.now()) {
+      setError("到期时间必须晚于当前时间，留空表示永不过期。"); return;
+    }
 
     let value: unknown;
     try {
@@ -861,6 +871,7 @@ function CreateBinDialog({
           collectionId: collectionId || null,
           schemaId: schemaId || null,
           schemaLocked,
+          expiresAt: expiryFromInput(expiryInput),
           value,
         }),
       });
@@ -926,6 +937,8 @@ function CreateBinDialog({
             </label>
             {visibility === "public" && <p>公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。</p>}
           </div>
+          <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={expiryInput} disabled={saving} onChange={event => setExpiryInput(event.target.value)} /></label>
+          <p>使用本地时区，留空表示永不过期；到期后停止正常读写并进入回收站。</p>
 
           <label>
             描述

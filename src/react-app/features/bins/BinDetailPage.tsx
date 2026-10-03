@@ -9,13 +9,14 @@ import { listCollections } from "../collections/api";
 
 import { listSchemas } from "../schemas/api";
 import { SchemaIssues } from "../schemas/SchemaIssues";
+import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
 type Tab = "编辑器" | "历史版本" | "API" | "设置";
 function metadataOf(record: BinRecord): MetadataInput {
-  const { name, description, visibility, collectionId, schemaId, schemaLocked } = record.meta;
-  return { name, description, visibility, collectionId, schemaId, schemaLocked, refreshSchema: false };
+  const { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt } = record.meta;
+  return { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt, refreshSchema: false };
 }
 
 export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
@@ -108,6 +109,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   }
   async function saveSettings() {
     if (!draft || !metadata || busy) return;
+    if (metadata.expiresAt && Date.parse(metadata.expiresAt) <= Date.now()) {
+      setError(new Error("到期时间必须晚于当前时间；已到期的数据仓请到回收站恢复。")); return;
+    }
     setBusy("metadata"); setError(null); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["bin", id] });
@@ -195,7 +199,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         {dirty && <span className="dirty-badge">未保存</span>}{locked && <span>已锁定</span>}</div>
     </header>
     <div className="detail-info"><span>v{record.meta.currentVersion}</span><span>{record.meta.size} B</span>
-      <span>更新于 {new Date(record.meta.updatedAt).toLocaleString("zh-CN")}</span></div>
+      <span>更新于 {new Date(record.meta.updatedAt).toLocaleString("zh-CN")}</span><ExpiryLabel expiresAt={record.meta.expiresAt} /></div>
     <div className="detail-id"><code>{id}</code><button type="button" className="secondary-button" onClick={() => copy(id)}><Copy size={14} />复制 Bin ID</button>
       <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button></div>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
@@ -236,6 +240,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <p>Merge Patch 中 null 删除对象字段，数组整体替换。路径使用 JSON Pointer 转义（/ → ~1、~ → ~0），数组从 0 开始，末尾 - 可追加；父节点必须存在。/value 读写整个 JSON。</p>
         <p>JSON 写入成功生成新版本；局部写入缺少 If-Match 返回 428，ETag 过期返回 412，锁定返回 423，Scope 不足返回 403，JSON 不符合绑定模型返回 422。</p></div>}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>
+        <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={localDateTime(metadata.expiresAt)} disabled={Boolean(busy) || locked}
+          onChange={event => setMetadata({ ...metadata, expiresAt: expiryFromInput(event.target.value) })} /></label>
+        <p>使用本地时区，留空表示永不过期。到期后停止正常读写，可在回收站恢复；数据锁不会延长已设置的期限。</p>
         <label>名称<input required maxLength={160} value={metadata.name} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, name: event.target.value })} /></label>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
         <label>可见性<select aria-label="可见性" value={metadata.visibility} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, visibility: event.target.value as "private" | "public" })}><option value="private">私有</option><option value="public">公开</option></select></label>

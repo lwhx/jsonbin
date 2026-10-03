@@ -28,6 +28,8 @@ type Variables = {
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+const expiresAtSchema = z.iso.datetime({ offset: true }).refine(value => Date.parse(value) > Date.now(), "expiresAt must be in the future")
+  .transform(value => new Date(value).toISOString()).nullable().optional();
 
 // Visibility can change; do not retain an anonymous response in browser/CDN caches.
 app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
@@ -50,6 +52,7 @@ const createSchema = z.object({
   collectionId: z.string().uuid().nullable().optional(),
   schemaId: z.string().uuid().nullable().optional(),
   schemaLocked: z.boolean().optional(),
+  expiresAt: expiresAtSchema,
   value: z.unknown(),
 }).strict();
 
@@ -66,6 +69,7 @@ const metadataSchema = z.object({
   schemaLocked: z.boolean().optional(),
   refreshSchema: z.boolean().optional(),
   locked: z.boolean().optional(),
+  expiresAt: expiresAtSchema,
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
@@ -236,7 +240,7 @@ app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }
-  if (parsed.data.locked !== undefined && !c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
+  if ((parsed.data.locked !== undefined || parsed.data.expiresAt !== undefined) && !c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
   try {
     const record = await updateBinMetadata(c.env, c.req.param("id"), parsed.data, c.req.header("If-Match"));
     if (!record) return c.json({ error: "not_found" }, 404);

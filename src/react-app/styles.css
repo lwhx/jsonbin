@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+.trash-list { display: grid; gap: 16px; margin-top: 16px; }
+.trash-list code { overflow-wrap: anywhere; }
+
 :root {
   color-scheme: light;
   font-family:

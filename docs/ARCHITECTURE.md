@@ -29,7 +29,7 @@ R2 owns all durable state.
 
 Nothing stored only in KV is considered authoritative.
 
-Current and planned object layout (system settings and trash management remain later phases):
+Current and planned object layout (system settings remain a later phase; the trash prefix is retained for legacy compatibility):
 
 ```text
 system/
@@ -70,7 +70,13 @@ A bin version is immutable. Updating a bin creates a new version and atomically 
 
 R2 ETags are used for optimistic concurrency control. Dashboard updates send `If-Match`; Merge Patch, deep writes and data-lock changes require it. Partial writes derive from one snapshot and publish through the same schema validation, immutable append and metadata CAS as full replacements.
 
-Bin deletion conditionally writes `deletedAt` to canonical metadata before archiving it under `trash/bins/<id>/meta.json`. The retained tombstone makes deletion atomic relative to locking and concurrent updates. Active reads, history and collection counts exclude tombstones; retrying deletion can finish interrupted archival. Future trash restoration must clear the canonical marker conditionally.
+Bin deletion conditionally writes `deletedAt` to canonical metadata, which is also the authoritative trash record. Active reads, history and collection counts exclude deleted and expired Bins. Legacy `trash/bins/<id>/meta.json` records are conditionally adopted when restored or purged; an active or terminal canonical record takes precedence over a stale archive.
+
+Restoration validates the existing immutable value against its pinned schema and clears the deletion marker with CAS. It clears TTL, defaults visibility to private, preserves data/schema locks and detaches unavailable collections. A new lifecycle ID prevents old trash ETags from applying to another deletion of the same Bin. It preserves the JSON version and historical objects.
+
+Permanent deletion claims a non-restorable `purging` state with CAS, deletes all version pages and legacy archives, then retains only `{id,deletedAt,purgeState:"purged"}`. Interrupted deletion can resume with its approved ETag or current trash ETag. The minimal terminal marker prevents delayed writes or legacy archive imports from reviving deleted JSON. Batch deletion accepts explicit ID/ETag pairs and reports per-item outcomes.
+
+TTL enforcement happens at request time, independently of cron or caches. A scheduled handler runs every 15 minutes in UTC to archive expired Bins (including locked ones) and resume purges. It rechecks canonical state and conditionally updates metadata, preserving concurrent deadline changes. Terminal cleanup also removes late orphan files after interrupted in-flight writes. The current scan uses R2 directly; future indexes may optimize discovery but cannot replace authoritative access checks.
 
 ### KV: disposable edge cache and indexes
 

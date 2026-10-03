@@ -1,5 +1,5 @@
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
-import type { BinMeta } from "./bins";
+import { isActiveBin, type StoredBinMeta } from "./bin-state";
 
 export type CollectionMeta = {
   id: string; name: string; description: string; slug: string;
@@ -23,17 +23,17 @@ export async function assertCollectionAvailable(env: Env, id: string | null | un
 
 export async function listCollectionBins(env: Env, id: string) {
   if (!await getCollection(env, id)) return null;
-  const bins = await listJsonObjects<BinMeta>(requireDataBucket(env), "bins/");
-  return bins.filter(bin => !bin.deletedAt && bin.collectionId === id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const bins = await listJsonObjects<StoredBinMeta>(requireDataBucket(env), "bins/");
+  return bins.filter(bin => isActiveBin(bin)).filter(bin => bin.collectionId === id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function listCollections(env: Env) {
   const bucket = requireDataBucket(env);
   const [collections, bins] = await Promise.all([
-    listJsonObjects<CollectionMeta>(bucket, "collections/"), listJsonObjects<BinMeta>(bucket, "bins/"),
+    listJsonObjects<CollectionMeta>(bucket, "collections/"), listJsonObjects<StoredBinMeta>(bucket, "bins/"),
   ]);
   const counts = new Map<string, number>();
-  for (const bin of bins) if (!bin.deletedAt && bin.collectionId) counts.set(bin.collectionId, (counts.get(bin.collectionId) ?? 0) + 1);
+  for (const bin of bins) if (isActiveBin(bin) && bin.collectionId) counts.set(bin.collectionId, (counts.get(bin.collectionId) ?? 0) + 1);
   return collections.filter(meta => meta.status !== "deleted").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(meta => ({ ...meta, binCount: counts.get(meta.id) ?? 0 }));
 }
@@ -61,8 +61,8 @@ export async function updateCollection(env: Env, id: string, input: Partial<Coll
 export async function detachBinFromCollection(env: Env, binId: string, collectionId: string) {
   const bucket = requireDataBucket(env); const binKey = `bins/${binId}/meta.json`;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const current = await getJson<BinMeta>(bucket, binKey);
-    if (!current || current.value.deletedAt || current.value.collectionId !== collectionId) return false;
+    const current = await getJson<StoredBinMeta>(bucket, binKey);
+    if (!current || !isActiveBin(current.value) || current.value.collectionId !== collectionId) return false;
     const stored = await putJson(bucket, binKey, { ...current.value, collectionId: null, updatedAt: new Date().toISOString() },
       { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
     if (stored) return true;
