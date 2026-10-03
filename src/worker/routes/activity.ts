@@ -15,7 +15,7 @@ app.get('/', async c => {
   const limit = params.get('limit'), action = params.get('action'), resourceType = params.get('resourceType');
   if ((limit !== null && (!/^[1-9]\d*$/.test(limit) || Number(limit) > 100))
     || (action !== null && !Object.hasOwn(ACTIVITY_ACTIONS, action))
-    || (resourceType !== null && !['auth', 'bin', 'collection', 'schema', 'key'].includes(resourceType))) return c.json({ error: 'invalid_activity_query' }, 400);
+    || (resourceType !== null && !['auth', 'bin', 'collection', 'schema', 'key', 'system'].includes(resourceType))) return c.json({ error: 'invalid_activity_query' }, 400);
   const query: ActivityQuery = { limit: limit === null ? 50 : Number(limit), cursor: params.get('cursor') ?? undefined,
     action: action as ActivityQuery['action'] ?? undefined, resourceType: resourceType as ActivityResourceType ?? undefined };
   try { return c.json(await listActivity(c.env, query)); }

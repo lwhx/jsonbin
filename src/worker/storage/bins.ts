@@ -1,3 +1,4 @@
+import { resolveCreateDefaults } from './settings';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
 import { assertCollectionAvailable, getCollection, detachBinFromCollection } from "./collections";
 
@@ -105,13 +106,14 @@ export async function createBin(
   if (input.schemaLocked && !binding.schemaId) throw new SchemaError("schema_required");
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const defaults = await resolveCreateDefaults(env, input, Date.parse(now));
   const json = JSON.stringify(input.value);
 
   const meta: BinMeta = {
     id,
     name: input.name,
     description: input.description ?? "",
-    visibility: input.visibility ?? "private",
+    visibility: defaults.visibility,
     collectionId: input.collectionId ?? null,
     ...binding,
     currentVersion: 1,
@@ -120,7 +122,7 @@ export async function createBin(
     schemaLocked: input.schemaLocked ?? false,
     createdAt: now,
     updatedAt: now,
-    expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
+    expiresAt: defaults.expiresAt,
   };
 
   await putJson(bucket, versionKey(id, 1), input.value);

@@ -13,11 +13,11 @@ export const identitySchema = z.object({ actor, provider: z.enum(['password', 'g
   if (actor.type === 'api_key') return provider === 'api_key' && uuid.safeParse(actor.id).success;
   return provider === 'password' ? actor.id === 'local-admin' : provider === 'github' && /^\d{1,20}$/.test(actor.id ?? '');
 });
-const entrySchema = z.object({ id: uuid, action: z.enum(actions), resourceType: z.enum(['auth', 'bin', 'collection', 'schema', 'key']),
+const entrySchema = z.object({ id: uuid, action: z.enum(actions), resourceType: z.enum(['auth', 'bin', 'collection', 'schema', 'key', 'system']),
   resourceId: uuid.nullable(), actor, provider: z.enum(['password', 'github', 'api_key', 'anonymous', 'system']),
   timestamp: z.iso.datetime(), summary: z.string(), requestId: uuid }).strict().refine(entry => {
     const [type, summary] = ACTIVITY_ACTIONS[entry.action];
-    return entry.resourceType === type && entry.summary === summary && (type === 'auth' ? entry.resourceId === null : entry.resourceId !== null)
+    return entry.resourceType === type && entry.summary === summary && ((type === 'auth' || type === 'system') ? entry.resourceId === null : entry.resourceId !== null)
       && identitySchema.safeParse({ actor: entry.actor, provider: entry.provider }).success;
   });
 export function activityKey(timestamp: number, id: string) {
@@ -30,7 +30,7 @@ function validKey(key: string) {
   return millis >= 0 && Number.isSafeInteger(millis) && activityKey(millis, match[2]) === key;
 }
 const cursorSchema = z.object({ v: z.literal(1), after: z.string().refine(key => key.startsWith('activity/') && new TextEncoder().encode(key).length <= 1024), action: z.enum(actions).nullable(),
-  resourceType: z.enum(['auth', 'bin', 'collection', 'schema', 'key']).nullable() }).strict();
+  resourceType: z.enum(['auth', 'bin', 'collection', 'schema', 'key', 'system']).nullable() }).strict();
 function decodeCursor(query: ActivityQuery) {
   if (query.cursor === undefined) return undefined;
   try {
@@ -81,7 +81,7 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
 export async function appendActivity(env: Env, input: import('../../shared/activity').ActivityInput): Promise<ActivityEntry> {
   const checked = z.object({ action: z.enum(actions), resourceId: uuid.nullable(), identity: identitySchema, requestId: uuid }).strict().parse(input);
   const [resourceType, summary] = ACTIVITY_ACTIONS[checked.action];
-  if ((resourceType === 'auth') !== (checked.resourceId === null)) throw new Error('invalid_activity');
+  if ((resourceType === 'auth' || resourceType === 'system') !== (checked.resourceId === null)) throw new Error('invalid_activity');
   const bucket = requireDataBucket(env), timestamp = Date.now();
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = crypto.randomUUID();

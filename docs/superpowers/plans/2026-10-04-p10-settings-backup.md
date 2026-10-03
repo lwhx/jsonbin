@@ -74,13 +74,13 @@
 
 **Interfaces:** 产出 `getSettings(env:Env):Promise<SettingsRecord>`、`updateSettings(env:Env,input:SettingsPatch,etag:string):Promise<SettingsRecord>`、`resolveCreateDefaults(env:Env,input:{visibility?:UserDefaults['defaultVisibility'],expiresAt?:string|null},now:number):Promise<{visibility:UserDefaults['defaultVisibility'],expiresAt:string|null}>`、`getSystemInfo(env:Env):Promise<SystemInfo>`；HTTP 层 `managementSession` 按 typeof requireSession、`readBoundedJson(request:Request,maxBytes:number):Promise<unknown>`。测试 helper `createSystemHarness(name:string)` 返回 worker/env/bucket/request/close，随机测试凭据只在内存；request 可覆盖 env，复用真实 R2 并注入读写失败。
 
-- [ ] 写 RED：get default 无 R2 对象；设置首次 CAS / 并发 CAS / 428 / 412 / 非法/损坏；省略默认与显式 private/null；修改默认不改变旧 Bin。示例断言：`assert.equal((await h.request('/system/settings')).status,200); assert.equal(await h.bucket.get('system/settings.json'),null);`。
-- [ ] Run `npm run build` 后 `node --test tests/system.test.mjs`。Expected: 新接口 404 等行为 RED，不以 helper 初始化错误作为目标失败。
-- [ ] 实现公共类型、上述设置函数和 createBin 的选择性默认读取；worker 编译配置仅启用 allowImportingTsExtensions。记录 onlyIf 条件，virtual updatedAt 为 null，持久设置更新时间必须为有效 ISO。实现逐路由 managementSession，不能对 system 子路由用通配 Session 鉴权拦截 health。
-- [ ] 写/运行状态与授权 RED：匿名 health 仍 200；管理接口匿名/Bearer+Cookie 为 401，同源失败 403；状态读失败不输出异常 canary；统计超 10000/500 不返回部分数字；无鉴权的巨型正文未读取。Expected: 针对未满足行为失败。
-- [ ] 实现 `getSystemInfo` 的只读探测/有界统计和 HTTP 真字节限制；补充 system 资源和六个固定 P10 动作（spec §11），更新封闭活动验证/筛选；仅成功设置提交记事件，活动失败不回滚设置。
-- [ ] Run `npm run typecheck`、`npm test`。Expected: 包含新 system 测试及旧活动/Worker/客户端全套 GREEN，无 skipped。
-- [ ] 提交 `feat: add system settings and server-side Bin defaults`。
+- [x] 写 RED：get default 无 R2 对象；设置首次 CAS / 并发 CAS / 428 / 412 / 非法/损坏；省略默认与显式 private/null；修改默认不改变旧 Bin。示例断言：`assert.equal((await h.request('/system/settings')).status,200); assert.equal(await h.bucket.get('system/settings.json'),null);`。
+- [x] Run `npm run build` 后 `node --test tests/system.test.mjs`。Expected: 新接口 404 等行为 RED，不以 helper 初始化错误作为目标失败。
+- [x] 实现公共类型、上述设置函数和 createBin 的选择性默认读取；worker 编译配置仅启用 allowImportingTsExtensions。记录 onlyIf 条件，virtual updatedAt 为 null，持久设置更新时间必须为有效 ISO。实现逐路由 managementSession，不能对 system 子路由用通配 Session 鉴权拦截 health。
+- [x] 写/运行状态与授权 RED：匿名 health 仍 200；管理接口匿名/Bearer+Cookie 为 401，同源失败 403；状态读失败不输出异常 canary；统计超 10000/500 不返回部分数字；无鉴权的巨型正文未读取。Expected: 针对未满足行为失败。
+- [x] 实现 `getSystemInfo` 的只读探测/有界统计和 HTTP 真字节限制；补充 system 资源和六个固定 P10 动作（spec §11），更新封闭活动验证/筛选；仅成功设置提交记事件，活动失败不回滚设置。
+- [x] Run `npm run typecheck`、`npm test`。Expected: 包含新 system 测试及旧活动/Worker/客户端全套 GREEN，无 skipped。
+- [x] 提交 `feat: add system settings and server-side Bin defaults`。
 
 ## Task 2: 共用业务格式、图校验和独立可读的 ZIP
 
@@ -202,4 +202,4 @@ spec §1 范围/备份选择由 Tasks 2–8 承接；§2 默认值由 1/7 承接
 
 共享接口以本节命名为准，特别是 defaultTtlSeconds、BackupScope.kind、RestoreResource.data、restoreFingerprint / originalUploadedAt 和结果 status；后续任务不得另造同义字段。状态接口与设置虽可单独使用，但普通导入依赖默认值、备份包含配置，恢复状态又进入统计，因此按一个已确认 P10 计划连续执行。追加测试若已经覆盖现有正确行为，记录 GREEN 事实，不人为破坏代码；每项新增交付目标必须先观察实际 RED。
 
-用户已选择原生执行方式，此计划沿用，不再次询问方式。待用户审阅本实施计划后，连续执行九项任务，不逐任务请求确认；最终按已有 main 合并与推送授权交付。
+用户已选择原生执行方式，此计划沿用，不再次询问方式。用户已确认本实施计划，连续执行九项任务，不逐任务请求确认；最终按已有 main 合并与推送授权交付。

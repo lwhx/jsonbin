@@ -1,3 +1,4 @@
+import systemRoutes from './routes/system';
 import { recordActivity } from "./activity";
 import { pruneActivity } from "./storage/activity";
 import { Hono } from "hono";
@@ -35,6 +36,7 @@ app.use(
   }),
 );
 
+app.route("/api/v1/system", systemRoutes);
 app.route("/api/v1/activity", activityRoutes);
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/keys", keyRoutes);

@@ -1,4 +1,7 @@
 export const ACTIVITY_ACTIONS = {
+  'system.settings_updated': ['system', '修改系统默认设置'], 'system.exported': ['system', '导出业务备份'],
+  'bin.exported': ['bin', '导出数据仓'], 'bin.imported': ['bin', '导入数据仓'],
+  'collection.imported': ['collection', '导入集合'], 'schema.imported': ['schema', '导入数据模型'],
   'auth.login_succeeded': ['auth', '登录成功'], 'auth.login_failed': ['auth', '登录失败'],
   'bin.created': ['bin', '创建数据仓'], 'bin.updated': ['bin', '更新数据仓 JSON'],
   'bin.metadata_updated': ['bin', '修改数据仓设置'], 'bin.version_restored': ['bin', '恢复历史版本'],
@@ -9,7 +12,7 @@ export const ACTIVITY_ACTIONS = {
   'key.created': ['key', '创建 API 密钥'], 'key.revoked': ['key', '撤销 API 密钥'],
 } as const;
 export type ActivityAction = keyof typeof ACTIVITY_ACTIONS;
-export type ActivityResourceType = 'auth' | 'bin' | 'collection' | 'schema' | 'key';
+export type ActivityResourceType = 'system' | 'auth' | 'bin' | 'collection' | 'schema' | 'key';
 export type ActivityIdentity = { actor: { type: 'session' | 'api_key' | 'anonymous' | 'system'; id: string | null };
   provider: 'password' | 'github' | 'api_key' | 'anonymous' | 'system' };
 export type ActivityEntry = ActivityIdentity & { id: string; action: ActivityAction; resourceType: ActivityResourceType;
