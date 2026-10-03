@@ -19,6 +19,7 @@ import {
   TerminalSquare,
   Zap,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 type Health = {
@@ -31,7 +32,23 @@ type Health = {
   };
 };
 
-const nav = [
+type NavLink = {
+  label: string;
+  icon: LucideIcon;
+  active?: boolean;
+  divider?: never;
+};
+
+type NavDivider = {
+  label: string;
+  divider: true;
+  icon?: never;
+  active?: never;
+};
+
+type NavItem = NavLink | NavDivider;
+
+const nav: NavItem[] = [
   { label: "Overview", icon: LayoutDashboard, active: true },
   { label: "Bins", icon: FileJson2 },
   { label: "Collections", icon: Boxes },
@@ -43,7 +60,7 @@ const nav = [
   { divider: true, label: "System" },
   { label: "Trash", icon: Archive },
   { label: "Settings", icon: Settings },
-] as const;
+];
 
 const recent = [
   { name: "cloudflare-config", action: "Updated", source: "Dashboard", time: "2 min ago" },
@@ -95,7 +112,7 @@ function App() {
 
         <nav className="nav-list" aria-label="Main navigation">
           {nav.map((item, index) => {
-            if ("divider" in item && item.divider) {
+            if (item.divider) {
               return (
                 <div className="nav-section" key={`section-${index}`}>
                   {item.label}
