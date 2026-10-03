@@ -9,7 +9,6 @@ import {
   Code2,
   Database,
   FileJson2,
-  Github,
   KeyRound,
   LayoutDashboard,
   LockKeyhole,
@@ -310,7 +309,7 @@ function LoginScreen({
               <span>or</span>
             </div>
             <a className="github-login" href="/api/v1/auth/github">
-              <Github size={17} />
+              <Code2 size={17} />
               Continue with GitHub
             </a>
           </>
