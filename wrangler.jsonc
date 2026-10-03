@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jsonbin",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-03",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": {
+    "enabled": true
+  }
+
+  // Enable these after creating the Cloudflare resources:
+  //
+  // "kv_namespaces": [
+  //   {
+  //     "binding": "CACHE",
+  //     "id": "<KV_NAMESPACE_ID>"
+  //   }
+  // ],
+  //
+  // "r2_buckets": [
+  //   {
+  //     "binding": "DATA",
+  //     "bucket_name": "jsonbin-data"
+  //   }
+  // ]
+}

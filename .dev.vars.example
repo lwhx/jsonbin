@@ -1,0 +1,11 @@
+APP_ORIGIN=http://localhost:5173
+
+# Local admin login (single-user mode)
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=
+SESSION_SECRET=
+
+# Optional GitHub OAuth login
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_ALLOWED_USER_ID=

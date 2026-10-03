@@ -1,81 +1,105 @@
-## NAME
+# JSONBin v3
 
-[`jsonbin.org`](https://jsonbin.org) - A personal JSON store as a RESTful service
+A private, Cloudflare-native JSON storage and configuration platform.
 
-## SYNOPSIS
+This repository started from Remy Sharp's original JSONBin project. The legacy code is preserved on the **`legacy-v2.6.4`** branch. The modern implementation lives on **`cloudflare-v3`** and is a clean Cloudflare rewrite.
 
-curl `https://jsonbin.org/remy/blog`
-<!-- <p>something-on-STDOUT | <code>jsonbin</code></p> -->
+## Direction
 
-To save data, you'll first need to <a href="/_/login">sign in</a> to get an API key.
+JSONBin v3 is designed for a single owner and for scripts, automation, Workers, VPS tools and small applications that need a reliable JSON/configuration API.
 
-## DESCRIPTION
+### Stack
 
-`jsonbin.org` is a personal key/value JSON store as a service. Protected behind authentication and API key requests, data is stored as JSON and can be deep linked. A permissioning model also allows specific paths to your store to become public to share with others.
+- Cloudflare Workers
+- Cloudflare R2 — canonical durable storage
+- Cloudflare KV — cache and rebuildable indexes
+- Hono + TypeScript
+- React + Vite
+- Cloudflare Vite Plugin
+- Tailwind CSS
 
-The aim of the project is to provide a simplified data store for tinkerers.
+No MongoDB, D1, Redis or standalone server is required.
 
-**Important:** jsonbin is currently in open beta. If you have questions, please get [in touch](#author).
+## Current status
 
-## Authentication
+The `cloudflare-v3` branch currently contains the new application foundation:
 
-By default all user store data is protected behind auth either via browser sign in, or an `authorization` token. The token is your [`apikey`](/_/me/apikey). For example:
+- Cloudflare Worker + Hono API
+- React dashboard shell
+- light/dark theme
+- responsive layout
+- system health endpoint
+- R2/KV binding contract
+- v3 architecture and security model
 
-```
-curl -X POST https://jsonbin.org/remy/blog \
-     -H 'Authorization: token abcd-xyz-123' \
-     -d '{ url: "https://remysharp.com" }'
-```
+The next implementation layers are authentication, R2 storage primitives and JSON Bin CRUD.
 
-## Endpoints
+## Local development
 
-A private namespace URL "`_`" is used for jsonbin specific endpoints:
-
-* [`/_/help`](/_/help) This page.
-* [`/_/login`](/_/login) Auth with github.
-* [`/_/logout`](/_/logout) Clear your session.
-* [`/_/me`](/_/me) Your full profile.
-* [`/_/me/apikey`](/_/me/apikey) Your API key.
-* [`/_/me/apikey`](/_/me/apikey) DELETE to revoke your current key.
-* [`/_/me/username`](/_/me/username) Your username.
-* [`/_/me/public`](/_/me/public) Your public paths.
-* [`/_/me/:path`](/_/me/) Deep link to profile properties.
-
-The following methods with your `authorization` header will access your data store against `https://jsonbin.org/:username/`:
-
-* `GET` return given path mapped to a JSON path.
-* `POST` store the payload (supports JSON and files).
-* `PATCH` merge the payload with the endpoint.
-* `DELETE` store path.
-
-By default all endpoints are private, but you can modify a specific entry point to be public by default by changing the permissions:
-
-* PUT `/:username/:path/_perms` make the `:path` public.
-* DELETE `/:username/:path/_perms` make `:path` private.
-* GET `/:username/:path/_perms` check permissions of `:path`.
-
-Public endpoints accept `GET` requests without the `authorization` header.
-
-## Example usage
-
-You can use jsonbin as a shared clipboard across machines. Creating an alias to upload `STDIN` via `curl` could be posted to a public URL:
-
-```
-alias jsonbin="curl -X 'POST' \
-      -H'authorization: token abcd-xyz-123' \
-      -F'content=@-' \
-      https://jsonbin.org/remy/clipboard"
-echo "foo" | jsonbin
+```bash
+npm install
+cp .dev.vars.example .dev.vars
+npm run dev
 ```
 
-## BUGS
+Health check:
 
-This project lives at [github/jsonbin](https://github.com/remy/jsonbin). Please report bugs to [github/jsonbin/issues](https://github.com/remy/jsonbin/issues).
+```text
+GET /api/v1/system/health
+```
 
-## AUTHOR
+## Cloudflare resources
 
-Remy Sharp &lt;[remy@leftlogic.com](mailto:remy@leftlogic.com)&gt;
+Create the resources before enabling the bindings in `wrangler.jsonc`.
 
-## LICENSE
+Example:
 
-[MIT](https://rem.mit-license.org)
+```bash
+npx wrangler r2 bucket create jsonbin-data
+npx wrangler kv namespace create CACHE
+```
+
+Then place the generated KV namespace ID in `wrangler.jsonc` and enable:
+
+- `DATA` -> R2 bucket
+- `CACHE` -> KV namespace
+
+Generate Worker types after bindings change:
+
+```bash
+npm run cf:types
+```
+
+## Build and deploy
+
+```bash
+npm run typecheck
+npm run build
+npm run deploy
+```
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Roadmap
+
+The first stable v3 release is planned to include:
+
+- single-user username/password login
+- GitHub OAuth restricted to one GitHub account
+- JSON Bin CRUD
+- collections
+- schemas and validation
+- API keys and scoped permissions
+- deep-path access
+- JSON Merge Patch
+- immutable version history
+- diff and restore
+- ETag / If-Match conflict protection
+- data/schema locks
+- TTL
+- trash
+- import/export
+- search
+- polished desktop/mobile dashboard
