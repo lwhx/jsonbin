@@ -91,7 +91,7 @@ Dashboard login will support:
 
 There is no public registration.
 
-Password credentials are stored as a salted password hash. Session cookies are signed, HttpOnly, Secure and SameSite protected.
+Local password login reads ADMIN_USERNAME and ADMIN_PASSWORD from Cloudflare Worker variables/secrets. The plaintext password is not committed to Git. Session cookies are signed, HttpOnly, Secure on HTTPS and SameSite protected.
 
 API authentication is separate from dashboard sessions.
 
@@ -193,6 +193,8 @@ Primary sections:
 - API Docs
 - Trash
 - Settings
+
+The implementation order and acceptance criteria are maintained in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 The Bin detail view will eventually contain:
 

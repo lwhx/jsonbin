@@ -22,17 +22,19 @@ No MongoDB, D1, Redis or standalone server is required.
 
 ## Current status
 
-The `main` branch currently contains the new application foundation:
+The `main` branch currently has a deployable Cloudflare-native v3 foundation with:
 
 - Cloudflare Worker + Hono API
-- React dashboard shell
-- light/dark theme
-- responsive layout
-- system health endpoint
-- R2/KV binding contract
-- v3 architecture and security model
+- React dashboard with Chinese UI
+- username/password login and signed sessions
+- optional GitHub OAuth
+- R2 + KV bindings
+- basic Bin list/create/read/update/delete backend
+- ETag / If-Match groundwork
+- GitHub Actions typecheck + production build
+- Cloudflare automatic deployment
 
-The next implementation layers are authentication, R2 storage primitives and JSON Bin CRUD.
+The next development target is the Bin detail page and JSON editor.
 
 ## Local development
 
@@ -106,9 +108,10 @@ npm run typecheck
 npm run build
 ```
 
-## Architecture
+## Documentation
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- [Development plan](docs/DEVELOPMENT.md) — step-by-step implementation order and acceptance criteria
+- [Architecture](docs/ARCHITECTURE.md) — storage, runtime and security architecture
 
 ## Roadmap
 
