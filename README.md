@@ -2,7 +2,7 @@
 
 A private, Cloudflare-native JSON storage and configuration platform.
 
-This repository started from Remy Sharp's original JSONBin project. The legacy code is preserved on the **`legacy-v2.6.4`** branch. The modern implementation lives on **`cloudflare-v3`** and is a clean Cloudflare rewrite.
+This repository started from Remy Sharp's original JSONBin project. The legacy code is preserved on the **`legacy-v2.6.4`** branch. The modern implementation lives on **`main`** and is a clean Cloudflare rewrite.
 
 ## Direction
 
@@ -22,7 +22,7 @@ No MongoDB, D1, Redis or standalone server is required.
 
 ## Current status
 
-The `cloudflare-v3` branch currently contains the new application foundation:
+The `main` branch currently contains the new application foundation:
 
 - Cloudflare Worker + Hono API
 - React dashboard shell
@@ -72,7 +72,7 @@ npm run cf:types
 
 ## Build and deploy
 
-Cloudflare Workers Builds should use the `cloudflare-v3` production branch.
+Cloudflare Workers Builds should use the `main` production branch.
 
 Build command:
 

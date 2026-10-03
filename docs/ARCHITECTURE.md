@@ -220,4 +220,4 @@ The editor experience will use Monaco and the history comparison will use Monaco
 
 The original Remy Sharp JSONBin code is preserved on the `legacy-v2.6.4` branch.
 
-The `cloudflare-v3` branch is a clean reimplementation and does not attempt runtime compatibility with the old Express/MongoDB stack.
+The `main` branch is a clean reimplementation and does not attempt runtime compatibility with the old Express/MongoDB stack.

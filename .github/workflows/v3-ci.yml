@@ -3,10 +3,10 @@ name: v3 CI
 on:
   push:
     branches:
-      - cloudflare-v3
+      - main
   pull_request:
     branches:
-      - cloudflare-v3
+      - main
 
 permissions:
   contents: read
