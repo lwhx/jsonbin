@@ -861,7 +861,7 @@ TTL 规则：
 - `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 71 项通过，0 失败、0 跳过。构建保留既有 Monaco 大 chunk 提示。
 - 覆盖 TTL 输入/锁/ETag、所有读取入口、Cron 幂等与期限竞争、旧记录迁移、模型约束、分页清理、故障续作、恢复/永久删除竞争、迟到写入清理和批量快照保护。Scope 矩阵扩展至 9 种单权限 × 30 个资源路由及组合权限。
 - Chromium 浏览器验收 31 项通过，0 失败、0 跳过；新增创建/设置 TTL、剩余时间、真实到期后恢复、永久删除确认/冲突、批量部分失败与重试、网络/Session 错误、手机深色布局。既有功能回归通过。
-- GitHub CI / Workers Builds 待提交后补充；生产功能及真实 Cron 运行结果仍待确认。
+- P7 功能提交 `f75a9dfd37a6bc3e900a679c08167c4f5e5a658f` 的 [GitHub CI 37132071665](https://github.com/lwhx/jsonbin/actions/runs/37132071665) 成功；`Workers Builds: jsonbin` 成功，build `acb22f3c-53e1-464e-b9e6-91ea5f8006cb`，version `58faa799-ce29-48c9-a25c-e1d0b121308d`。生产功能及真实 Cron 手动验收仍待确认。
 
 ---
 
@@ -1039,6 +1039,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P7 TTL 与回收站已完成本地开发与验收，等待本次提交的 CI / Workers Builds 结果。生产功能及真实 Cron 运行验收单独保留待确认状态。
+P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
 下一阶段为 **P8 活动记录**：记录登录、Bin/集合/模型及密钥管理操作，控制记录量，严格排除 Secret、Cookie、Authorization、完整 Token 和敏感 JSON 内容。
