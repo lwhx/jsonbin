@@ -47,7 +47,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
 | API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
-| 活动记录 | ✅ 本地验收通过，远端检查待核对 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
+| 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
 | 设置 | ⬜ 未开始 | 只有导航占位 |
@@ -905,7 +905,10 @@ GET /api/v1/activity?limit=50&cursor=...&action=...&resourceType=...
 - `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 **84 项通过，0 失败、0 跳过**。
 - Chromium 浏览器测试 **36 项通过，0 失败、0 跳过**，包含全部 P0–P7 回归与 5 项活动页验收。
 - 已覆盖可信身份、登录/OAuth、全操作矩阵、Scope 边界、Secret canary 排除、记录故障/条件冲突、同毫秒并发、跨 R2 页过滤/损坏记录读取预算、页尾无效键、大量损坏键的初始/续页前进、OAuth 网络/JSON 异常、2000 条保留、故障续作、后台 CAS 与幂等迁移、并发新增/清理。
-- GitHub CI / Workers Builds：推送后核对具体提交；生产功能及真实 Cron 手动验收仍待公开 URL 和适用认证。
+- 功能提交：`2ea35a6` 已合并并推送到 main。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37136840897) 对功能提交 `2ea35a6` 报告 success，包含类型检查、生产构建、84 项 Worker/客户端测试和 36 项浏览器验收。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/53499be9-9162-4b9c-ab17-46c98afad16c) 对 `2ea35a6` 报告 success，版本 ID 为 `c615b660-6c5e-413a-b2f3-7bd03f8c7bd7`。
+- 生产功能及真实 Cron 手动验收仍待公开 URL 和适用认证。
 
 ---
 
@@ -1047,4 +1050,4 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录已实现并通过本地验收，待本次提交的 CI / Workers Builds 核对；生产功能/真实 Cron 手动验收仍单独保留。下一开发阶段为 **P9 API 文档**。
+P8 活动记录已实现，已合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。下一开发阶段为 **P9 API 文档**。
