@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import { verifyPassword } from "../auth/password";
 import {
@@ -14,6 +14,19 @@ const app = new Hono<{ Bindings: Env }>();
 const loginSchema = z.object({
   username: z.string().min(1).max(128),
   password: z.string().min(1).max(512),
+});
+
+app.get("/config", (c) => {
+  return c.json({
+    passwordEnabled: Boolean(
+      c.env.ADMIN_USERNAME && c.env.ADMIN_PASSWORD_HASH,
+    ),
+    githubEnabled: Boolean(
+      c.env.GITHUB_CLIENT_ID &&
+        c.env.GITHUB_CLIENT_SECRET &&
+        c.env.GITHUB_ALLOWED_USER_ID,
+    ),
+  });
 });
 
 app.post("/login", async (c) => {
@@ -79,7 +92,7 @@ app.get("/github", (c) => {
   const authorize = new URL("https://github.com/login/oauth/authorize");
   authorize.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
   authorize.searchParams.set("redirect_uri", callback);
-  authorize.searchParams.set("scope", "read:user user:email");
+  authorize.searchParams.set("scope", "read:user");
   authorize.searchParams.set("state", state);
 
   return c.redirect(authorize.toString());
@@ -93,6 +106,8 @@ app.get("/github/callback", async (c) => {
   if (!code || !state || !expectedState || state !== expectedState) {
     return c.json({ error: "invalid_oauth_state" }, 400);
   }
+
+  deleteCookie(c, "jsonbin_oauth_state", { path: "/" });
 
   if (
     !c.env.GITHUB_CLIENT_ID ||

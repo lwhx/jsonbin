@@ -30,6 +30,36 @@ function versionKey(id: string, version: number) {
   return `bins/${id}/versions/${String(version).padStart(6, "0")}.json`;
 }
 
+export async function listBins(env: Env): Promise<BinMeta[]> {
+  const bucket = requireDataBucket(env);
+  const items: BinMeta[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await bucket.list({
+      prefix: "bins/",
+      cursor,
+      limit: 1000,
+    });
+
+    const metaKeys = page.objects
+      .map((object) => object.key)
+      .filter((key) => key.endsWith("/meta.json"));
+
+    const records = await Promise.all(
+      metaKeys.map((key) => getJson<BinMeta>(bucket, key)),
+    );
+
+    for (const record of records) {
+      if (record) items.push(record.value);
+    }
+
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 export async function createBin(
   env: Env,
   input: {
@@ -81,7 +111,9 @@ export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
     versionKey(id, metaObject.value.currentVersion),
   );
   if (!valueObject) {
-    throw new Error(`Bin ${id} is missing version ${metaObject.value.currentVersion}`);
+    throw new Error(
+      `Bin ${id} is missing version ${metaObject.value.currentVersion}`,
+    );
   }
 
   return {

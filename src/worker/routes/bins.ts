@@ -5,6 +5,7 @@ import {
   createBin,
   deleteBin,
   getBin,
+  listBins,
   updateBin,
 } from "../storage/bins";
 
@@ -29,6 +30,14 @@ const createSchema = z.object({
 
 const updateSchema = z.object({
   value: z.unknown(),
+});
+
+app.get("/", async (c) => {
+  const items = await listBins(c.env);
+  return c.json({
+    items,
+    total: items.length,
+  });
 });
 
 app.post("/", async (c) => {

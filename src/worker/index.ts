@@ -32,7 +32,7 @@ app.get("/api/v1/system/health", (c) => {
   return c.json({
     ok: true,
     service: "jsonbin",
-    version: "3.0.0-alpha.2",
+    version: "3.0.0-alpha.3",
     runtime: "cloudflare-workers",
     storage: {
       r2: Boolean(c.env.DATA),
