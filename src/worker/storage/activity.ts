@@ -29,12 +29,12 @@ function validKey(key: string) {
   const millis = DATE_MAX - Number(match[1]);
   return millis >= 0 && Number.isSafeInteger(millis) && activityKey(millis, match[2]) === key;
 }
-const cursorSchema = z.object({ v: z.literal(1), after: z.string().refine(validKey), action: z.enum(actions).nullable(),
+const cursorSchema = z.object({ v: z.literal(1), after: z.string().refine(key => key.startsWith('activity/') && new TextEncoder().encode(key).length <= 1024), action: z.enum(actions).nullable(),
   resourceType: z.enum(['auth', 'bin', 'collection', 'schema', 'key']).nullable() }).strict();
 function decodeCursor(query: ActivityQuery) {
   if (query.cursor === undefined) return undefined;
   try {
-    if (query.cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(query.cursor)) throw new Error();
+    if (query.cursor.length > 16384 || !/^[A-Za-z0-9_-]+$/.test(query.cursor)) throw new Error();
     const value = cursorSchema.parse(JSON.parse(new TextDecoder().decode(base64UrlDecode(query.cursor))));
     if (value.action !== (query.action ?? null) || value.resourceType !== (query.resourceType ?? null)) throw new Error();
     return value.after;
@@ -52,9 +52,12 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
     const page = await bucket.list({ prefix: 'activity/', cursor, startAfter: cursor ? undefined : after, limit: 200, include: ['customMetadata'] });
     for (let index = 0; index < page.objects.length; index++) {
       const object = page.objects[index]; scanned++;
-      // Invalid keys are never used as cursor anchors or read paths.
-      if (!validKey(object.key)) continue;
+      // Every scanned key advances the list marker; only canonical keys are read.
       after = object.key;
+      if (!validKey(object.key)) {
+        if (scanned >= 1000) return result(index < page.objects.length - 1 || page.truncated);
+        continue;
+      }
       const metadata = object.customMetadata;
       if ((!query.action || metadata?.action === query.action) && (!query.resourceType || metadata?.resourceType === query.resourceType)) {
         gets++;

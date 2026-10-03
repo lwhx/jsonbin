@@ -123,56 +123,62 @@ app.get("/github/callback", async (c) => {
 
   const callback = new URL("/api/v1/auth/github/callback", c.req.url).toString();
 
-  const tokenResponse = await fetch(
-    "https://github.com/login/oauth/access_token",
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "jsonbin-cloudflare-v3",
+  let tokenData: { access_token?: string; error?: string };
+  try {
+    const tokenResponse = await fetch(
+      "https://github.com/login/oauth/access_token",
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": "jsonbin-cloudflare-v3",
+        },
+        body: JSON.stringify({
+          client_id: c.env.GITHUB_CLIENT_ID,
+          client_secret: c.env.GITHUB_CLIENT_SECRET,
+          code,
+          redirect_uri: callback,
+        }),
       },
-      body: JSON.stringify({
-        client_id: c.env.GITHUB_CLIENT_ID,
-        client_secret: c.env.GITHUB_CLIENT_SECRET,
-        code,
-        redirect_uri: callback,
-      }),
-    },
-  );
+    );
 
-  if (!tokenResponse.ok) {
-    return loginFailure(c, "github_token_exchange_failed", 502);
+    if (!tokenResponse.ok) {
+      return loginFailure(c, "github_token_exchange_failed", 502);
+    }
+
+    tokenData = (await tokenResponse.json()) as {
+      access_token?: string;
+      error?: string;
+    };
+  } catch { return loginFailure(c, "github_token_exchange_failed", 502); }
+
+  if (!tokenData?.access_token) {
+    return loginFailure(c, "github_token_missing", 401);
   }
 
-  const tokenData = (await tokenResponse.json()) as {
-    access_token?: string;
-    error?: string;
-  };
+  let githubUser: { id: number; login: string };
+  try {
+    const userResponse = await fetch("https://api.github.com/user", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${tokenData.access_token}`,
+        "User-Agent": "jsonbin-cloudflare-v3",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
 
-  if (!tokenData.access_token) {
-    return loginFailure(c, tokenData.error ?? "github_token_missing", 401);
-  }
+    if (!userResponse.ok) {
+      return loginFailure(c, "github_user_lookup_failed", 502);
+    }
 
-  const userResponse = await fetch("https://api.github.com/user", {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${tokenData.access_token}`,
-      "User-Agent": "jsonbin-cloudflare-v3",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
+    githubUser = (await userResponse.json()) as {
+      id: number;
+      login: string;
+    };
+  } catch { return loginFailure(c, "github_user_lookup_failed", 502); }
 
-  if (!userResponse.ok) {
-    return loginFailure(c, "github_user_lookup_failed", 502);
-  }
-
-  const githubUser = (await userResponse.json()) as {
-    id: number;
-    login: string;
-  };
-
-  if (String(githubUser.id) !== String(c.env.GITHUB_ALLOWED_USER_ID)) {
+  if (!githubUser || String(githubUser.id) !== String(c.env.GITHUB_ALLOWED_USER_ID)) {
     return loginFailure(c, "github_user_not_allowed", 403);
   }
 

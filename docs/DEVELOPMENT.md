@@ -889,7 +889,7 @@ GET /api/v1/activity?limit=50&cursor=...&action=...&resourceType=...
 
 - 仅管理 Session 可读，匿名/过期 Session 返回 401；显式 Authorization 返回 401 `session_required`，即使带 Cookie 也不回退。不新增活动 Scope，所有现有 API Key 权限均不能读取活动列表。
 - `Cache-Control: no-store`；limit 默认 50、范围 1–100，action/resourceType 为封闭枚举。非法/重复/未知参数及错误/过长/跨筛选游标返回 400；存储错误返回通用 500。
-- 游标绑定筛选条件和标准对象键；新记录进入不重复已读页，清理后的旧锚点可继续读取。每请求最多扫描 1000 个对象、最多 40 次正文读取；达到预算可能返回少于 limit 或空页，nextCursor 非 null 时继续分页。
+- 游标绑定筛选条件和 activity/ 内的扫描锚点（最多 1024 字节，编码游标最多 16384 字符）；新记录进入不重复已读页，清理后的旧锚点可继续读取。每请求最多扫描 1000 个对象、最多 40 次正文读取；达到预算可能返回少于 limit 或空页，nextCursor 非 null 时继续分页。
 - `activity/<反向毫秒时间>-<UUID>.json` 使用条件创建，避免同毫秒/并发覆盖；时间来源是服务端时钟，不承诺严格跨请求提交顺序。读取严格校验，异常对象不回传任意字段。
 
 隐私及故障语义：
@@ -902,9 +902,9 @@ GET /api/v1/activity?limit=50&cursor=...&action=...&resourceType=...
 
 本地验收（2026-10-03）：
 
-- `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 **83 项通过，0 失败、0 跳过**。
+- `npm run typecheck`、生产构建通过；完整 Worker/客户端测试 **84 项通过，0 失败、0 跳过**。
 - Chromium 浏览器测试 **36 项通过，0 失败、0 跳过**，包含全部 P0–P7 回归与 5 项活动页验收。
-- 已覆盖可信身份、登录/OAuth、全操作矩阵、Scope 边界、Secret canary 排除、记录故障/条件冲突、同毫秒并发、跨 R2 页过滤/损坏记录读取预算、页尾无效键、2000 条保留、故障续作、后台 CAS 与幂等迁移、并发新增/清理。
+- 已覆盖可信身份、登录/OAuth、全操作矩阵、Scope 边界、Secret canary 排除、记录故障/条件冲突、同毫秒并发、跨 R2 页过滤/损坏记录读取预算、页尾无效键、大量损坏键的初始/续页前进、OAuth 网络/JSON 异常、2000 条保留、故障续作、后台 CAS 与幂等迁移、并发新增/清理。
 - GitHub CI / Workers Builds：推送后核对具体提交；生产功能及真实 Cron 手动验收仍待公开 URL 和适用认证。
 
 ---

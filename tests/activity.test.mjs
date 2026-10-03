@@ -55,19 +55,22 @@ test('same-millisecond writes have unique immutable activity IDs and ignore clie
 test('OAuth success and failures persist only verified identity and fixed summaries', async t => {
   const marker = randomBytes(32).toString('hex'), state = randomBytes(16).toString('hex'); let mode = 'success';
   t.mock.method(globalThis, 'fetch', async url => {
-    if (String(url).includes('access_token')) return new Response(JSON.stringify(mode === 'missing' ? {} : { access_token: marker }), { status: mode === 'exchange' ? 500 : 200, headers: { 'Content-Type': 'application/json' } });
+    const tokenEndpoint = String(url).includes('access_token');
+    if (mode === (tokenEndpoint ? 'exchange-network' : 'lookup-network')) throw new Error(marker);
+    if (mode === (tokenEndpoint ? 'exchange-json' : 'lookup-json')) return new Response('invalid ' + marker);
+    if (tokenEndpoint) return new Response(JSON.stringify(mode === 'missing' ? {} : { access_token: marker }), { status: mode === 'exchange' ? 500 : 200, headers: { 'Content-Type': 'application/json' } });
     return new Response(JSON.stringify({ id: mode === 'denied' ? 999 : 123, login: marker }), { status: mode === 'lookup' ? 500 : 200, headers: { 'Content-Type': 'application/json' } });
   });
   const bindings = { ...env, GITHUB_CLIENT_ID: marker, GITHUB_CLIENT_SECRET: marker, GITHUB_ALLOWED_USER_ID: '123' };
   const before = (await activities()).length;
   assert.equal((await request('/auth/github/callback?code=' + marker + '&state=wrong', { headers: { Cookie: `jsonbin_oauth_state=${state}` } }, bindings)).status, 400);
-  for (const [failure, status] of [['exchange', 502], ['missing', 401], ['lookup', 502], ['denied', 403], ['success', 302]]) {
+  for (const [failure, status] of [['exchange-network', 502], ['exchange-json', 502], ['lookup-network', 502], ['lookup-json', 502], ['exchange', 502], ['missing', 401], ['lookup', 502], ['denied', 403], ['success', 302]]) {
     mode = failure;
     assert.equal((await request('/auth/github/callback?code=' + marker + '&state=' + state, { headers: { Cookie: `jsonbin_oauth_state=${state}` } }, bindings)).status, status);
   }
-  const entries = await activities(); assert.equal(entries.length - before, 6);
+  const entries = await activities(); assert.equal(entries.length - before, 10);
   assert.ok(entries.some(e => e.action === 'auth.login_succeeded' && e.actor.id === '123' && e.provider === 'github'));
-  assert.equal(entries.filter(e => e.action === 'auth.login_failed' && e.actor.type === 'anonymous').length, 5);
+  assert.equal(entries.filter(e => e.action === 'auth.login_failed' && e.actor.type === 'anonymous').length, 9);
   assert.ok(!JSON.stringify(entries).includes(marker)); assert.ok(!JSON.stringify(entries).includes(state));
 });
 
@@ -122,4 +125,31 @@ test('Cron emits purged only for its own actual final CAS and never for tombston
   } }) };
   await app.scheduled({}, raced);
   assert.equal((await activities('&action=bin.purged')).filter(e => e.resourceId === second.meta.id && e.action === 'bin.purged' && e.actor.type === 'system').length, 0);
+});
+
+test('malformed-key scan budgets advance both initial and existing cursors', async () => {
+  const entry = { id: crypto.randomUUID(), action: 'auth.login_failed', resourceType: 'auth', resourceId: null,
+    actor: { type: 'anonymous', id: null }, provider: 'anonymous', timestamp: new Date().toISOString(),
+    summary: '登录失败', requestId: crypto.randomUUID() };
+  const key = `activity/${String(8640000000000000 - Date.parse(entry.timestamp)).padStart(16, '0')}-${entry.id}.json`;
+  const invalid = Array.from({ length: 1000 }, (_, i) => ({ key: 'activity/0000000000000000~' + String(i).padStart(4, '0') }));
+  for (const withAnchor of [false, true]) {
+    const anchor = `activity/0000000000000000-${crypto.randomUUID()}.json`;
+    const objects = [...(withAnchor ? [{ key: anchor }] : []), ...invalid, { key, customMetadata: { action: entry.action, resourceType: entry.resourceType } }];
+    let lists = 0, gets = 0;
+    const bindings = { ...env, DATA: adaptedBucket({ list: async options => {
+      lists++; assert.equal(options.prefix, 'activity/');
+      const start = options.cursor ? Number(options.cursor) : options.startAfter ? objects.findIndex(o => o.key === options.startAfter) + 1 : 0;
+      const end = Math.min(start + options.limit, objects.length);
+      return { objects: objects.slice(start, end), truncated: end < objects.length, cursor: String(end) };
+    }, get: async path => {
+      gets++; assert.ok(path === anchor || path === key);
+      return path === key ? { json: async () => entry } : null;
+    } }) };
+    let cursor = withAnchor ? Buffer.from(JSON.stringify({ v: 1, after: anchor, action: null, resourceType: null })).toString('base64url') : undefined;
+    const first = await (await request('/activity' + (cursor ? '?cursor=' + cursor : ''), {}, bindings)).json();
+    assert.deepEqual(first.items, []); assert.ok(first.nextCursor); assert.notEqual(first.nextCursor, cursor); assert.equal(lists, 5); assert.equal(gets, 0);
+    const second = await (await request('/activity?cursor=' + first.nextCursor, {}, bindings)).json();
+    assert.deepEqual(second.items, [entry]); assert.equal(second.nextCursor, null);
+  }
 });
