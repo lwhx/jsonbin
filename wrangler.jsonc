@@ -9,16 +9,15 @@
   },
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "5761f7b90a4d479b955fa4ac8b69df6e"
+    }
+  ]
 
-  // Enable these after creating the Cloudflare resources:
-  //
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "CACHE",
-  //     "id": "<KV_NAMESPACE_ID>"
-  //   }
-  // ],
+  // Enable after creating the R2 bucket:
   //
   // "r2_buckets": [
   //   {
