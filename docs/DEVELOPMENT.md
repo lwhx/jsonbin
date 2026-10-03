@@ -44,7 +44,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
-| 数据模型 | ✅ 本地验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；CI 与 Workers Builds 待核实 |
+| 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
 | API 密钥 | ⬜ 未开始 | 只有导航占位 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
@@ -531,7 +531,7 @@ GET    /api/v1/collections/:id/bins
 
 ## P4 数据模型 / JSON Schema
 
-状态：✅ 后端、界面及本地验收完成；GitHub CI / Workers Builds 待推送后核实，生产功能验收待确认。
+状态：✅ 后端、界面、本地验收及 GitHub CI 完成；Cloudflare Workers Builds 成功，生产功能验收待确认。
 
 采用 `@cfworker/json-schema` 4.1.1 解释执行 JSON Schema，Zod 只负责 API 请求结构校验。Workers 禁止运行时 `eval` / `new Function`，因此没有使用 AJV 的常规动态编译方式。官方 Draft 7 meta-schema 随源码保存，许可证见 [JSON Schema 许可](licenses/JSON-Schema.txt)。
 
@@ -605,7 +605,8 @@ Bin 绑定规则：
 - 类型检查、生产构建通过。
 - Worker/客户端测试 37 项通过，0 失败、0 跳过；新增模型 CRUD/认证/条件写入、定义/引用/格式校验、失败不写版本、历史恢复、固定修订升级、绑定锁、归档模型继续校验，以及并发修订不可覆盖、模型绑定与不合约束 JSON 保存竞争验收。
 - Chromium 浏览器验收 19 项通过，0 失败、0 跳过；包含模型创建/编辑/刷新/删除、样本字段错误、Bin 创建与绑定锁/升级、JSON 和恢复失败，以及草稿保护、手机/深色布局、冲突/网络/Session 错误。
-- GitHub CI、Workers Builds：待功能提交推送后核实。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37125038758) 成功，验证功能提交 `a01a023`；Node 22 中类型检查、生产构建、37 项 Worker/客户端测试和 19 项浏览器验收全部通过。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/0eed8402-04df-4098-a96b-9466a8c57426) 对同一功能提交报告 success，版本 ID 为 `8332d3aa-b507-4fa7-aaee-0aab62464959`。
 - 生产功能验收：待确认，不将本地测试或构建成功等同于生产数据操作已验收。
 
 ---
@@ -882,12 +883,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P4 数据模型 / JSON Schema 已完成本地开发和验收，下一阶段为 **P5 API 密钥与外部 API 认证**。P4 的 CI 与 Workers Builds 等待本次功能提交核实；P1 / P2 / P3 的成功状态已确认。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
+P4 数据模型 / JSON Schema 已完成本地开发、验收及 CI，下一阶段为 **P5 API 密钥与外部 API 认证**。P1 / P2 / P3 / P4 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态，不得将本地验收或构建成功等同于生产功能已验收。
 
-这样可以先把最核心的 Bin 使用链路彻底打通：
-
-~~~text
-创建 -> 打开 -> 查看 -> 编辑 -> 保存 -> 版本增加 -> 冲突保护 -> 删除
-~~~
-
-这是后续集合、Schema、API Key、回收站等功能的共同基础。
+后续 P5 为现有 Bin、集合和模型接口增加带 scope 的外部认证，并继续复用 R2 条件写入、固定模型修订和模型锁校验。API Key 明文只在创建时展示一次，R2 仅保存摘要；生产功能验收仍单独记录。
