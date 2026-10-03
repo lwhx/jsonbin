@@ -15,14 +15,11 @@
       "binding": "CACHE",
       "id": "5761f7b90a4d479b955fa4ac8b69df6e"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DATA",
+      "bucket_name": "jsonbin-data"
+    }
   ]
-
-  // Enable after creating the R2 bucket:
-  //
-  // "r2_buckets": [
-  //   {
-  //     "binding": "DATA",
-  //     "bucket_name": "jsonbin-data"
-  //   }
-  // ]
 }
