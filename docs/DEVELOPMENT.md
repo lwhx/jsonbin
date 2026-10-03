@@ -45,7 +45,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
 | 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
 | 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
-| API 密钥 | ✅ 本地验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；CI 与 Workers Builds 待核实 |
+| API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ⬜ 未开始 | 只有导航占位 |
 | API 文档 | ⬜ 未开始 | 只有导航占位 |
 | 回收站 | ⬜ 未开始 | 后端有最基础 trash 写入，无 UI/恢复 |
@@ -614,7 +614,7 @@ Bin 绑定规则：
 
 ## P5 API 密钥与外部 API 认证
 
-状态：✅ 后端、界面及本地验收完成；GitHub CI / Workers Builds 待推送后核实，生产功能验收待确认。
+状态：✅ 后端、界面、本地验收及 GitHub CI 完成；Cloudflare Workers Builds 成功，生产功能验收待确认。
 
 Token 格式：
 
@@ -706,7 +706,8 @@ curl "$JSONBIN_ORIGIN/api/v1/bins" \
 - 类型检查、生产构建通过。
 - Worker/客户端测试 48 项通过，0 失败、0 跳过。覆盖 21 条资源路由与九种单独 Scope 的矩阵、组合权限、密钥管理隔离、摘要/明文不落盘、HMAC/Pepper 轮换与 SHA 兼容、过期/撤销、并发认证不复活密钥、业务锁/ETag/模型校验，Cookie 写请求 Origin 校验，以及直接入口的空 Authorization 处理。运行时 HTTP 传输会移除空头，所以原始空头另通过构建后的入口验证。
 - Chromium 浏览器验收 23 项通过，0 失败、0 跳过；新增一次性显示/复制与刷新清除、权限与期限保存、最后使用/撤销/过期、未保存内容导航保护，以及创建/列表/撤销的网络和 Session 错误重试。
-- GitHub CI、Workers Builds：待功能提交推送后核实。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37127314904) 成功，验证功能提交 `6a6db5f`；Node 22 中类型检查、生产构建、48 项 Worker/客户端测试和 23 项浏览器验收全部通过。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/fa9e8d34-c36d-4b3f-ad72-4643223e8de6) 对同一功能提交报告 success，版本 ID 为 `18ccfd42-fe9b-4493-9bd2-b34c7d8450c6`。
 - 生产功能验收：待确认，不将本地测试或构建成功等同于生产数据操作已验收。
 
 P5 完成后，JSONBin 具备脚本/自动化工具调用能力；后续 P6 的新读写路径必须继续检查 Scope 并复用同一业务约束。
@@ -939,6 +940,6 @@ summary:dashboard
 
 ## 10. 当前下一步
 
-P5 API 密钥与外部 API 认证已完成本地开发和验收，下一阶段为 **P6 高级 Bin API**。P5 的 CI 与 Workers Builds 等待本次功能提交核实；P1 / P2 / P3 / P4 的成功状态已确认。生产功能验收单独保留待确认状态。
+P5 API 密钥与外部 API 认证已完成本地开发、验收及 CI，下一阶段为 **P6 高级 Bin API**。P1 / P2 / P3 / P4 / P5 功能提交的 CI 与 Workers Builds 已核实成功。生产功能验收单独保留待确认状态。
 
 后续 P6 实现 JSON Merge Patch、深层路径访问、数据锁管理及公开/私有访问策略，所有新增写入继续复用 Scope、R2 条件写入、固定模型修订和模型锁校验。
