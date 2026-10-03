@@ -72,10 +72,25 @@ npm run cf:types
 
 ## Build and deploy
 
+Cloudflare Workers Builds should use the `cloudflare-v3` production branch.
+
+Build command:
+
+```bash
+npm run build
+```
+
+Deploy command:
+
+```bash
+npx wrangler deploy
+```
+
+Local verification:
+
 ```bash
 npm run typecheck
 npm run build
-npm run deploy
 ```
 
 ## Architecture
