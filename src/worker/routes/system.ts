@@ -1,3 +1,6 @@
+import { createBin } from '../storage/bins';
+import { assertBytes, validateBusinessValue, MAX_VALUE_BYTES } from '../../shared/backup.ts';
+import type { ImportBatchResult } from '../../shared/system.ts';
 import { restoreResource } from '../storage/backup-restore';
 import { validateRestoreRequest, MAX_BACKUP_BYTES } from '../../shared/backup.ts';
 import { z } from 'zod';
@@ -37,6 +40,21 @@ app.post('/restore', managementSession, async c => {
   const input = validateRestoreRequest(await readBoundedJson(c.req.raw, MAX_BACKUP_BYTES));
   const result = await restoreResource(c.env, input);
   if (result.status === 'created') await auditRequest(c, result.kind === 'collection' ? 'collection.imported' : result.kind === 'schema' ? 'schema.imported' : 'bin.imported', result.id);
+  return c.json(result);
+});
+app.post('/import', managementSession, async c => {
+  const raw = await readBoundedJson(c.req.raw, MAX_BACKUP_BYTES);
+  const parsed = z.object({ items: z.array(z.object({ name: z.string().trim().min(1).max(160), value: z.unknown() }).strict()).min(1).max(100) }).strict().safeParse(raw);
+  if (!parsed.success) throw new SystemError(422, 'validation_failed');
+  for (const item of parsed.data.items) {
+    if (!Object.hasOwn(item, 'value')) throw new SystemError(422, 'validation_failed');
+    validateBusinessValue(item.value); assertBytes(item.value, MAX_VALUE_BYTES);
+  }
+  const result: ImportBatchResult = { results: [] };
+  for (const [index, item] of parsed.data.items.entries()) {
+    try { const record = await createBin(c.env, item); await auditRequest(c, 'bin.imported', record.meta.id); result.results.push({ index, status: 'created', id: record.meta.id }); }
+    catch (error) { result.results.push({ index, status: 'failed', error: error instanceof SystemError && error.code === 'settings_unavailable' ? 'settings_unavailable' : 'storage_unavailable' }); }
+  }
   return c.json(result);
 });
 export default app;

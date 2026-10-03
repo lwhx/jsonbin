@@ -133,12 +133,12 @@
 
 **Interfaces:** 消费 readBoundedJson、validateBusinessValue、createBin/defaults；产出 POST /system/import，body 为 `{items:ImportItem[]}`，返回 ImportBatchResult。全批结构不合法不写；已通过校验的批次逐项创建并 audit bin.imported。
 
-- [ ] 写 RED：null/false/数组/Unicode，缺 value、非有限值、100/101 项、真实正文/单项序列化超限、深度边界；显式 raw 模式含 format 的对象仍当业务值。示例：`assert.equal((await h.request('/system/import',{method:'POST',value:{items:[{name:'空值',value:null}]}})).status,200);`。
-- [ ] Run build + `node --test tests/import.test.mjs`。Expected: 导入 404/缺结果 RED。
-- [ ] 实现有界正文、整个 items 校验，再按顺序创建；不自动拆数组、绑定模型或改已有资源。默认值由 Task 1 服务端入口应用；每项 created 带 index/id，failed 带固定 error。
-- [ ] 写/观察单项 R2 失败、活动失败、伪造 Content-Length/截断 UTF-8 的 RED；实现失败逐项继续、诊断无 canary，坏批次无业务写；鉴权拒绝先于正文读取。
-- [ ] Run `npm run build`、`node --test tests/import.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN、200 部分失败可辨识，活动只对应实际提交。
-- [ ] 提交 `feat: import JSON values with bounded per-item results`。
+- [x] 写 RED：null/false/数组/Unicode，缺 value、非有限值、100/101 项、真实正文/单项序列化超限、深度边界；显式 raw 模式含 format 的对象仍当业务值。示例：`assert.equal((await h.request('/system/import',{method:'POST',value:{items:[{name:'空值',value:null}]}})).status,200);`。
+- [x] Run build + `node --test tests/import.test.mjs`。Expected: 导入 404/缺结果 RED。
+- [x] 实现有界正文、整个 items 校验，再按顺序创建；不自动拆数组、绑定模型或改已有资源。默认值由 Task 1 服务端入口应用；每项 created 带 index/id，failed 带固定 error。
+- [x] 写/观察单项 R2 失败、活动失败、伪造 Content-Length/截断 UTF-8 的 RED；实现失败逐项继续、诊断无 canary，坏批次无业务写；鉴权拒绝先于正文读取。
+- [x] Run `npm run build`、`node --test tests/import.test.mjs`、`npm run typecheck`、`npm test`。Expected: GREEN、200 部分失败可辨识，活动只对应实际提交。
+- [x] 提交 `feat: import JSON values with bounded per-item results`。
 
 ## Task 6: 系统客户端、文件解析和恢复调度
 
