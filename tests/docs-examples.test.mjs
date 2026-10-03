@@ -55,3 +55,19 @@ test('rendered languages treat data as literals and preserve HTTP semantics', as
   const parsed = JSON.parse(lines[0]); assert.equal(parsed.url, request.url); assert.equal(parsed.method, 'PUT');
   assert.deepEqual(parsed.headers, request.headers); assert.deepEqual(JSON.parse(parsed.data), request.body);
 });
+
+test('every operation renders matching request semantics in all three languages',async()=>{
+  for(const operation of catalog.DOC_OPERATIONS) {
+    const request=examples.buildRequest(operation,context);
+    let captured;
+    await new(Object.getPrototypeOf(async function(){}).constructor)('fetch','console',examples.renderExample('javascript',request))(async(url,init)=>{captured={url,...init};return new Response('{}');},{log(){}});
+    assert.equal(captured.url,request.url);assert.equal(captured.method,request.method);assert.deepEqual(captured.headers,request.headers);
+    if(Object.hasOwn(request,'body'))assert.deepEqual(JSON.parse(captured.body),request.body);
+    const args=JSON.parse(execFileSync('bash',['-s'],{input:`curl() { python3 -c 'import sys,json; print(json.dumps(sys.argv[1:]))' "$@"; }\n`+examples.renderExample('curl',request),encoding:'utf8'}));
+    assert.ok(args.includes(request.url));assert.ok(args.includes(request.method));for(const[k,v]of Object.entries(request.headers))assert.ok(args.includes(k+': '+v));
+    const stub=`import ast,json,sys,types\ncode=sys.stdin.read();ast.parse(code)\nclass Response:\n def raise_for_status(self): pass\n def json(self): return {}\ndef call(method,url,**kw):\n print(json.dumps(dict(method=method,url=url,**kw)))\n return Response()\nsession=types.SimpleNamespace(request=call)\nsys.modules['requests']=types.SimpleNamespace(request=call,Session=lambda:session)\nexec(code)\n`;
+    const parsed=JSON.parse(execFileSync('python3',['-c',stub],{input:examples.renderExample('python',request),encoding:'utf8'}).trim().split('\n')[0]);
+    assert.equal(parsed.url,request.url);assert.equal(parsed.method,request.method);assert.deepEqual(parsed.headers,request.headers);
+    if(Object.hasOwn(request,'body'))assert.deepEqual(JSON.parse(parsed.data),request.body);
+  }
+});

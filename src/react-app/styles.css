@@ -1345,3 +1345,30 @@ kbd {
 .activity-entry dl div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 8px; }
 .activity-entry dt { color: var(--muted); }
 .activity-entry dd { margin: 0; }
+
+.docs-page, .docs-content, .doc-section, .doc-operation, .code-example { min-width: 0; }
+.docs-page h1 { font-size: 1.8rem; margin: .4rem 0; }
+.doc-note { color: var(--muted); line-height: 1.7; }
+.docs-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 20px; align-items: start; }
+.doc-toc { padding: 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 16px; }
+.doc-toc button { background: none; border: 0; text-align: left; padding: 10px; border-radius: 6px; color: inherit; cursor: pointer; }
+.doc-toc button:hover { background: var(--accent-soft); }
+.doc-section { padding: 24px; margin-bottom: 18px; scroll-margin-top: 18px; }
+.doc-section p, .doc-operation p, .bin-api p { line-height: 1.75; overflow-wrap: anywhere; }
+.doc-section h2 { margin-top: 0; }
+.doc-operation { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 24px; }
+.doc-method, .doc-errors code { overflow-wrap: anywhere; }
+.doc-scopes { display: flex; gap: 8px; flex-wrap: wrap; }
+.doc-scopes code { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.doc-language { display: flex; gap: 10px; align-items: center; }
+.doc-language select { padding: 8px; background: var(--panel-solid); color: inherit; border: 1px solid var(--border); border-radius: 6px; }
+.code-example { margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.code-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; flex-wrap: wrap; }
+.code-example pre { margin: 0; padding: 16px; overflow-x: auto; max-width: 100%; font-size: 12px; line-height: 1.7; white-space: pre; background: var(--bg); }
+.code-example pre code { white-space: pre; overflow-wrap: normal; }
+.code-example > p { margin: 8px 12px; }
+.doc-errors article { border-top: 1px solid var(--border); padding: 8px 0; }
+@media (max-width: 900px) { .docs-layout { grid-template-columns: minmax(0,1fr); } .doc-toc { position: static; flex-direction: row; flex-wrap: wrap; } .doc-section { padding: 16px; } .doc-language { flex-wrap: wrap; } }
+
+.docs-page > header { display:flex; flex-wrap:wrap; gap:18px; align-items:center; justify-content:space-between; }
+.docs-page > header code { overflow-wrap:anywhere; }
