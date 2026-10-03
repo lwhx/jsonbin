@@ -1,3 +1,4 @@
+import { readBackupJson } from './backup-json';
 import { SystemError } from '../../shared/system.ts';
 import { canonicalJson, fingerprintResource, isImportMarker, validateImportMarker, validateRestoreRequest } from '../../shared/backup.ts';
 import type { BackupCollection, BackupSchema, RestoreRequest, RestoreResource, RestoreResult } from '../../shared/backup-types.ts';
@@ -16,8 +17,8 @@ async function objects(bucket: R2Bucket, prefix: string) {
 }
 async function read(bucket: R2Bucket, key: string) {
   const object = await bucket.get(key); if (!object) return null;
-  if (object.size > 10 * 1024 * 1024) throw conflict();
-  return { object, value: await object.json<Record<string, unknown>>() };
+  try { return { object, value: await readBackupJson(object) as Record<string, unknown> }; }
+  catch (error) { if (error instanceof SystemError) throw conflict(); throw error; }
 }
 async function checkDependencies(bucket: R2Bucket, input: RestoreRequest) {
   for (const dependency of input.dependencies) {
@@ -93,7 +94,7 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
     await checkFiles(false); await checkDependencies(bucket, input);
     for (const file of files) {
       record = await read(bucket, key); if (!record) throw conflict(); const changed = await existing(); if (changed) return changed;
-      const written = await putJson(bucket, file.key, file.value, { onlyIf: { etagDoesNotMatch: '*' }, customMetadata: { originalUploadedAt: file.uploadedAt, restoreOrder: String(file.order) } });
+      const written = await bucket.put(file.key, JSON.stringify(file.value), { httpMetadata: { contentType: 'application/json; charset=utf-8' }, onlyIf: { etagDoesNotMatch: '*' }, customMetadata: { originalUploadedAt: file.uploadedAt, restoreOrder: String(file.order) } });
       const stored = await read(bucket, file.key);
       if (!stored || canonicalJson(stored.value) !== canonicalJson(file.value) || stored.object.customMetadata?.originalUploadedAt !== file.uploadedAt || stored.object.customMetadata?.restoreOrder !== String(file.order)) throw conflict();
       // A concurrent publisher may already have been permanently deleted. Remove only our late conditional creation.

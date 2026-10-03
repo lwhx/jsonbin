@@ -46,6 +46,7 @@ export async function updateSchema(env: Env, id: string, input: SchemaInput, eta
   } while (cursor);
   let reserved = false;
   for (let attempt = 0; attempt < 8; attempt++, revision++) {
+    if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("revision_limit_reached");
     if (await putJson(bucket, revisionKey(id, revision), input.schema, { onlyIf: { etagDoesNotMatch: "*" } })) { reserved = true; break; }
   }
   if (!reserved) throw new Error("etag_conflict");

@@ -1,6 +1,7 @@
+import { readBackupJson } from './backup-json';
 import { version } from '../../../package.json';
 import { SystemError, type ExportPayload, type ExportQuery } from '../../shared/system.ts';
-import { MAX_BACKUP_BYTES, binMetaShape, collectionMetaShape, schemaMetaShape, validateBackup, isImportMarker } from '../../shared/backup.ts';
+import { MAX_BACKUP_BYTES, binMetaShape, collectionMetaShape, schemaMetaShape, validateBackup, validateBusinessValue, isImportMarker } from '../../shared/backup.ts';
 import type { BackupPackage, BackupBin, BackupSchema, BackupCollection } from '../../shared/backup-types.ts';
 import { getSettings } from './settings';
 import { requireDataBucket } from './r2';
@@ -17,14 +18,17 @@ async function list(bucket: R2Bucket, prefix: string): Promise<R2Object[]> {
 function project(value: Record<string, unknown>, keys: string[]) { return Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])); }
 export async function exportData(env: Env, query: ExportQuery): Promise<ExportPayload> {
   try {
-    const bucket = requireDataBucket(env), settings = await getSettings(env);
+    const bucket = requireDataBucket(env);
+    if (query.scope === 'bin' && query.format === 'value') return await exportCurrentValue(bucket, query.id);
+    const settings = await getSettings(env);
     const p: BackupPackage = { format: 'jsonbin-backup', schemaVersion: 1, appVersion: version, exportedAt: new Date().toISOString(), scope: query.scope === 'bin' ? { kind: 'bin', id: query.id } : { kind: query.scope },
       settings: { defaultVisibility: settings.settings.defaultVisibility, defaultTtlSeconds: settings.settings.defaultTtlSeconds }, collections: [], schemas: [], bins: [], purged: [] };
-    const checks: (() => Promise<void>)[] = []; let bytesRead = 0, objectCount = 1;
+    const checks: (() => Promise<void>)[] = []; let businessBytes = 0, objectCount = 1;
+    function budget(value: unknown) { businessBytes += new TextEncoder().encode(JSON.stringify(value)).length; if (businessBytes > MAX_BACKUP_BYTES) throw new SystemError(413, 'payload_too_large'); }
     async function read(key: string) {
       const object = await bucket.get(key); if (!object) throw new SystemError(409, 'backup_unavailable');
-      bytesRead += object.size; if (bytesRead > MAX_BACKUP_BYTES || ++objectCount > 250) throw new SystemError(413, 'payload_too_large');
-      let value: unknown; try { value = await object.json(); } catch { throw new SystemError(409, 'backup_unavailable'); }
+      if (++objectCount > 250) throw new SystemError(413, 'payload_too_large');
+      const value = await readBackupJson(object);
       return { object, value };
     }
     async function capture(key: string) {
@@ -37,8 +41,8 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
         if ((await bucket.head(key))?.etag !== object.etag || (namespace === 'trash/bins' && await bucket.head(`bins/${id}/meta.json`))) throw new SystemError(409, 'backup_changed');
       };
       checks.push(checkMeta);
-      if (namespace === 'collections') { const result = { meta: project(meta, Object.keys(collectionMetaShape.shape)) } as BackupCollection; p.collections.push(result); await checkMeta(); return; }
-      if (meta.purgeState === 'purged') { p.purged.push({ id, deletedAt: meta.deletedAt as string }); await checkMeta(); return; }
+      if (namespace === 'collections') { const result = { meta: project(meta, Object.keys(collectionMetaShape.shape)) } as BackupCollection; budget(result); p.collections.push(result); await checkMeta(); return; }
+      if (meta.purgeState === 'purged') { const marker = { id, deletedAt: meta.deletedAt as string }; budget(marker); p.purged.push(marker); await checkMeta(); return; }
       const kind = namespace === 'schemas' ? 'schema' : 'bin';
       const prefix = `${kind === 'schema' ? 'schemas' : 'bins'}/${id}/${kind === 'schema' ? 'revisions' : 'versions'}/`;
       const canonical = (objects: R2Object[]) => objects.filter(o => {
@@ -51,17 +55,18 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
       checks.push(async () => { if (JSON.stringify(canonical(await list(bucket, prefix)).map(o => [o.key, o.etag])) !== snapshot) throw new SystemError(409, 'backup_changed'); });
       const history = [];
       for (const file of files) {
-        const record = await read(file.key); if (record.object.etag !== file.etag) throw new SystemError(409, 'backup_changed');
+        const record = await read(file.key); budget(record.value); if (record.object.etag !== file.etag) throw new SystemError(409, 'backup_changed');
         history.push({ number: Number(file.key.slice(prefix.length, -5)), uploadedAt: record.object.customMetadata?.originalUploadedAt ?? record.object.uploaded.toISOString(), value: record.value });
       }
-      if (kind === 'schema') p.schemas.push({ meta: project(meta, Object.keys(schemaMetaShape.shape)), revisions: history.map(v => ({ revision: v.number, uploadedAt: v.uploadedAt, schema: v.value })) } as BackupSchema);
+      if (kind === 'schema') { const projected = project(meta, Object.keys(schemaMetaShape.shape)); budget(projected); p.schemas.push({ meta: projected, revisions: history.map(v => ({ revision: v.number, uploadedAt: v.uploadedAt, schema: v.value })) } as BackupSchema); }
       else {
         const normalized: Record<string, unknown> = { collectionId: null, schemaId: null, schemaRevision: null, locked: false, schemaLocked: false, expiresAt: null, ...meta };
         if (meta.deletedAt && !meta.deletionReason) normalized.deletionReason = 'manual';
         const current = history.find(v => v.number === meta.currentVersion);
         if (!current) throw new SystemError(409, 'backup_unavailable');
         normalized.size = new TextEncoder().encode(JSON.stringify(current.value)).length;
-        p.bins.push({ meta: project(normalized, Object.keys(binMetaShape.shape)), versions: history.map(v => ({ version: v.number, uploadedAt: v.uploadedAt, value: v.value })) } as BackupBin);
+        const projected = project(normalized, Object.keys(binMetaShape.shape)); budget(projected);
+        p.bins.push({ meta: projected, versions: history.map(v => ({ version: v.number, uploadedAt: v.uploadedAt, value: v.value })) } as BackupBin);
       }
       await checkMeta();
     }
@@ -84,9 +89,28 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
     try { validated = validateBackup(p); } catch (error) { if (error instanceof SystemError && error.status === 413) throw error; throw new SystemError(409, 'backup_unavailable'); }
     for (const check of checks) await check();
     if ((await getSettings(env)).etag !== settings.etag) throw new SystemError(409, 'backup_changed');
-    const body = new TextEncoder().encode(JSON.stringify(query.format === 'value' ? validated.bins[0].versions.find(v => v.version === validated.bins[0].meta.currentVersion)!.value : validated));
+    const body = new TextEncoder().encode(JSON.stringify(validated));
     if (body.length > MAX_BACKUP_BYTES) throw new SystemError(413, 'payload_too_large');
     return { body, fileName: query.scope === 'bin' ? `jsonbin-${query.id}-${query.format}.json` : `jsonbin-${query.scope}-backup.json`, contentType: jsonType,
       activity: { action: query.scope === 'bin' ? 'bin.exported' : 'system.exported', resourceId: query.scope === 'bin' ? query.id : null } };
   } catch (error) { if (error instanceof SystemError) throw error; throw new SystemError(503, 'storage_unavailable'); }
+}
+
+async function exportCurrentValue(bucket: R2Bucket, id: string): Promise<ExportPayload> {
+  const canonicalKey = `bins/${id}/meta.json`;
+  let key = canonicalKey, metadata = await bucket.get(key);
+  if (!metadata) { key = `trash/bins/${id}/meta.json`; metadata = await bucket.get(key); }
+  if (!metadata) throw new SystemError(404, 'not_found');
+  const meta = await readBackupJson(metadata) as Record<string, unknown>;
+  if (!meta || meta.id !== id) throw new SystemError(409, 'backup_unavailable');
+  if (meta.purgeState === 'purged') throw new SystemError(404, 'not_found');
+  if (isImportMarker(meta) || meta.purgeState || !Number.isSafeInteger(meta.currentVersion) || (meta.currentVersion as number) < 1) throw new SystemError(409, 'backup_unavailable');
+  const valueKey = historyKey('bin', id, meta.currentVersion as number), object = await bucket.get(valueKey);
+  if (!object) throw new SystemError(409, 'backup_unavailable');
+  const value = await readBackupJson(object);
+  try { validateBusinessValue(value); } catch { throw new SystemError(409, 'backup_unavailable'); }
+  const body = new TextEncoder().encode(JSON.stringify(value));
+  if (body.length > MAX_BACKUP_BYTES) throw new SystemError(413, 'payload_too_large');
+  if ((await bucket.head(key))?.etag !== metadata.etag || (await bucket.head(valueKey))?.etag !== object.etag || (key !== canonicalKey && await bucket.head(canonicalKey))) throw new SystemError(409, 'backup_changed');
+  return {body, fileName:`jsonbin-${id}-value.json`, contentType:jsonType, activity:{action:'bin.exported',resourceId:id}};
 }

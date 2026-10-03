@@ -9,6 +9,7 @@ const app = new Hono<{ Bindings: Env }>();
 const input = z.object({ name: z.string().trim().min(1).max(160), description: z.string().max(1000).optional(),
   schema: z.union([z.boolean(), z.record(z.string(), z.unknown())]) }).strict();
 app.onError((error, c) => {
+  if (error.message === "revision_limit_reached") return c.json({ error: "revision_limit_reached" }, 409);
   if (error instanceof SchemaError) return c.json({ error: error.message, issues: error.issues }, 422);
   if (error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
   throw error;

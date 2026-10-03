@@ -75,6 +75,7 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
   } while (cursor);
   // Never overwrite an existing version, including an orphan from a failed CAS.
   for (let attempt = 0; attempt < 8; attempt++, nextVersion++) {
+    if (!Number.isSafeInteger(nextVersion) || nextVersion < 1) throw new Error("version_limit_reached");
     const written = await putJson(bucket, versionKey(id, nextVersion), value, {
       onlyIf: { etagDoesNotMatch: "*" },
     });

@@ -74,6 +74,7 @@ const metadataSchema = z.object({
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
+  if (error.message === "version_limit_reached") return c.json({ error: "version_limit_reached" }, 409);
   if (error.message === "settings_unavailable") return c.json({ error: "settings_unavailable" }, 503);
   if (error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
   if (error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
