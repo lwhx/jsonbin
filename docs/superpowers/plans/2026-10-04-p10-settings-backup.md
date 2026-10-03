@@ -191,8 +191,8 @@
 
 **Files:** 必要时修改以上产品/测试文件；更新本 spec/plan 和 README/DEVELOPMENT 的交付状态。临时目录 `/workspace/.cloud-setup/p10` 仅供本计划。
 
-- [ ] 基于原始 base 到最终产品 HEAD，一次 fresh whole-branch reviewer，附已确认 spec/plan、五项 Review Focus、真实测试结果和执行 ledger；使用当前允许的最强 reviewer。Expected: 明确 Critical/Important/Minor 和未判断项，不把自审称独立审查。
-- [ ] 重新判断发现的用户影响；Critical/Important 在一次修复阶段逐项先复现 RED 再改为 GREEN，跑适当全套；Minor 和未采纳项/未判断项如实记入 ledger，不再次派审查。Expected: 所有重要发现已验证修复，或有明确待解决阻塞。
+- [x] 基于原始 base 到最终产品 HEAD，一次 fresh whole-branch reviewer，附已确认 spec/plan、五项 Review Focus、真实测试结果和执行 ledger；使用当前允许的最强 reviewer。Expected: 明确 Critical/Important/Minor 和未判断项，不把自审称独立审查。
+- [x] 重新判断发现的用户影响；Critical/Important 在一次修复阶段逐项先复现 RED 再改为 GREEN，跑适当全套；Minor 和未采纳项/未判断项如实记入 ledger，不再次派审查。Expected: 所有重要发现已验证修复，或有明确待解决阻塞。
 - [ ] fetch main 并检查远端变更，按远程权威要求处理冲突但保留无关用户修改；已通过测试后本地合并到 main，不 force push。Run 合并树 typecheck / `npm test`；新增产品变更才补跑相关 browser。Expected: 合并树 GREEN，再普通 push origin main。
 - [ ] 核对精确功能 SHA 的 GitHub CI / Workers Builds；成功后同步 README/DEVELOPMENT/spec/plan，提交最后文档并 push，再核对最终文档 SHA 的远端检查。Expected: 两次 SHA 的 checks 均 success，最终 HEAD 等于实际远程 main，工作区干净。
 - [ ] 收集全部 Ruling / deferred minor 到最终报告；清理已合并本阶段分支及 `/workspace/.cloud-setup/p10`，保留其他目录。生产 auth/CORS、部署浏览器和 live Cron 没有 URL/认证时仍未验证；下一阶段 P11。
@@ -204,3 +204,5 @@ spec §1 范围/备份选择由 Tasks 2–8 承接；§2 默认值由 1/7 承接
 共享接口以本节命名为准，特别是 defaultTtlSeconds、BackupScope.kind、RestoreResource.data、restoreFingerprint / originalUploadedAt 和结果 status；后续任务不得另造同义字段。状态接口与设置虽可单独使用，但普通导入依赖默认值、备份包含配置，恢复状态又进入统计，因此按一个已确认 P10 计划连续执行。追加测试若已经覆盖现有正确行为，记录 GREEN 事实，不人为破坏代码；每项新增交付目标必须先观察实际 RED。
 
 用户已选择原生执行方式，此计划沿用，不再次询问方式。用户已确认本实施计划，连续执行九项任务，不逐任务请求确认；最终按已有 main 合并与推送授权交付。
+
+本地最终验收（2026-10-04，Asia/Shanghai）：修复后的类型检查/构建、132 项 Worker/客户端测试及 48 项 Chromium 测试通过，0 失败/skip；一次独立整分支审查的三项 Important 已 RED→GREEN 修复，两项 Minor 文档已按用户要求同步，无延期 Minor。接续操作见 DEVELOPMENT.md §11。main 及远端检查结果随后记录。

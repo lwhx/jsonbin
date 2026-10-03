@@ -985,13 +985,17 @@ Dashboard 内提供可直接复制的文档：
 - `/api/v1/system/info|settings|import|export|restore` 仅管理 Session，拒绝任何 Authorization；写入校验 Origin，响应 no-store。公共 health 契约保留。
 - 默认设置为 private/null，R2 对象缺失时只读返回虚拟 ETag。设置保存要求 If-Match（428 缺少、412 冲突）；TTL 为 null 或 1–31536000 整数秒。创建时仅省略字段应用默认值，显式 visibility 或 expiresAt:null 优先；相对 TTL 按服务器创建时间计算，不改变既有 Bin。
 - 普通导入接受完整 UTF-8/BOM JSON 文件，一个数组/null/false 也是一项；文件及序列化值各限 1 MiB、业务深度 64，每批 1–100 项且正文不超过 10 MiB。全量结构验证后逐项创建并返回 created/failed，写入不自动重试，网络中断先核对列表。
-- 导出参数封闭为 all/config + backup，或 bin + UUID + value/backup。value 读取保存值，不修改编辑草稿；业务备份包含全部保留历史、回收站/过期元数据、永久删除标记、集合/模型修订及默认设置，canonical 优先于旧 trash。捕获资源及设置变化返回 409；逐资源一致不保证全局事务，新创建资源可能遗漏。
-- 备份上限 100 资源、250 逻辑对象、10 MiB UTF-8 JSON，元数据/标记、版本/修订和设置各计一次；模型 64 KiB。ZIP 为 STORE 的 manifest.json/backup.json，含 CRC32、SHA-256 与字节校验，总大小不超过 10 MiB + 64 KiB。拒绝压缩、加密、ZIP64、描述符、额外/路径/重复/重叠条目及头不一致。Worker 只接收验证过的 JSON 资源。
+- 导出参数封闭为 all/config + backup，或 bin + UUID + value/backup；config 仅默认设置及格式元数据，资源数组为空。value 独立读取保存的当前值，不依赖全部历史、关联资源或默认设置，不修改编辑草稿；业务备份包含全部保留历史、回收站/过期元数据、永久删除标记、集合/模型修订及默认设置，canonical 优先于旧 trash。捕获资源及设置变化返回 409；逐资源一致不保证全局事务，新创建资源可能遗漏。
+- 备份上限 100 资源、250 逻辑对象、10 MiB UTF-8 JSON；普通 JSON 导入的 1 MiB 单值限制不适用于备份值，备份值共享整包 10 MiB 预算。元数据/标记、版本/修订和设置各计一次；模型 64 KiB。ZIP 为 STORE 的 manifest.json/backup.json，含 CRC32、SHA-256 与字节校验，总大小不超过 10 MiB + 64 KiB。拒绝压缩、加密、ZIP64、描述符、额外/路径/重复/重叠条目及头不一致。Worker 只接收验证过的 JSON 资源。
 - 恢复保留 ID、公开性、TTL、锁、删除状态、固定模型修订及历史；既有 active/deleted/purged/legacy/orphan 资源跳过不覆盖。依赖优先，冲突跳过相关 Bin。隐藏 pending 用于同备份故障续作，不由 Cron 清除；修改后的既有资源不能被重试覆盖。设置单独确认并带 If-Match 保存。过期 Bin 立即服从回收站规则。并发集合清理失败保留实际 created/unchanged 和警告；取消不回滚已提交数据。
 - 文件只保留组件内存，预览确认后写入；切换文件、离页、退出或取消丢弃迟到结果/下载，默认设置迟到不覆盖手动选择，412 保留草稿。
 - API 文档新增系统管理及备份操作，curl/JavaScript/Python 示例共用契约；Python 正文显式 UTF-8 bytes。设计和执行依据见 [P10 设计](superpowers/specs/2026-10-04-p10-settings-backup-design.md) / [实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)。
 
-验收状态：完整 P10 产品树通过类型检查/构建、126 项 Worker/客户端测试及 48 项 Chromium 浏览器测试，无失败或 skip；新增 API 文档 10 项定向测试已通过，含真实 Worker 的三语言请求。整阶段独立审查、main 合并及精确 main 提交的 GitHub CI / Workers Builds 待核对，未预先宣称远端成功。中间功能分支 `9609f49` 的 Workers Builds 报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；后续 main 构建另行核对。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
+整阶段独立审查已完成：0 Critical、3 Important、2 Minor。三项重要发现为合法深层 JSON 被物理缩进大小拒绝、当前值导出错误依赖完整备份流程、最大安全整数版本/修订号后续写入溢出。修复采用有界流读取旧缩进 JSON、紧凑恢复文件、独立当前快照导出以及版本/修订耗尽前拒绝写入（409 version_limit_reached / revision_limit_reached），并保留既有元数据和历史。两处文档说明已同步纠正。新增 6 项真实 Worker/R2 边界回归通过，全部重要问题先观察 RED 再验证 GREEN；修复后的类型检查/构建、132 项 Worker/客户端测试及 48 项 Chromium 浏览器测试全部通过，无失败或 skip。main 合并与远端检查正在交付，最终结果随后同步。
+
+中间功能分支 `9609f49` / `e981357` 的 Workers Builds 报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；后续精确 main 提交另行核对。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
+
+审查决定：保留私有 restoreOrder 以重建源修订顺序（若错误可能拒绝依赖恢复，不允许覆盖）；按用户要求提前推送中间功能分支并明确未完成状态（若失败需补交修复，main 仍经验证）；按用户要求同步纠正两项 Minor 文档（若错误会留下接口说明差异）；无证据的生产验收和功能分支构建失败根因不作成功宣称/推测（部署差异仍可能待发现）。无延期 Minor。
 
 ---
 
@@ -1083,4 +1087,27 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现并通过 UI 本地验收，文档契约及完整本地验收已通过，正在整阶段审查；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现，整阶段审查和修复已完成，修复后的 132 项自动化测试、48 项浏览器测试及类型检查/构建通过；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。
+
+
+## 11. 在另一台电脑接续开发
+
+从远程 `main` 接续；代码、P10 设计/计划及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 尚未开始，下一项是全局搜索与 KV 索引；先按本文 P11 清单设计接口、查询范围与可重建索引，再开发。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
+
+首次检出和验证（Node 22 最新维护版或 Node 24，Python 3，用于 ZIP/示例验证）：
+
+~~~bash
+git clone https://github.com/lwhx/jsonbin.git
+cd jsonbin
+git switch main
+git pull --ff-only origin main
+npm install --no-audit --no-fund --package-lock=false
+npx playwright install chromium
+npm run typecheck
+npm test
+npm run test:browser
+~~~
+
+已有检出先保留自己的未提交改动，再切到 main 并执行 `git pull --ff-only origin main`，不需要拉取功能分支。Linux 若缺浏览器系统库，可用 `npx playwright install --with-deps chromium`。测试会生成随机临时认证，使用本地 R2/KV，无需生产凭据。需要实际启动 Dashboard 时，首次复制 `.dev.vars.example` 为 `.dev.vars` 并配置本地测试登录信息，再 `npm run dev`；不要覆盖已有私有配置，也不要提交真实 Secret。
+
+继续前优先查看：本文件 P10 验收/远端状态及 P11 清单、[P10 实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。
