@@ -67,7 +67,7 @@ export function ConfirmDialogHost() {
       {current.details.map(detail => <li key={detail}>{detail}</li>)}
     </ul> : null}
     <div className="dialog-actions confirm-dialog-actions">
-      <button type="button" className="secondary-button" onClick={() => finish(false)}>
+      <button type="button" className="secondary-button" data-dialog-cancel="true" onClick={() => finish(false)}>
         {current.cancelLabel ?? "取消"}
       </button>
       <button
