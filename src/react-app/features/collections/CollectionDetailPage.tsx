@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createCollection, getCollection, getCollectionBins, removeCollection, saveCollection } from "./api";
 import type { CollectionRecord, CollectionInput } from "./api";
 import { getBin, saveBinMetadata } from "../bins/api";
+import { confirmDialog } from "../../components/ConfirmDialog";
 
 export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin, onDirtyChange }: {
   id: string | null; onBack: () => void; onSaved: (id: string) => void; onDeleted: () => void;
