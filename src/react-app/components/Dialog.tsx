@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 type Props = {
   titleId: string;
@@ -11,16 +11,17 @@ type Props = {
 
 export function Dialog({ titleId, children, onClose, dismissible = true, className = "" }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const focusable = () => ref.current?.querySelector<HTMLElement>(
+    "[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
+  ) ?? null;
+
   useEffect(() => {
     const previous = document.activeElement;
     const dialog = ref.current;
     if (!dialog) return;
-    const focusable = dialog.querySelector<HTMLElement>(
-      "[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
-    );
-    (focusable ?? dialog).focus();
+    (focusable() ?? dialog).focus();
     const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialog.contains(event.target)) (focusable ?? dialog).focus();
+      if (event.target instanceof Node && !dialog.contains(event.target)) (focusable() ?? dialog).focus();
     };
     document.addEventListener("focusin", containFocus);
     return () => {
@@ -28,6 +29,15 @@ export function Dialog({ titleId, children, onClose, dismissible = true, classNa
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const active = document.activeElement;
+    const activeInside = active instanceof Node && dialog.contains(active);
+    const activeDisabled = active instanceof HTMLButtonElement && active.disabled;
+    if ((!activeInside || activeDisabled) && !focusable()) dialog.focus();
+  });
 
   function keyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && dismissible && onClose) {
