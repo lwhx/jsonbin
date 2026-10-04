@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createKey, KeyApiError, listKeys, purgeKey, revealKeyToken, revokeKey, scopes, scopeLabels } from "./api";
 import type { ApiKey, ApiScope } from "./api";
+import { confirmDialog } from "../../components/ConfirmDialog";
 const defaultScopes: ApiScope[] = ["bin:read"];
 const displayTime = (value: string | null, fallback: string) => value ? new Date(value).toLocaleString("zh-CN") : fallback;
 export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
@@ -70,7 +71,15 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     } finally { if (mounted.current) setBusy(false); }
   }
   async function revoke(key: ApiKey) {
-    if (busy || key.revokedAt || !window.confirm(`撤销密钥“${key.name}”？使用此密钥的新请求将无法通过认证。`)) return;
+    if (busy || key.revokedAt) return;
+    if (!await confirmDialog({
+      title: "撤销 API 密钥？",
+      message: `确定要撤销“${key.name}”吗？`,
+      details: ["撤销后该 Token 会立即失效。", "密钥记录仍会保留，之后仍可永久删除。"],
+      cancelLabel: "取消",
+      confirmLabel: "撤销密钥",
+      tone: "danger",
+    })) return;
     setBusy(true); setError(null); setNotice("");
     try {
       await revokeKey(key.id); await client.invalidateQueries({ queryKey: ["keys"] });
@@ -81,7 +90,15 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
   async function remove(key: ApiKey) {
-    if (busy || !window.confirm(`永久删除密钥“${key.name}”？删除后记录和保存的完整密钥都无法恢复。`)) return;
+    if (busy) return;
+    if (!await confirmDialog({
+      title: "永久删除 API 密钥",
+      message: `确定要永久删除“${key.name}”吗？`,
+      details: ["密钥立即失效。", "R2 中的密钥记录会永久删除。", "保存的完整密钥无法恢复。"],
+      cancelLabel: "取消",
+      confirmLabel: "永久删除",
+      tone: "danger",
+    })) return;
     setBusy(true); setError(null); setNotice("");
     try {
       await purgeKey(key.id); await client.invalidateQueries({ queryKey: ["keys"] });
@@ -96,9 +113,16 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     <button className="secondary-button" disabled={busy} onClick={() => query.refetch()}>刷新密钥列表</button></header>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}
-      {error instanceof KeyApiError && error.status === 401 && <button className="secondary-button" onClick={() => {
-        if (!dirty || window.confirm("重新登录会离开当前页面，是否放弃未保存的表单内容？")) client.invalidateQueries({ queryKey: ["auth-me"] });
-      }}>重新登录</button>}</div>}
+      {error instanceof KeyApiError && error.status === 401 && <button className="secondary-button" onClick={() => { void (async () => {
+        if (dirty && !await confirmDialog({
+          title: "重新登录？",
+          message: "重新登录会离开当前页面，未保存的密钥表单内容将丢失。",
+          cancelLabel: "继续编辑",
+          confirmLabel: "放弃并重新登录",
+          tone: "danger",
+        })) return;
+        client.invalidateQueries({ queryKey: ["auth-me"] });
+      })(); }}>重新登录</button>}</div>}
     {disclosure && <section className="panel detail-form key-disclosure" aria-label="新密钥明文"><h2>新密钥已创建</h2>
       <p>“{disclosure.key.name}”现在可以直接复制；关闭此提示或刷新页面后，也可以在下方密钥列表中重新显示。</p>
       <label>新 API 密钥<input aria-label="新 API 密钥" readOnly type="text" spellCheck={false} autoComplete="off" value={disclosure.token} onFocus={event => event.target.select()} /></label>

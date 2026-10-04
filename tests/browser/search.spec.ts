@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { dismissConfirm } from '../support/confirm-dialog';
 const login = async (page: any) => { expect((await page.request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: process.env.JSONBIN_TEST_PASSWORD } })).status()).toBe(200); };
 async function create(page: any, path: string, data: unknown) { const response = await page.request.post('/api/v1/' + path, { data }); expect(response.status()).toBe(201); return response.json(); }
 test('顶部全局搜索可按集合查找、过滤、刷新并进入三个资源详情', async ({ page }) => {
@@ -39,6 +40,6 @@ test('索引重建状态、失败反馈和操作中离页保护', async ({ page 
   await login(page); await page.goto('/#/settings'); const panel = page.locator('.search-index-panel'); await expect(panel.getByRole('button', { name: '从 R2 重建索引' })).toBeEnabled();
   await panel.getByRole('button', { name: '从 R2 重建索引' }).click(); await expect(panel.getByRole('status')).toContainText('已重建'); await panel.getByRole('button', { name: '刷新索引状态' }).click(); await expect(panel).toContainText('可用');
   let release: () => void = () => {}; await page.route('**/api/v1/search/rebuild', async route => { await new Promise<void>(resolve => { release = resolve; }); await route.fulfill({ status: 409, json: { error: 'search_changed' } }); });
-  await panel.getByRole('button', { name: '从 R2 重建索引' }).click(); await expect(panel.getByRole('button', { name: '正在重建…' })).toBeDisabled(); page.once('dialog', dialog => dialog.dismiss()); await page.getByRole('button', { name: '搜索数据仓、集合、数据模型…' }).click(); await expect(page).toHaveURL(/#\/settings$/); release(); await expect(panel.getByRole('alert')).toContainText('数据已发生变化');
+  await panel.getByRole('button', { name: '从 R2 重建索引' }).click(); await expect(panel.getByRole('button', { name: '正在重建…' })).toBeDisabled(); await page.getByRole('button', { name: '搜索数据仓、集合、数据模型…' }).click(); await dismissConfirm(page, '未保存'); await expect(page).toHaveURL(/#\/settings$/); release(); await expect(panel.getByRole('alert')).toContainText('数据已发生变化');
   await page.getByRole('button', { name: '搜索数据仓、集合、数据模型…' }).click(); await expect(page).toHaveURL(/#\/search$/);
 });

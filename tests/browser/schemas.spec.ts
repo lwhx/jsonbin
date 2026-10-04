@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { acceptConfirm, dismissConfirm } from '../support/confirm-dialog';
 const definition = { type: 'object', properties: { count: { type: 'integer', minimum: 0 } }, required: ['count'], additionalProperties: false };
 test.beforeEach(async ({ page }) => {
   expect((await page.request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: process.env.JSONBIN_TEST_PASSWORD } })).status()).toBe(200);
@@ -44,8 +45,8 @@ test('模型创建、编辑、刷新、样本字段校验与删除，支持移�
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '切换明暗主题' }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除模型', exact: true }).click();
+  await acceptConfirm(page, '已有数据仓继续按已绑定修订校验');
   await expect(page).toHaveURL(/#\/schemas$/);
   expect((await page.request.get(`/api/v1/schemas/${id}`)).status()).toBe(404);
 });
@@ -103,8 +104,8 @@ test('创建时模型失败可修正，历史恢复失败显示字段且不新�
   expect((await page.request.patch(path + '/meta', { headers: { 'If-Match': updated.etag }, data: { schemaId: schema.meta.id } })).status()).toBe(200);
   await page.goto(`/#/bins/${historical.meta.id}`);
   await page.getByRole('tab', { name: '历史版本', exact: true }).click();
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '恢复 v1', exact: true }).click();
+  await acceptConfirm(page, '恢复会生成一个新的最新版本');
   await expect(page.locator('.detail-error[role=alert]')).toContainText('#/count');
   expect((await (await page.request.get(path)).json()).meta.currentVersion).toBe(2);
 });
@@ -116,8 +117,8 @@ test('模型定义错误、冲突、网络和会话错误保留草稿，离开�
   await page.getByRole('button', { name: '保存模型', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('#/type');
   await expect(page.getByLabel('模型定义', { exact: true })).toHaveValue('{"type":"not-a-type"}');
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '返回数据模型', exact: true }).click();
+  await dismissConfirm(page, '未保存');
   await expect(page).toHaveURL(new RegExp(schema.meta.id));
   await page.getByLabel('模型定义', { exact: true }).fill(JSON.stringify(definition));
   await page.getByLabel('模型名称', { exact: true }).fill('本地模型草稿');
@@ -125,8 +126,8 @@ test('模型定义错误、冲突、网络和会话错误保留草稿，离开�
   await page.getByRole('button', { name: '保存模型', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('其他请求修改');
   await expect(page.getByLabel('模型名称', { exact: true })).toHaveValue('本地模型草稿');
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '重新加载模型', exact: true }).click();
+  await acceptConfirm(page, '重新加载会丢弃当前未保存的模型修改');
   await expect(page.getByLabel('模型名称', { exact: true })).toHaveValue('远程模型');
   await page.getByLabel('模型名称', { exact: true }).fill('网络模型草稿');
   await page.route(`**${path}`, route => route.request().method() === 'PUT' ? route.abort('connectionfailed') : route.continue());

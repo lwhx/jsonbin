@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { acceptConfirm, dismissConfirm } from '../support/confirm-dialog';
 
 test.beforeEach(async ({ page }) => {
   const login = await page.request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: process.env.JSONBIN_TEST_PASSWORD } });
@@ -39,8 +40,8 @@ test('集合列表、新建、编辑、详情刷新与删除保留成员数据',
   await page.getByRole('button', { name: '切换明暗主题' }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('所有 JSON 和历史版本都会保留'); await dialog.accept(); });
   await page.getByRole('button', { name: '删除集合', exact: true }).click();
+  await acceptConfirm(page, '所有 JSON 和历史版本都会保留');
   await expect(page).toHaveURL(/#\/collections$/);
   await expect(card).not.toBeVisible();
   const retained = await page.request.get(`/api/v1/bins/${first.meta.id}`);
@@ -89,14 +90,14 @@ test('集合冲突、取消删除和网络失败保留未保存内容，离开�
   await page.getByRole('button', { name: '保存集合', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('其他请求修改');
   await expect(page.getByLabel('集合名称', { exact: true })).toHaveValue('本地草稿');
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '返回集合', exact: true }).click();
+  await dismissConfirm(page, '未保存');
   await expect(page).toHaveURL(new RegExp(initial.meta.id));
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '删除集合', exact: true }).click();
+  await dismissConfirm(page, '所有 JSON 和历史版本都会保留');
   expect((await page.request.get(path)).status()).toBe(200);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '重新加载集合', exact: true }).click();
+  await acceptConfirm(page, '重新加载会丢弃当前未保存的集合修改');
   await expect(page.getByLabel('集合名称', { exact: true })).toHaveValue('远程名称');
   await page.getByLabel('集合名称', { exact: true }).fill('网络草稿');
   await page.route(`**${path}`, route => route.request().method() === 'PATCH' ? route.abort('connectionfailed') : route.continue());

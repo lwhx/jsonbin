@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createCollection, getCollection, getCollectionBins, removeCollection, saveCollection } from "./api";
 import type { CollectionRecord, CollectionInput } from "./api";
 import { getBin, saveBinMetadata } from "../bins/api";
+import { confirmDialog } from "../../components/ConfirmDialog";
 
 export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin, onDirtyChange }: {
   id: string | null; onBack: () => void; onSaved: (id: string) => void; onDeleted: () => void;
@@ -34,7 +35,14 @@ export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin
       client.invalidateQueries({ queryKey: ["collection-bins"] })]);
   }
   async function reload() {
-    if (!id || busy || (dirty && !window.confirm("重新加载会丢弃未保存的集合修改，是否继续？"))) return;
+    if (!id || busy) return;
+    if (dirty && !await confirmDialog({
+      title: "重新加载集合？",
+      message: "重新加载会丢弃当前未保存的集合修改。",
+      cancelLabel: "继续编辑",
+      confirmLabel: "放弃并重新加载",
+      tone: "danger",
+    })) return;
     setBusy(true); setError(""); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["collection", id] });
@@ -61,7 +69,15 @@ export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin
     } catch (caught) { if (mounted.current) setError((caught as Error).message); } finally { if (mounted.current) setBusy(false); }
   }
   async function remove() {
-    if (!id || !baseline || busy || !window.confirm(`删除集合“${baseline.meta.name}”？只解除数据仓关联，所有 JSON 和历史版本都会保留。${dirty ? "未保存的集合修改将被丢弃。" : ""}`)) return;
+    if (!id || !baseline || busy) return;
+    if (!await confirmDialog({
+      title: "删除集合？",
+      message: `确定要删除集合“${baseline.meta.name}”吗？`,
+      details: ["只会解除数据仓关联，所有 JSON 和历史版本都会保留。", ...(dirty ? ["未保存的集合修改将被丢弃。"] : [])],
+      cancelLabel: "取消",
+      confirmLabel: "删除集合",
+      tone: "danger",
+    })) return;
     setBusy(true); setError("");
     try {
       await removeCollection(id, baseline.etag); await invalidate();

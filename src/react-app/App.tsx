@@ -27,7 +27,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { BinDetailPage } from "./features/bins/BinDetailPage";
 import { binHash, binIdFromHash } from "./features/bins/navigation";
 import { CollectionsPage } from "./features/collections/CollectionsPage";
@@ -45,6 +45,8 @@ import { DocsPage } from "./features/docs/DocsPage";
 import { ActivityPage } from "./features/activity/ActivityPage";
 import { TrashPage } from "./features/trash/TrashPage";
 import { ExpiryLabel, expiryFromInput } from "./features/bins/expiry";
+import { ConfirmDialogHost, confirmDialog } from "./components/ConfirmDialog";
+import { ModalDialog } from "./components/ModalDialog";
 
 type Health = {
   ok: boolean;
@@ -357,6 +359,7 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
+  const allowedHash = useRef<string | null>(null);
   const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
@@ -372,11 +375,29 @@ function AuthenticatedApp({
     function changed() {
       const next = window.location.hash;
       if (next === route) return;
-      if (detailDirty && !window.confirm("还有未保存的内容，是否放弃修改并离开？")) {
-        window.history.replaceState(null, "", route || window.location.pathname);
+      if (allowedHash.current === next) {
+        allowedHash.current = null;
+        setDetailDirty(false);
+        setRoute(next);
         return;
       }
-      setDetailDirty(false); setRoute(next);
+      if (detailDirty) {
+        window.history.replaceState(null, "", route || window.location.pathname);
+        void confirmDialog({
+          title: "放弃未保存的修改？",
+          message: "当前页面还有未保存内容，离开后这些修改将丢失。",
+          cancelLabel: "继续编辑",
+          confirmLabel: "放弃并离开",
+          tone: "danger",
+        }).then(accepted => {
+          if (!accepted) return;
+          allowedHash.current = next;
+          setDetailDirty(false);
+          window.location.hash = next;
+        });
+        return;
+      }
+      setRoute(next);
     }
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
@@ -414,7 +435,13 @@ function AuthenticatedApp({
   }, [health.data]);
 
   async function logout() {
-    if (detailDirty && !window.confirm("退出登录将丢弃未保存的修改，是否继续？")) return;
+    if (detailDirty && !await confirmDialog({
+      title: "退出登录？",
+      message: "当前页面还有未保存内容，退出登录后这些修改将丢失。",
+      cancelLabel: "继续编辑",
+      confirmLabel: "放弃并退出",
+      tone: "danger",
+    })) return;
     window.dispatchEvent(new Event("jsonbin:logout"));
     setDetailDirty(false);
     await fetch("/api/v1/auth/logout", {
@@ -576,6 +603,8 @@ function AuthenticatedApp({
           )}
         </div>
       </main>
+
+      <ConfirmDialogHost />
 
       {createOpen && (
         <CreateBinDialog
@@ -917,14 +946,7 @@ function CreateBinDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-bin-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <ModalDialog labelledBy="create-bin-title" onClose={onClose} closeDisabled={saving}>
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">新建文档</span>
@@ -1008,8 +1030,7 @@ function CreateBinDialog({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }
 
