@@ -48,6 +48,10 @@ export function ModalDialog({
     };
   }, []);
 
+  useEffect(() => {
+    if (closeDisabled) ref.current?.focus();
+  }, [closeDisabled]);
+
   function keyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && onClose && !closeDisabled) {
       event.preventDefault();
