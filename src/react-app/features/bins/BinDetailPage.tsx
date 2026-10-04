@@ -304,7 +304,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </div>
     <footer className="detail-footer"><p>删除后元数据移入回收站，历史版本保留。</p>
       <button type="button" className="danger-button" onClick={() => setDeleteOpen(true)} disabled={Boolean(busy) || locked}><Trash2 size={15} />删除数据仓</button></footer>
-    {deleteOpen && <Dialog titleId="delete-title" className="delete-dialog" onClose={() => setDeleteOpen(false)} dismissible={!busy}>
+    {deleteOpen && <Dialog titleId="delete-title" className="delete-dialog" onClose={() => setDeleteOpen(false)} dismissible={!busy} focusContainer={busy === "delete"}>
       <h2 id="delete-title">删除数据仓？</h2><p>“{record.meta.name}”将移入回收站。{dirty && "未保存的修改将被丢弃。"}</p>
       <div className="dialog-actions"><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => setDeleteOpen(false)}>取消</button>
         <button type="button" className="danger-button" disabled={Boolean(busy)} onClick={confirmDelete}>{busy === "delete" ? "正在删除…" : "确认删除"}</button></div>
