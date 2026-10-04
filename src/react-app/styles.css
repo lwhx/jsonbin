@@ -1343,10 +1343,15 @@ kbd {
 .key-list h3 { margin: 0 0 8px; font-size: 15px; }
 .key-list p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
 .key-list .danger-button { flex-shrink: 0; }
+.key-card-main { flex: 1 1 auto; min-width: 0; }
+.key-card-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; flex-shrink: 0; }
+.key-revealed { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; }
+.key-revealed input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--panel-solid); font-family: ui-monospace, monospace; }
+.key-unavailable { padding: 10px 12px; border: 1px dashed var(--border); border-radius: 8px; }
 .key-disclosure { border-color: var(--accent); }
 .key-disclosure input { font-family: ui-monospace, monospace; }
 .key-example { overflow-x: auto; font-size: 12px; }
-@media (max-width: 640px) { .key-list li { flex-direction: column; } }
+@media (max-width: 640px) { .key-list li { flex-direction: column; } .key-card-actions { width: 100%; flex-direction: row; flex-wrap: wrap; } }
 
 .activity-page { min-width: 0; overflow-wrap: anywhere; }
 .activity-filters { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; }

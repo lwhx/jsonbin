@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   expect((await page.request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: process.env.JSONBIN_TEST_PASSWORD } })).status()).toBe(200);
 });
 
-test('API 密钥创建、复制、一次性显示、权限/期限、最后使用时间和撤销', async ({ page }) => {
+test('API 密钥创建、复制、刷新后再次显示、权限/期限、最后使用时间和撤销', async ({ page }) => {
   await page.goto('/#/keys');
   await page.getByLabel('密钥名称', { exact: true }).fill('浏览器自动化密钥');
   await page.getByLabel('bin:update', { exact: true }).check();
@@ -22,11 +22,11 @@ test('API 密钥创建、复制、一次性显示、权限/期限、最后使用
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '复制密钥', exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(token);
-  page.once('dialog', dialog => dialog.dismiss());
-  await page.getByRole('button', { name: '数据仓', exact: true }).click();
-  await expect(page).toHaveURL(/#\/keys$/); await expect(disclosure).toBeVisible();
-  await page.getByRole('button', { name: '我已保存密钥', exact: true }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(disclosure).not.toBeVisible();
+  await page.getByRole('button', { name: '数据仓', exact: true }).click();
+  await expect(page).toHaveURL(/#\/bins$/);
+  await page.goto('/#/keys');
   const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: '浏览器自动化密钥', exact: true }) });
   await expect(card).toContainText('尚未使用');
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` } })).status()).toBe(200);
@@ -35,6 +35,13 @@ test('API 密钥创建、复制、一次性显示、权限/期限、最后使用
   await expect(card).not.toContainText('尚未使用');
   await page.reload(); await expect(page.getByLabel('新 API 密钥', { exact: true })).not.toBeVisible();
   await expect(card).toContainText(key.prefix);
+  await page.getByRole('button', { name: '显示密钥 浏览器自动化密钥', exact: true }).click();
+  const revealed = page.getByLabel('API 密钥 浏览器自动化密钥', { exact: true });
+  await expect(revealed).toHaveValue(token);
+  await page.getByRole('button', { name: '复制密钥 浏览器自动化密钥', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(token);
+  await page.getByRole('button', { name: '隐藏密钥 浏览器自动化密钥', exact: true }).click();
+  await expect(revealed).not.toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '切换明暗主题', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
