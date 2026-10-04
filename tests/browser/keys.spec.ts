@@ -107,8 +107,8 @@ test('列表加载和撤销网络失败可重试，失败不会清除密钥记�
   await expect(page.locator('.detail-error[role=alert]')).toContainText('无法连接');
   await expect(card).toContainText('状态：有效');
   await page.unroute(`**/api/v1/keys/${created.key.id}`);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '撤销密钥 重试密钥', exact: true }).click();
+  await acceptConfirm(page, '撤销后该 Token 会立即失效');
   await expect(card).toContainText('已撤销');
 });
 
@@ -130,8 +130,8 @@ test('有效密钥可以直接永久删除，网络失败不会从列表移除�
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${created.token}` } })).status()).toBe(200);
 
   await page.unroute(`**/api/v1/keys/${created.key.id}/purge`);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除密钥 永久删除密钥', exact: true }).click();
+  await acceptConfirm(page, '保存的完整密钥无法恢复');
   await expect(card).toHaveCount(0);
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${created.token}` } })).status()).toBe(401);
 });
