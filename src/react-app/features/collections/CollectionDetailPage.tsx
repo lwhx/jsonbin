@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { createCollection, getCollection, getCollectionBins, removeCollection, saveCollection } from "./api";
 import type { CollectionRecord, CollectionInput } from "./api";
 import { getBin, saveBinMetadata } from "../bins/api";
@@ -9,6 +10,7 @@ export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin
   onOpenBin: (id: string) => void; onDirtyChange: (dirty: boolean) => void;
 }) {
   const client = useQueryClient();
+  const confirm = useConfirm();
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const query = useQuery({ queryKey: ["collection", id], queryFn: ({ signal }) => getCollection(id!, signal), enabled: Boolean(id), retry: false });
@@ -34,7 +36,13 @@ export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin
       client.invalidateQueries({ queryKey: ["collection-bins"] })]);
   }
   async function reload() {
-    if (!id || busy || (dirty && !window.confirm("重新加载会丢弃未保存的集合修改，是否继续？"))) return;
+    if (!id || busy || (dirty && !await confirm({
+      title: "重新加载集合？",
+      message: "重新加载会丢弃未保存的集合修改。",
+      confirmLabel: "重新加载",
+      cancelLabel: "继续编辑",
+      danger: true,
+    }))) return;
     setBusy(true); setError(""); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["collection", id] });
@@ -61,7 +69,12 @@ export function CollectionDetailPage({ id, onBack, onSaved, onDeleted, onOpenBin
     } catch (caught) { if (mounted.current) setError((caught as Error).message); } finally { if (mounted.current) setBusy(false); }
   }
   async function remove() {
-    if (!id || !baseline || busy || !window.confirm(`删除集合“${baseline.meta.name}”？只解除数据仓关联，所有 JSON 和历史版本都会保留。${dirty ? "未保存的集合修改将被丢弃。" : ""}`)) return;
+    if (!id || !baseline || busy || !await confirm({
+      title: "删除集合？",
+      message: `删除“${baseline.meta.name}”后只会解除数据仓关联，所有 JSON 和历史版本都会保留。${dirty ? "未保存的集合修改将被丢弃。" : ""}`,
+      confirmLabel: "删除集合",
+      danger: true,
+    })) return;
     setBusy(true); setError("");
     try {
       await removeCollection(id, baseline.etag); await invalidate();

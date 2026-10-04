@@ -44,6 +44,8 @@ import { KeysPage } from "./features/keys/KeysPage";
 import { DocsPage } from "./features/docs/DocsPage";
 import { ActivityPage } from "./features/activity/ActivityPage";
 import { TrashPage } from "./features/trash/TrashPage";
+import { Dialog } from "./components/Dialog";
+import { useConfirm } from "./components/ConfirmDialog";
 import { ExpiryLabel, expiryFromInput } from "./features/bins/expiry";
 
 type Health = {
@@ -355,6 +357,7 @@ function AuthenticatedApp({
   onToggleTheme: () => void;
 }) {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
   const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
@@ -369,18 +372,30 @@ function AuthenticatedApp({
   }, []);
 
   useEffect(() => {
-    function changed() {
+    let active = true;
+    async function changed() {
       const next = window.location.hash;
       if (next === route) return;
-      if (detailDirty && !window.confirm("还有未保存的内容，是否放弃修改并离开？")) {
+      if (detailDirty) {
         window.history.replaceState(null, "", route || window.location.pathname);
+        const leave = await confirm({
+          title: "放弃未保存的修改？",
+          message: "当前页面还有未保存内容，离开后这些修改将丢失。",
+          confirmLabel: "放弃并离开",
+          cancelLabel: "继续编辑",
+          danger: true,
+        });
+        if (!active || !leave) return;
+        setDetailDirty(false);
+        setRoute(next);
+        window.history.replaceState(null, "", next || window.location.pathname);
         return;
       }
       setDetailDirty(false); setRoute(next);
     }
     window.addEventListener("hashchange", changed);
-    return () => window.removeEventListener("hashchange", changed);
-  }, [route, detailDirty]);
+    return () => { active = false; window.removeEventListener("hashchange", changed); };
+  }, [route, detailDirty, confirm]);
 
   const health = useQuery({
     queryKey: ["system-health"],
@@ -414,7 +429,13 @@ function AuthenticatedApp({
   }, [health.data]);
 
   async function logout() {
-    if (detailDirty && !window.confirm("退出登录将丢弃未保存的修改，是否继续？")) return;
+    if (detailDirty && !await confirm({
+      title: "退出登录？",
+      message: "当前页面还有未保存内容，退出登录后这些修改将丢失。",
+      confirmLabel: "退出登录",
+      cancelLabel: "继续编辑",
+      danger: true,
+    })) return;
     window.dispatchEvent(new Event("jsonbin:logout"));
     setDetailDirty(false);
     await fetch("/api/v1/auth/logout", {
@@ -917,14 +938,7 @@ function CreateBinDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-bin-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <Dialog titleId="create-bin-title" onClose={onClose} dismissible={!saving}>
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">新建文档</span>
@@ -1008,8 +1022,7 @@ function CreateBinDialog({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

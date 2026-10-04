@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { useConfirm } from '../../components/ConfirmDialog';
 import type { SettingsRecord } from '../../../shared/system.ts';
 import { systemApi } from './api';
 export function DefaultsForm({ record, onSaved, onDirtyChange }: { record: SettingsRecord; onSaved: (r: SettingsRecord) => void; onDirtyChange: (dirty: boolean) => void }) {
+  const confirm = useConfirm();
   const [saved, setSaved] = useState(record), [visibility, setVisibility] = useState(record.settings.defaultVisibility), [ttl, setTtl] = useState(record.settings.defaultTtlSeconds?.toString() ?? '');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const mounted = useRef(false), generation = useRef(0), controller = useRef<AbortController | null>(null), running = useRef(false);
@@ -12,7 +14,13 @@ export function DefaultsForm({ record, onSaved, onDirtyChange }: { record: Setti
   function apply(r: SettingsRecord) { setSaved(r); setVisibility(r.settings.defaultVisibility); setTtl(r.settings.defaultTtlSeconds?.toString() ?? ''); }
   async function execute(reload: boolean) {
     if (running.current) return;
-    if (reload && dirty && !window.confirm('重新读取将丢弃默认设置草稿，是否继续？')) return;
+    if (reload && dirty && !await confirm({
+      title: "重新读取默认设置？",
+      message: "重新读取会丢弃当前未保存的默认设置草稿。",
+      confirmLabel: "重新读取",
+      cancelLabel: "继续编辑",
+      danger: true,
+    })) return;
     const seconds = ttl === '' ? null : Number(ttl);
     if (!reload && (seconds !== null && (!Number.isInteger(seconds) || seconds < 1 || seconds > 31536000))) { setError('TTL 请填写 1–31536000 的整数秒，或留空表示永不过期。'); return; }
     const token = ++generation.current, abort = new AbortController(); controller.current = abort; running.current = true; setBusy(true); setError(''); setNotice('');
