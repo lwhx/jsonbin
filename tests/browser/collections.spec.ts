@@ -94,11 +94,11 @@ test('集合冲突、取消删除和网络失败保留未保存内容，离开�
   await page.getByRole('button', { name: '返回集合', exact: true }).click();
   await page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true }).getByRole('button', { name: '继续编辑', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(initial.meta.id));
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '删除集合', exact: true }).click();
+  await page.getByRole('dialog', { name: '删除集合？', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
   expect((await page.request.get(path)).status()).toBe(200);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '重新加载集合', exact: true }).click();
+  await page.getByRole('dialog', { name: '重新加载集合？', exact: true }).getByRole('button', { name: '重新加载', exact: true }).click();
   await expect(page.getByLabel('集合名称', { exact: true })).toHaveValue('远程名称');
   await page.getByLabel('集合名称', { exact: true }).fill('网络草稿');
   await page.route(`**${path}`, route => route.request().method() === 'PATCH' ? route.abort('connectionfailed') : route.continue());
