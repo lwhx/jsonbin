@@ -991,9 +991,17 @@ Dashboard 内提供可直接复制的文档：
 - 文件只保留组件内存，预览确认后写入；切换文件、离页、退出或取消丢弃迟到结果/下载，默认设置迟到不覆盖手动选择，412 保留草稿。
 - API 文档新增系统管理及备份操作，curl/JavaScript/Python 示例共用契约；Python 正文显式 UTF-8 bytes。设计和执行依据见 [P10 设计](superpowers/specs/2026-10-04-p10-settings-backup-design.md) / [实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)。
 
-整阶段独立审查已完成：0 Critical、3 Important、2 Minor。三项重要发现为合法深层 JSON 被物理缩进大小拒绝、当前值导出错误依赖完整备份流程、最大安全整数版本/修订号后续写入溢出。修复采用有界流读取旧缩进 JSON、紧凑恢复文件、独立当前快照导出以及版本/修订耗尽前拒绝写入（409 version_limit_reached / revision_limit_reached），并保留既有元数据和历史。两处文档说明已同步纠正。新增 6 项真实 Worker/R2 边界回归通过，全部重要问题先观察 RED 再验证 GREEN；修复后的类型检查/构建、132 项 Worker/客户端测试及 48 项 Chromium 浏览器测试全部通过，无失败或 skip。main 合并与远端检查正在交付，最终结果随后同步。
+整阶段独立审查已完成：0 Critical、3 Important、2 Minor。三项重要发现为合法深层 JSON 被物理缩进大小拒绝、当前值导出错误依赖完整备份流程、最大安全整数版本/修订号后续写入溢出。修复采用有界流读取旧缩进 JSON、紧凑恢复文件、独立当前快照导出以及版本/修订耗尽前拒绝写入（409 version_limit_reached / revision_limit_reached），并保留既有元数据和历史。两处文档说明已同步纠正。新增 6 项真实 Worker/R2 边界回归通过，全部重要问题先观察 RED 再验证 GREEN；修复后的类型检查/构建、132 项 Worker/客户端测试及 48 项 Chromium 浏览器测试全部通过，无失败或 skip。全部改动已合并并推送 main，功能提交 `804fa4b` 的远端检查也已核对成功。
 
-中间功能分支 `9609f49` / `e981357` 的 Workers Builds 报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；后续精确 main 提交另行核对。缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
+交付记录（2026-10-04，Asia/Shanghai）：
+
+- 功能提交：`804fa4bf9d706e75c62f280491e0b8f2db9accae` 已合并、普通推送到 main；包含全部 P10 代码、修复、测试及接续文档。
+- GitHub CI：[v3 CI](https://github.com/lwhx/jsonbin/actions/runs/37163198650) 对功能提交报告 success，类型检查、生产构建、132 项 Worker/客户端测试和 48 项浏览器验收通过。
+- Cloudflare Workers Builds：[构建记录](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/9d2ef383-8491-4acf-8dea-d9cc69a8b982) 对功能提交报告 success，版本 ID 为 `ee48df6c-6a8d-4f82-9202-19faeb8f66a9`。
+- 中间功能分支 `9609f49` / `e981357` 的 Workers Builds 曾报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；这两条历史记录不用于代替已成功的 main 构建验收，也不推测其根因。
+- 后续仅同步进度的文档提交另行核对自身 CI / Workers Builds；验收记录保留精确功能 SHA。最新文档 SHA 的实际状态可在 [main 的检查记录](https://github.com/lwhx/jsonbin/commits/main/) 查看。
+- 缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
+- 换电脑直接从 main 接续，见本文 §11；下一阶段 P11 尚未开始。
 
 审查决定：保留私有 restoreOrder 以重建源修订顺序（若错误可能拒绝依赖恢复，不允许覆盖）；按用户要求提前推送中间功能分支并明确未完成状态（若失败需补交修复，main 仍经验证）；按用户要求同步纠正两项 Minor 文档（若错误会留下接口说明差异）；无证据的生产验收和功能分支构建失败根因不作成功宣称/推测（部署差异仍可能待发现）。无延期 Minor。
 
@@ -1087,7 +1095,7 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已实现，整阶段审查和修复已完成，修复后的 132 项自动化测试、48 项浏览器测试及类型检查/构建通过；main 交付及精确提交 CI / Workers Builds 待核对。下一阶段为 **P11 全局搜索与 KV 索引**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。下一阶段为 **P11 全局搜索与 KV 索引**。
 
 
 ## 11. 在另一台电脑接续开发
