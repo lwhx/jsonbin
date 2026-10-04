@@ -77,8 +77,8 @@ test('树形视图显示未保存草稿，切换保留内容，非法 JSON 提�
   await page.getByRole('button', { name: '返回编辑器', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存 JSON', exact: true })).toBeDisabled();
   await expect(page.locator('.monaco-editor')).toContainText('{bad');
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '返回数据仓', exact: true }).click();
+  await page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true }).getByRole('button', { name: '继续编辑', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(record.meta.id));
 });
 
