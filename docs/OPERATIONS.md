@@ -1,0 +1,72 @@
+# 备份、恢复与 v3 发布验收
+
+适用于当前 Cloudflare Workers / R2 / KV 实现。生产验收结果记录在 [开发进度](DEVELOPMENT.md#p12-稳定性安全与-v300)；构建部署成功和业务运行验收分别记录。
+
+## 配置与安全
+
+部署绑定 DATA 到目标 R2 桶，CACHE 到可丢弃的目标 KV 命名空间。密码、SESSION_SECRET、可选 TOKEN_PEPPER/GITHUB_CLIENT_SECRET 使用 Cloudflare Secrets；SESSION_SECRET 至少 32 字符。登录配置只有具备有效签名 Secret 才显示启用。更换 SESSION_SECRET 使旧登录失效；TOKEN_PEPPER 轮换前创建并验证替代 API Key，再撤销旧 Key，否则旧 HMAC Key 失效。
+
+APP_ORIGIN 默认可省略，浏览器仅允许请求站点自身。显式值必须是完整规范 Origin，例如 `https://json.example.com`，没有路径、末尾斜杠、凭据或通配符；错误配置拒绝 browser Origin。登录、退出、Session 写入也使用该规则。无 Origin 的 curl/Python 仍须有效认证；配置 CORS 不会授予 Scope。
+
+API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API 来自 Worker；Monaco 的 inline style/self/blob worker 是 CSP 的已验证需求，脚本不允许 unsafe-eval。应用异常日志仅有固定事件、请求 ID 和方法。不要把密码、Token、Cookie、OAuth code/state 或用户 JSON 放入 URL、命令行、共享日志。平台级访问日志可能记录 URL，另行设置可访问人员和保留时间；排查通过响应 `X-Request-ID` 关联应用日志。
+
+## 日常业务备份
+
+1. 管理 Session 登录设置页，导出全部业务备份；也可 `GET /api/v1/system/export?scope=all&format=backup`。ZIP 仅由浏览器包装，包含 manifest.json/backup.json、SHA-256 和 CRC32。
+2. 在受控备份存储中记录环境、日期、文件 SHA-256、服务版本、资源/版本数量，并验证 JSON/ZIP 能被设置页正常预览。业务 JSON 可能包含用户自己的敏感数据，按真实业务数据限制备份访问。
+3. 业务包保留默认设置、集合、模型修订、Bin 历史、回收站和永久删除标记。包上限 100 资源 / 250 逻辑对象 / 10 MiB。超限返回错误，不能把失败/部分文件视为备份。
+4. 业务包不包含 API Keys/摘要、Secret、活动、KV 或内部恢复标记。需要完整灾难恢复时同时执行下方 R2 快照与独立配置清单；不要把凭据值写进业务包或 Git。
+
+保留周期和备份频率根据部署者的恢复目标设置；仓库没有自动备份任务。回收站保留到手动永久删除，Cron 不会按 30 天自动清空。
+
+## 完整 R2 备份
+
+业务导出超限、需要恢复 API Key 元数据/活动，或需要完整灾难恢复时使用 Cloudflare R2 的 S3 兼容接口或账户支持的备份工具。R2 强一致性不等于跨多个对象的事务快照：复制期间暂停写入、导入和 Cron 维护，记录暂停窗口，复制所有对象及清单到独立受控目标，再恢复服务。不要在持续写入时把一次对象遍历称为一致快照。
+
+示例为单向复制，使用已安全配置的 AWS profile / R2 endpoint。独立备份目的桶不绑定生产应用；不用 `--delete`，不覆盖已有备份前缀。
+
+~~~bash
+aws --profile "$JSONBIN_BACKUP_PROFILE" --endpoint-url "$JSONBIN_R2_ENDPOINT" \
+  s3 sync "s3://$JSONBIN_SOURCE_BUCKET/" "s3://$JSONBIN_BACKUP_BUCKET/$JSONBIN_BACKUP_PREFIX/" \
+  --only-show-errors
+~~~
+
+R2 对象包含 immutable versions、模型修订、canonical metadata、legacy trash、purged terminal markers、system settings、pending import 和 receipt 状态。不要只复制 current.json 或丢弃永久删除标记，否则恢复可能破坏历史/生命周期约束。保存对象键/大小及实际内容 SHA-256 清单并抽查下载；multipart ETag 不等于内容 SHA-256。`indexes/` 是派生数据，可以在恢复后重新生成。
+
+独立保存绑定名称、桶/命名空间、兼容日期、Cron 配置、Origin、OAuth callback 和 Secret 版本的安全配置清单。系统 Secret 由安全凭据存储恢复；复制 R2 不会复制 Worker Secrets。API Key HMAC 元数据恢复后仍要求原 TOKEN_PEPPER，Session 使用新 Secret 时重新登录即可。
+
+## 在隔离实例恢复并演练
+
+1. 建立空 R2 桶和独立 KV，部署相同或兼容服务版本；设置独立域名、APP_ORIGIN、Secret 和 OAuth callback，先关闭 Cron。保留原环境及备份。
+2. 业务包通过设置页预览后逐资源恢复，集合/模型在 Bin 之前。核对每项 created/unchanged/skipped/failed 和 warnings；HTTP 200 不代表全部成功。既有资源不会被覆盖，changed backup 不能接管中断恢复；需要完整迁移时用空实例。
+3. 默认设置另行读取目标 ETag 并 PATCH。恢复保留 ID、历史、锁、公开性和 TTL；过期 Bin 按到期规则进入回收站。
+4. 完整 R2 快照则复制到空目标桶，逐项核对清单；先核对 pending/purging/terminal 状态，不手工删除安全标记。恢复生产写入前验证当前值、历史、集合、模型、锁、公开读与私有读边界、ETag 冲突和 API Key Scope。
+5. KV 无需备份恢复。设置页点击重建索引，或用 Session `POST /api/v1/search/rebuild`，核对 source/count/搜索结果。503 search_cleanup_limit_exceeded 可继续重建；KV 故障时 R2 搜索回退仍可用，认证/TTL 不能依赖缓存。
+6. 确认通过后开启 Cron，核对真实一次 scheduled 执行及结果，再切换域名/绑定。失败时保持原服务可回退；不把切换和删除旧桶绑成一个步骤。
+
+业务恢复的 ETag 由目标 R2 重新生成，不能沿用源环境缓存的 ETag。重复已完成恢复可 unchanged，中断可用同包续作；取消/网络失败不回滚已发布资源，先查列表再重试。
+
+## stable 发布门槛
+
+本地执行 `npm run typecheck`、`npm test`、`npm run test:browser`。最后两项使用构建后的 Worker / 真实本地 R2/KV；生产构建浏览器另外通过 Assets 路由验证 CSP。用精确功能 SHA 核对 GitHub CI、Workers Builds success 和 Version ID。
+
+生产 URL 确认后运行公开探针（只 GET/OPTIONS，无登录或业务写入）：
+
+~~~bash
+npm run check:production -- https://your-production-domain.example
+~~~
+
+如果 APP_ORIGIN 明确指向另一 Dashboard Origin，设置 `JSONBIN_BROWSER_ORIGIN` 为该 Origin 再运行。探针核对当前 package 版本、R2/KV 绑定声明、HTML/API 安全头、no-store、匿名管理拒绝及同站/跨站 CORS。health 只声明绑定存在，不能证明 R2/KV 的实际读写；探针不能验证以下登录项目。
+
+在生产创建专用验收资源，记录结果并只清理这些资源：
+
+| 项目 | 必须记录的实际证据 |
+| --- | --- |
+| 登录/退出 | 密码和配置启用时的 GitHub OAuth 成功；state 错误、非允许 GitHub ID 拒绝；HTTPS Cookie 属性与 Secret 轮换 |
+| API 权限 | 匿名私有/历史/搜索拒绝，公开当前值可读；实际 Bearer 各 Scope、过期/撤销、显式 Bearer 不回退 Cookie |
+| 数据与并发 | CRUD、不可变历史、If-Match 冲突、锁、Draft 7 校验、集合/模型关联、回收站恢复 |
+| 页面 | 实际部署的 CSP 下登录/编辑/保存/刷新；390px 手机、深色模式、中文、无 CSP violation |
+| 搜索与恢复 | 实际 KV 重建与 R2 回退；隔离环境导出/恢复演练及资源/历史核对 |
+| TTL/Cron | 一个专用短 TTL Bin 请求到期后不可读；记录一次真实 15 分钟 Cron 日志和维护结果，含活动清理/续作任务 |
+
+只有以上生产项目、本地检查和远端部署全部有证据，才将 package 改为 `3.0.0`、更新发行说明并发布 stable。没有生产 URL、适用凭据或实际 Cron 证据时，保留 alpha 版本及未勾选发布门槛。

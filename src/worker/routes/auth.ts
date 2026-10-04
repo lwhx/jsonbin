@@ -6,8 +6,12 @@ import {
   clearSession,
   issueSession,
   readSession,
+  sessionConfigured,
 } from "../auth/session";
-import { base64UrlEncode } from "../lib/crypto";
+import { base64UrlEncode, timingSafeEqualText } from "../lib/crypto";
+import { allowedRequestOrigin } from "../auth/origin";
+import { readBoundedJson } from "../lib/system-http";
+import { SystemError } from "../../shared/system";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -24,10 +28,10 @@ const loginSchema = z.object({
 app.get("/config", (c) => {
   return c.json({
     passwordEnabled: Boolean(
-      c.env.ADMIN_USERNAME && c.env.ADMIN_PASSWORD,
+      sessionConfigured(c.env) && c.env.ADMIN_USERNAME && c.env.ADMIN_PASSWORD,
     ),
     githubEnabled: Boolean(
-      c.env.GITHUB_CLIENT_ID &&
+      sessionConfigured(c.env) && c.env.GITHUB_CLIENT_ID &&
         c.env.GITHUB_CLIENT_SECRET &&
         c.env.GITHUB_ALLOWED_USER_ID,
     ),
@@ -35,16 +39,24 @@ app.get("/config", (c) => {
 });
 
 app.post("/login", async (c) => {
-  const body = loginSchema.safeParse(await c.req.json().catch(() => null));
+  if (!allowedRequestOrigin(c.req.raw, c.env)) return c.json({ error: "origin_not_allowed" }, 403);
+  if (!sessionConfigured(c.env)) return c.json({ error: "session_not_configured" }, 503);
+  let input: unknown;
+  try { input = await readBoundedJson(c.req.raw, 4096); }
+  catch (error) {
+    if (error instanceof SystemError && error.status === 413) return c.json({ error: error.code }, 413);
+    return loginFailure(c, "invalid_request", 400);
+  }
+  const body = loginSchema.safeParse(input);
   if (!body.success) {
     return loginFailure(c, "invalid_request", 400);
   }
 
   const configuredUsername = c.env.ADMIN_USERNAME;
-  const usernameMatches =
-    Boolean(configuredUsername) && body.data.username === configuredUsername;
-  const passwordMatches =
-    Boolean(c.env.ADMIN_PASSWORD) && body.data.password === c.env.ADMIN_PASSWORD;
+  const [usernameMatches, passwordMatches] = await Promise.all([
+    timingSafeEqualText(body.data.username, configuredUsername ?? ''),
+    timingSafeEqualText(body.data.password, c.env.ADMIN_PASSWORD ?? ''),
+  ]);
 
   if (!usernameMatches || !passwordMatches) {
     return loginFailure(c, "invalid_credentials", 401);
@@ -68,6 +80,7 @@ app.post("/login", async (c) => {
 });
 
 app.post("/logout", (c) => {
+  if (!allowedRequestOrigin(c.req.raw, c.env)) return c.json({ error: "origin_not_allowed" }, 403);
   clearSession(c);
   return c.json({ ok: true });
 });
@@ -79,7 +92,8 @@ app.get("/me", async (c) => {
 });
 
 app.get("/github", (c) => {
-  if (!c.env.GITHUB_CLIENT_ID) {
+  if (!sessionConfigured(c.env)) return c.json({ error: "session_not_configured" }, 503);
+  if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET || !c.env.GITHUB_ALLOWED_USER_ID) {
     return c.json({ error: "github_oauth_not_configured" }, 503);
   }
 
@@ -112,6 +126,8 @@ app.get("/github/callback", async (c) => {
   }
 
   deleteCookie(c, "jsonbin_oauth_state", { path: "/" });
+
+  if (!sessionConfigured(c.env)) return loginFailure(c, "session_not_configured", 503);
 
   if (
     !c.env.GITHUB_CLIENT_ID ||
@@ -153,7 +169,7 @@ app.get("/github/callback", async (c) => {
     };
   } catch { return loginFailure(c, "github_token_exchange_failed", 502); }
 
-  if (!tokenData?.access_token) {
+  if (typeof tokenData?.access_token !== 'string' || !tokenData.access_token) {
     return loginFailure(c, "github_token_missing", 401);
   }
 
@@ -177,6 +193,11 @@ app.get("/github/callback", async (c) => {
       login: string;
     };
   } catch { return loginFailure(c, "github_user_lookup_failed", 502); }
+
+  if (!githubUser || !Number.isSafeInteger(githubUser.id) || githubUser.id <= 0 ||
+    typeof githubUser.login !== 'string' || !githubUser.login || githubUser.login.length > 128) {
+    return loginFailure(c, "github_user_lookup_failed", 502);
+  }
 
   if (!githubUser || String(githubUser.id) !== String(c.env.GITHUB_ALLOWED_USER_ID)) {
     return loginFailure(c, "github_user_not_allowed", 403);

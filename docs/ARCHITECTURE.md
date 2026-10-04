@@ -92,7 +92,7 @@ Security decisions, version numbers and canonical metadata must never depend sol
 
 JSONBin v3 is single-user.
 
-Dashboard login will support:
+Dashboard login supports:
 
 1. local username + password;
 2. GitHub OAuth restricted to one configured GitHub numeric user ID.
@@ -100,6 +100,10 @@ Dashboard login will support:
 There is no public registration.
 
 Local password login reads ADMIN_USERNAME and ADMIN_PASSWORD from Cloudflare Worker variables/secrets. The plaintext password is not committed to Git. Session cookies are signed, HttpOnly, Secure on HTTPS and SameSite protected.
+
+Session parsing rejects malformed/noncanonical encodings, extra token segments, invalid identity fields, expiry and signature tampering without a server error. A signing secret of at least 32 characters is required. Login bodies are bounded to 4 KiB of actual streamed UTF-8 bytes; password comparisons use fixed-size digests. GitHub OAuth checks state before upstream requests and validates upstream user structure and the allowed numeric ID before signing a session.
+
+CORS and cookie-authenticated writes share one exact Origin policy, including login/logout. APP_ORIGIN defaults to the request Origin; an explicit malformed configuration fails closed. Scripts without an Origin still require normal authentication and scopes. All API responses are no-store and carry a server-generated X-Request-ID. JSON APIs use their Worker security headers; static SPA assets use public/_headers because asset routing bypasses the API middleware. The bundled Monaco requires inline styles and self/blob workers but not unsafe-eval. Generic error logs contain only method and requestId, with no raw error message, path, URL or credentials. Platform access logs require their own retention/access configuration. See [operations and recovery](OPERATIONS.md).
 
 API authentication is separate from dashboard sessions.
 

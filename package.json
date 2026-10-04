@@ -8,6 +8,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "check:production": "node scripts/check-production.mjs",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "npm run build && vite preview",

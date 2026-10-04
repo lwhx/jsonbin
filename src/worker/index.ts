@@ -14,24 +14,33 @@ import collectionRoutes from "./routes/collections";
 import trashRoutes from "./routes/trash";
 import { sweepBins } from "./storage/trash";
 import { version } from "../../package.json";
+import { applicationOrigin } from "./auth/origin";
 
 type Bindings = Env;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use("/api/*", async (c, next) => { c.set("requestId", crypto.randomUUID()); await next(); });
-app.use("/api/*", secureHeaders());
+app.use("/api/*", async (c, next) => {
+  const requestId = crypto.randomUUID();
+  c.set("requestId", requestId);
+  c.header("X-Request-ID", requestId);
+  c.header("Cache-Control", "no-store");
+  await next();
+});
+app.use("/api/*", secureHeaders({
+  xFrameOptions: 'DENY',
+  contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+  permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
+}));
 
 app.use(
   "/api/*",
   cors({
     origin: (origin, c) => {
-      const allowed = c.env.APP_ORIGIN;
-      if (!allowed) return origin;
-      return origin === allowed ? origin : allowed;
+      return origin === applicationOrigin(c.req.raw, c.env) ? origin : null;
     },
     allowHeaders: ["Content-Type", "Authorization", "If-Match"],
-    exposeHeaders: ["ETag", "X-JSONBin-Version"],
+    exposeHeaders: ["ETag", "X-JSONBin-Version", "X-Request-ID"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   }),
@@ -73,8 +82,7 @@ app.notFound((c) => c.json({ error: "not_found" }, 404));
 
 app.onError((error, c) => {
   console.error("request_failed", {
-    message: error.message,
-    path: c.req.path,
+    requestId: c.get("requestId"),
     method: c.req.method,
   });
 

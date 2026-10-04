@@ -1071,25 +1071,65 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 在发布 v3.0.0 stable 之前必须完成：
 
-- [ ] API 单元测试
-- [ ] R2 storage 测试
-- [ ] ETag 并发测试
-- [ ] Session 测试
+- [x] API 单元测试
+- [x] R2 storage 测试
+- [x] ETag 并发测试
+- [x] Session 测试
 - [x] API Key Scope 测试（P5–P11 当前接口及搜索筛选权限矩阵；后续新增接口需扩展）
-- [ ] Schema 校验测试
-- [ ] Trash/Restore 测试
-- [ ] npm run typecheck 通过
-- [ ] npm run build 通过
+- [x] Schema 校验测试
+- [x] Trash/Restore 测试
+- [x] npm run typecheck 通过
+- [x] npm run build 通过
 - [ ] GitHub Actions 通过
 - [ ] Cloudflare Production 部署通过
-- [ ] 手机端基础适配
-- [ ] 深色模式检查
-- [ ] 中文 UI 检查
-- [ ] Security Headers 检查
-- [ ] CORS 检查
-- [ ] 日志敏感信息检查
-- [ ] R2/KV 备份与恢复说明
-- [ ] README 与 API Docs 同步
+- [x] 手机端基础适配（本地 390px；实际部署待验）
+- [x] 深色模式检查（本地生产构建；实际部署待验）
+- [x] 中文 UI 检查（本地生产构建登录/编辑/保存/退出）
+- [x] Security Headers 检查（本地真实 Assets 路由；生产公开探针待 URL）
+- [x] CORS 检查（本地同源、显式来源、错误配置及预检；生产待验）
+- [x] 日志敏感信息检查（应用日志 canary 回归；平台访问日志单独配置）
+- [x] R2/KV 备份与恢复说明
+- [x] README 与 API Docs 同步
+
+### P12 实现与验收（2026-10-04，Asia/Shanghai）
+
+范围见 [P12 设计](superpowers/specs/2026-10-04-p12-release-design.md) 与 [实施计划](superpowers/plans/2026-10-04-p12-release.md)。基线 main `9cbfeee` 与远程一致。
+
+- Session 拒绝畸形/非规范 base64url、额外段、签名篡改、错误身份/provider/exp 和过期 Cookie；无效请求返回 401，缺失/过短签名 Secret 不再产生解析 500。登录配置反映有效签名 Secret，签发入口未配置返回 503。
+- 密码登录比较固定长度摘要，正文实际读取上限 4 KiB（含虚假 Content-Length / 流式正文）；GitHub state 和上游身份验证通过才签发 Session。
+- 统一 CORS 与登录/退出/Session 写入的 Origin 规则，默认请求同源，显式 APP_ORIGIN 为规范 http(s) Origin，错误配置拒绝来源；保留无 Origin 脚本、Bearer Scope 和显式 Authorization 优先规则。
+- 所有 API no-store、JSON CSP、安全头与 X-Request-ID；静态页面通过 `public/_headers` 配置 CSP，脚本 self、无 unsafe-eval，保留 Monaco 所需 inline style/self/blob worker。
+- 生产 CSP 测试发现 Zod 的 Function 能力探测会触发违规，即使库捕获错误；前端在 Schema 构造前启用 jitless，继续使用解释校验，不开放 eval。
+- 通用异常日志移除 raw Error.message 与用户 path，仅保留 method/requestId；回归使用异常/路径 canary，错误响应不含内部异常。
+- 新增 [运维说明](OPERATIONS.md)：有上限的业务备份与完整 R2 快照分别说明；隔离实例恢复、KV 重建、Secret 轮换和 stable 门槛。新增 `npm run check:production -- <Origin>` 公开 GET/OPTIONS 探针；在运行的本地生产构建验证 7 项检查。
+- 修正 API 文档的“默认 30 天清理”描述：当前回收站保留至手动永久删除，15 分钟 Cron 只标记到期及续作清理。README / API Docs / 架构同步。
+
+已有回归按实际覆盖复用，不重复改写：
+
+| 清单 | 回归证据 |
+| --- | --- |
+| API / R2 / ETag | `tests/worker.test.mjs` 的 CRUD、不可变版本、CAS 双写冲突、孤儿/失败清理、锁与路径更新 |
+| Session / CORS / 响应头 / 日志 / OAuth | `tests/security.test.mjs` 新增 12 项；`tests/assets.test.mjs` 真实生产静态路由与公开探针 |
+| API Key Scope | `tests/keys.test.mjs` / `worker.test.mjs` / `search.test.mjs` 的 Scope 矩阵、撤销/过期与 Cookie 优先边界 |
+| Schema | `worker.test.mjs` 的 Draft 7、引用、固定修订、校验失败不发布及模型锁 |
+| Trash / Restore / Cron | `worker.test.mjs` 的到期、并发恢复/永久删除、续作/终态清理；`backup-restore.test.mjs` 的备份恢复中断与冲突 |
+| 备份与文档 | `backup-*.test.mjs`、`import.test.mjs`、`zip.test.mjs`、`docs-contracts.test.mjs` 的边界、无覆盖恢复及可执行示例 |
+
+本地 `npm run typecheck`、production build、`npm test` 与 `npm run test:browser` 通过：**159 项 Worker/client/Assets 测试与 53 项 Chromium 浏览器测试，0 failed / 0 skipped**。新增生产构建用真实 Assets 路由验证 CSP 下中文登录、Monaco 保存/刷新、ZIP 导出校验、390px 手机深色模式和退出，CSP violation / pageerror 均为 0。远端精确 SHA 检查在推送后补证据。
+
+### stable 发布仍需真实环境证据
+
+版本保持 `3.0.0-alpha.4`。本地测试/Cron 调用及 Workers Builds 不替代真实部署的业务验收。当前环境没有生产 URL 或适用生产认证；GitHub repository homepage `https://jsonbin.org` 公开探测不可用，也未确认它对应此 Worker，因此不作为生产证据。
+
+- [ ] 生产公开探针：当前版本、HTML/API headers、CORS 与匿名权限
+- [ ] 生产密码登录/退出、配置启用时 GitHub OAuth、Session/Bearer/Scope
+- [ ] 真实部署浏览器：中文、手机、深色模式及 Monaco/CSP
+- [ ] 生产 CRUD/ETag/Schema/回收站、实际 KV 搜索/重建与 R2 回退
+- [ ] 备份在隔离环境恢复演练及资源/历史核对
+- [ ] 一次真实 15 分钟 Cron 的日志和 TTL/维护结果
+- [ ] 完成以上验收后发布 v3.0.0 stable
+
+按 [运维发布表](OPERATIONS.md#stable-发布门槛) 接续，记录环境、时间、版本和结果；只清理专用验收资源。
 
 ## 8. 每个阶段的固定开发流程
 
@@ -1130,12 +1170,12 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。下一阶段为 **P12 稳定性、安全与 v3.0.0**；先清点已有回归证据，再完成发布前审查和生产手动验收。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、完整回归及运维说明已实现，生产验收及 stable 门槛单独保留；按上方 P12 证据与待验清单继续。
 
 
 ## 11. 在另一台电脑接续开发
 
-从远程 `main` 接续；代码、P10/P11 设计/计划及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 开发与自动化验收已完成，下一项为 P12；以本文 P11 交付证据、P12 清单及 P11 设计/计划接续。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
+从远程 `main` 接续；代码、P10–P12 设计/计划、运维说明及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 已交付，P12 安全加固与发布验收正在接续；以本文 P12 实现/远端证据、生产待验清单、P12 设计/计划及运维说明继续，不重复开发已有功能。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
 
 首次检出和验证（Node 22 最新维护版或 Node 24，Python 3，用于 ZIP/示例验证）：
 
@@ -1153,4 +1193,4 @@ npm run test:browser
 
 已有检出先保留自己的未提交改动，再切到 main 并执行 `git pull --ff-only origin main`，不需要拉取功能分支。Linux 若缺浏览器系统库，可用 `npx playwright install --with-deps chromium`。测试会生成随机临时认证，使用本地 R2/KV，无需生产凭据。需要实际启动 Dashboard 时，首次复制 `.dev.vars.example` 为 `.dev.vars` 并配置本地测试登录信息，再 `npm run dev`；不要覆盖已有私有配置，也不要提交真实 Secret。
 
-继续前优先查看：本文件 P11 验收/远端状态、[P11 设计](superpowers/specs/2026-10-04-p11-search-design.md)、[P11 实施计划](superpowers/plans/2026-10-04-p11-search.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。
+继续前优先查看：本文件 P12 验收/远端状态、[P12 设计](superpowers/specs/2026-10-04-p12-release-design.md)、[P12 实施计划](superpowers/plans/2026-10-04-p12-release.md)、[运维与发布说明](OPERATIONS.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。

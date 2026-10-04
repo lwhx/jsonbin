@@ -38,6 +38,8 @@ The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON 
 
 P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance remains separately tracked.
 
+P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) describes R2/KV backups, isolated recovery and the remaining production gates. The version remains `3.0.0-alpha.4` until actual production authentication, browser behavior, recovery and Cron acceptance are recorded.
+
 ## Local development
 
 ```bash
@@ -64,6 +66,10 @@ SESSION_SECRET=a-random-string-at-least-32-characters
 ```
 
 Store `ADMIN_PASSWORD` and `SESSION_SECRET` as Cloudflare Secrets. Do not commit their real values to Git.
+
+`SESSION_SECRET` must have at least 32 characters; otherwise login is disabled with 503 and existing sessions are unauthenticated. Password login accepts at most 4 KiB of actual UTF-8 request body. Cookies last 14 days and use HttpOnly, Secure on HTTPS, and SameSite=Lax; rotating the signing secret invalidates existing sessions.
+
+Browser CORS defaults to the request's own origin. Optional `APP_ORIGIN` must be one exact canonical HTTP(S) origin, such as `https://json.example.com`, without credentials, path or trailing slash. Foreign/opaque origins are denied; invalid configuration fails closed. Login, logout and Session writes apply the same rule. Non-browser clients may omit Origin but still need authentication and scopes. Every API response is no-store and includes `X-Request-ID` for safe log correlation. See [production checks](docs/OPERATIONS.md#stable-发布门槛).
 
 ## Cloudflare resources
 
@@ -178,6 +184,7 @@ Keep the pepper stable: replacing or removing it invalidates existing HMAC keys.
 
 - [Development plan](docs/DEVELOPMENT.md) — step-by-step implementation order and acceptance criteria
 - [Architecture](docs/ARCHITECTURE.md) — storage, runtime and security architecture
+- [Operations](docs/OPERATIONS.md) — R2/KV backup, isolated recovery and stable release gates
 
 ## Roadmap
 
@@ -206,7 +213,7 @@ The first stable v3 release is planned to include:
 
 P8 adds the Chinese **活动记录** dashboard at `/#/activity`, with refresh, operation/resource filters and cursor pagination. `GET /api/v1/activity` requires a management Session; explicit Authorization headers are rejected even with a valid Cookie. API Keys cannot read this list.
 
-Records are immutable R2 objects containing fixed action summaries, safe resource/user/key IDs, timestamps and server-generated request IDs. Passwords, Cookie/Authorization values, tokens or digests, OAuth code/state, names/descriptions, JSON values and field paths are excluded. Successful management operations and anonymous login failures are recorded; partial trash batches record only successful items.
+Records are immutable R2 objects containing fixed action summaries, safe resource/user/key IDs, timestamps and server-generated request IDs. Passwords, Cookie/Authorization values, tokens or digests, OAuth code/state, names/descriptions, JSON values and field paths are excluded. Successful management operations and anonymous credential/body-validation failures are recorded; Origin rejection, oversized login bodies and disabled login configuration do not write activity; partial trash batches record only successful items.
 
 Business commits and activity writes are separate. A failed activity write preserves the business result and may leave a missing record; this is a recent operation list, not a guaranteed audit chain. The existing 15-minute Cron retries cleanup to the newest 2000 records, with temporary overflow possible. Queries are bounded and may return fewer items or empty pages with a continuation cursor.
 
@@ -242,6 +249,6 @@ Restore preserves IDs, visibility, TTL, locks, deletion state, pinned model revi
 
 No established legacy JSONBin export protocol/sample is available, so legacy-format import is currently not applicable. Ordinary JSON is never auto-unpacked based on a `format` field. See [P10 development notes](docs/DEVELOPMENT.md#p10-设置导入与导出) and the [approved design](docs/superpowers/specs/2026-10-04-p10-settings-backup-design.md).
 
-P10 is merged and pushed to main at functional delivery commit `804fa4b`. Local typecheck/build, all 132 Worker/client tests and all 48 Chromium tests pass, with no failures or skipped tests. The independent whole-branch review's three Important findings have verified fixes and both Minor documentation findings are corrected; none are deferred. [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37163198650) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/9d2ef383-8491-4acf-8dea-d9cc69a8b982) passed for the exact functional commit. Subsequent documentation-only commits have their own checks. Production authentication/CORS, deployed browser behavior and real Cron remain unverified because the production URL and suitable credentials are unavailable. Next phase: P11 search and KV indexes, not yet started.
+P10 is merged and pushed to main at functional delivery commit `804fa4b`. Local typecheck/build, all 132 Worker/client tests and all 48 Chromium tests pass, with no failures or skipped tests. The independent whole-branch review's three Important findings have verified fixes and both Minor documentation findings are corrected; none are deferred. [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37163198650) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/9d2ef383-8491-4acf-8dea-d9cc69a8b982) passed for the exact functional commit. Subsequent documentation-only commits have their own checks. Production authentication/CORS, deployed browser behavior and real Cron remain unverified because the production URL and suitable credentials are unavailable. P11 search and KV indexes are delivered; P12 security and release acceptance is the current phase.
 
-For development on another computer, use the remote main branch and follow [the development handoff](docs/DEVELOPMENT.md#11-在另一台电脑接续开发). P11 search and KV indexes have not started.
+For development on another computer, use the remote main branch and follow [the development handoff](docs/DEVELOPMENT.md#11-在另一台电脑接续开发), [P12 design](docs/superpowers/specs/2026-10-04-p12-release-design.md) and [operations guide](docs/OPERATIONS.md).

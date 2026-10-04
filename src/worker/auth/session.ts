@@ -1,5 +1,6 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
+import { SystemError } from "../../shared/system";
 import {
   base64UrlDecode,
   base64UrlEncode,
@@ -22,10 +23,14 @@ type SessionPayload = SessionUser & {
 
 type JsonBinContextEnv = { Bindings: Env };
 
+export function sessionConfigured(env: Env) {
+  return typeof env.SESSION_SECRET === 'string' && env.SESSION_SECRET.length >= 32;
+}
+
 function sessionSecret<T extends JsonBinContextEnv>(c: Context<T>) {
   const secret = c.env.SESSION_SECRET;
   if (!secret || secret.length < 32) {
-    throw new Error("SESSION_SECRET must be configured with at least 32 characters");
+    throw new SystemError(503, "session_not_configured");
   }
   return secret;
 }
@@ -53,26 +58,31 @@ export async function issueSession<T extends JsonBinContextEnv>(
 }
 
 export function clearSession(c: Context) {
-  deleteCookie(c, COOKIE_NAME, { path: "/" });
+  deleteCookie(c, COOKIE_NAME, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:" });
 }
 
 export async function readSession<T extends JsonBinContextEnv>(
   c: Context<T>,
 ): Promise<SessionUser | null> {
-  const token = getCookie(c, COOKIE_NAME);
-  if (!token) return null;
-
-  const [encodedPayload, signature] = token.split(".");
-  if (!encodedPayload || !signature) return null;
-
-  const expected = await hmacSign(sessionSecret(c), encodedPayload);
-  const valid = await timingSafeEqualBase64Url(signature, expected);
-  if (!valid) return null;
-
+  if (!sessionConfigured(c.env)) return null;
   try {
-    const json = new TextDecoder().decode(base64UrlDecode(encodedPayload));
+    const token = getCookie(c, COOKIE_NAME);
+    if (!token || token.length > 4096) return null;
+    const parts = token.split(".");
+    if (parts.length !== 2) return null;
+    const [encodedPayload, signature] = parts;
+    if (!/^[A-Za-z0-9_-]+$/.test(encodedPayload) || !/^[A-Za-z0-9_-]{43}$/.test(signature)) return null;
+    const bytes = base64UrlDecode(encodedPayload);
+    if (base64UrlEncode(bytes) !== encodedPayload || base64UrlEncode(base64UrlDecode(signature)) !== signature) return null;
+    const expected = await hmacSign(sessionSecret(c), encodedPayload);
+    if (!await timingSafeEqualBase64Url(signature, expected)) return null;
+    const json = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
     const payload = JSON.parse(json) as SessionPayload;
-    if (!payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (!payload || typeof payload !== 'object' ||
+      typeof payload.id !== 'string' || !payload.id || payload.id.length > 128 ||
+      typeof payload.username !== 'string' || !payload.username || payload.username.length > 128 ||
+      !['password', 'github'].includes(payload.provider) ||
+      !Number.isSafeInteger(payload.exp) || payload.exp <= Math.floor(Date.now() / 1000)) return null;
 
     return {
       id: payload.id,

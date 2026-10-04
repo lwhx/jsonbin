@@ -2,6 +2,7 @@ import "../activity";
 import { readApiKey, useApiKey, type ApiScope } from "../storage/keys";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
+import { allowedRequestOrigin } from "../auth/origin";
 
 type Variables = {
   user: SessionUser;
@@ -14,8 +15,7 @@ export const requireSession: MiddlewareHandler<{
   const user = await readSession(c);
   if (!user) return c.json({ error: "unauthorized" }, 401);
   // Browser writes with ambient cookies must originate from this application.
-  const origin = c.req.raw.headers.get("Origin");
-  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method) && origin !== null && origin !== (c.env.APP_ORIGIN || new URL(c.req.url).origin)) {
+  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method) && !allowedRequestOrigin(c.req.raw, c.env)) {
     return c.json({ error: "origin_not_allowed" }, 403);
   }
 
