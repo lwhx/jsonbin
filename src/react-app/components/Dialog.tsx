@@ -7,9 +7,10 @@ type Props = {
   onClose?: () => void;
   dismissible?: boolean;
   className?: string;
+  focusContainer?: boolean;
 };
 
-export function Dialog({ titleId, children, onClose, dismissible = true, className = "" }: Props) {
+export function Dialog({ titleId, children, onClose, dismissible = true, className = "", focusContainer = false }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const focusable = () => ref.current?.querySelector<HTMLElement>(
     "[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
@@ -38,6 +39,10 @@ export function Dialog({ titleId, children, onClose, dismissible = true, classNa
     const activeDisabled = active instanceof HTMLButtonElement && active.disabled;
     if ((!activeInside || activeDisabled) && !focusable()) dialog.focus();
   });
+
+  useEffect(() => {
+    if (focusContainer) ref.current?.focus();
+  }, [focusContainer]);
 
   function keyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && dismissible && onClose) {
