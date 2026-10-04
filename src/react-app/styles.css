@@ -1418,3 +1418,39 @@ kbd {
 .search-result code { white-space: normal; overflow-wrap: anywhere; }
 .search-index-panel { padding: 24px; }
 @media (max-width:700px) { .global-search-form { grid-template-columns: minmax(0,1fr); } .search-result, .search-index-panel { padding: 16px; } }
+
+
+/* JSON form editor */
+.json-form-editor { padding: 16px; min-width: 0; }
+.json-form-description { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.json-form-header, .json-form-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 120px minmax(190px, 1.5fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.json-form-header { padding: 0 10px 8px; color: var(--muted); font-size: 11px; }
+.json-form-rows { display: grid; gap: 8px; }
+.json-form-row { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-solid); }
+.json-form-row input, .json-form-row select, .json-form-batch textarea {
+  width: 100%; min-width: 0; border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 10px;
+  font: inherit; font-size: 13px; color: var(--text); background: var(--panel-solid);
+}
+.json-form-row input:focus, .json-form-row select:focus, .json-form-batch textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.json-form-value { min-width: 0; }
+.json-form-static { display: inline-flex; padding: 8px 10px; color: var(--muted); }
+.json-form-structured { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.json-form-structured code { color: var(--accent-text); font-size: 13px; }
+.json-form-delete { white-space: nowrap; }
+.json-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.json-form-error { margin: 12px 0 0; }
+.json-form-batch { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.json-form-batch label { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
+.json-form-batch textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.json-form-batch > p { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.json-form-invalid { padding: 16px; }
+@media (max-width: 700px) {
+  .json-form-header { display: none; }
+  .json-form-row { grid-template-columns: minmax(0, 1fr); }
+  .json-form-delete { justify-self: start; }
+}

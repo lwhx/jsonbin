@@ -14,10 +14,15 @@ import { SchemaIssues } from "../schemas/SchemaIssues";
 import { BinApiPanel } from "../docs/BinApiPanel";
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 import { JsonTree } from './JsonTree';
+import { JsonFormEditor } from "./JsonFormEditor";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
-type Tab = "编辑器" | "树形视图" | "历史版本" | "API" | "设置";
+type Tab = "表单编辑" | "编辑器" | "树形视图" | "历史版本" | "API" | "设置";
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function metadataOf(record: BinRecord): MetadataInput {
   const { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt } = record.meta;
   return { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt, refreshSchema: false };
@@ -41,6 +46,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [formValid, setFormValid] = useState(true);
   const deleteDialog = useRef<HTMLDivElement>(null);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
   const dirty = Boolean(draft && (isDirty(draft) || metadataDirty));
@@ -225,10 +231,24 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       }}>重新登录</button>}
     </div>}
     <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
-      {(["编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
+      {(["表单编辑", "编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
         <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{item}</button>)}
     </div>
     <div className="panel detail-panel" role="tabpanel" aria-label={tab}>
+      {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
+        <div className="editor-toolbar"><span>键值表单</span>
+          <button type="button" className="primary-button"
+            disabled={!formValid || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}>
+            <Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}
+          </button>
+        </div>
+        <JsonFormEditor value={parsed.value} sourceText={draft.text} disabled={locked || Boolean(busy)}
+          onValidityChange={setFormValid}
+          onChange={text => { setDraft(previous => previous ? { ...previous, text } : previous); setNotice(""); }} />
+      </> : <div className="json-form-invalid">
+        <p className="detail-error" role="alert">{parsed.valid ? "表单编辑仅支持根对象（{ }）。数组、字符串、数字等根值请使用代码编辑器。" : parsed.error + "请返回编辑器修正后再使用表单编辑。"}</p>
+        <button type="button" className="secondary-button" onClick={() => setTab("编辑器")}>返回编辑器</button>
+      </div>)}
       {tab === "编辑器" && <>
         <div className="editor-toolbar"><span>JSON</span>
           <button type="button" className="secondary-button" disabled={!parsed.valid || Boolean(busy) || locked}
