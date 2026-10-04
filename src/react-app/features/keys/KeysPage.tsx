@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createKey, KeyApiError, listKeys, revealKeyToken, revokeKey, scopes, scopeLabels } from "./api";
+import { createKey, KeyApiError, listKeys, purgeKey, revealKeyToken, revokeKey, scopes, scopeLabels } from "./api";
 import type { ApiKey, ApiScope } from "./api";
 const defaultScopes: ApiScope[] = ["bin:read"];
 const displayTime = (value: string | null, fallback: string) => value ? new Date(value).toLocaleString("zh-CN") : fallback;
@@ -80,6 +80,17 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
       setNotice("密钥已撤销。");
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
+  async function remove(key: ApiKey) {
+    if (busy || !window.confirm(`永久删除密钥“${key.name}”？删除后记录和保存的完整密钥都无法恢复。`)) return;
+    setBusy(true); setError(null); setNotice("");
+    try {
+      await purgeKey(key.id); await client.invalidateQueries({ queryKey: ["keys"] });
+      if (!mounted.current) return;
+      if (disclosure?.key.id === key.id) setDisclosure(null);
+      hideToken(key.id);
+      setNotice("密钥已永久删除。");
+    } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
+  }
   return <section className="keys-page"><header className="hero bins-hero"><div><span className="eyebrow">开发者</span><h1>API 密钥</h1>
     <p>为脚本或应用创建 Bearer Token，按所需权限授予访问。新建密钥的完整 Token 会加密保存，可随时重新显示或复制。bin:delete 包括回收站永久删除；恢复需 bin:update 和 history:read。</p></div>
     <button className="secondary-button" disabled={busy} onClick={() => query.refetch()}>刷新密钥列表</button></header>
@@ -122,6 +133,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
             {key.revealable && <button className="secondary-button" type="button" disabled={busy} onClick={() => copyStored(key)}
               aria-label={`复制密钥 ${key.name}`}>复制密钥</button>}
             <button className="danger-button" disabled={busy || Boolean(key.revokedAt)} onClick={() => revoke(key)} aria-label={`撤销密钥 ${key.name}`}>撤销密钥</button>
+            <button className="danger-button" disabled={busy} onClick={() => remove(key)} aria-label={`删除密钥 ${key.name}`}>删除密钥</button>
           </div></li>)}</ul>
         : <p>暂无 API 密钥。</p>}
     </section>
