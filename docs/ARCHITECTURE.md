@@ -29,7 +29,7 @@ R2 owns all durable state.
 
 Nothing stored only in KV is considered authoritative.
 
-Current and planned object layout (system/settings.json is implemented; system/auth is reserved; the trash prefix is retained for legacy compatibility):
+Current object layout (system/auth remains reserved; the trash prefix is retained for legacy compatibility):
 
 ```text
 system/
@@ -143,7 +143,7 @@ The v1 API will live below:
 /api/v1
 ```
 
-Planned resources:
+Implemented core resources:
 
 ```text
 GET    /api/v1/bins
@@ -174,7 +174,7 @@ DELETE /api/v1/keys/:id
 
 ## Bin features
 
-The first stable release targets:
+v3.0.0 includes:
 
 - JSON CRUD;
 - deep-path reads and writes;
