@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { acceptConfirm, dismissConfirm } from "../support/confirm-dialog";
 
 test.beforeEach(async ({ page }) => {
   const response = await page.request.post("/api/v1/auth/login", { data: { username: "browser-test", password: process.env.JSONBIN_TEST_PASSWORD } });
@@ -77,18 +78,18 @@ test("永久删除需确认，过期快照不能删掉新一轮回收记录，�
   await page.getByRole("button", { name: "切换明暗主题" }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  page.once("dialog", dialog => dialog.dismiss());
   await card.getByRole("button", { name: "永久删除", exact: true }).click();
+  await dismissConfirm(page, "全部历史版本都会从 R2 永久删除");
   await expect(card).toBeVisible();
   const old = await item(page, bin.meta.id);
   const restored = await (await page.request.post(`/api/v1/trash/bins/${bin.meta.id}/restore`, { headers: { "If-Match": old.etag } })).json();
   expect((await page.request.delete(`/api/v1/bins/${bin.meta.id}`, { headers: { "If-Match": restored.etag } })).status()).toBe(200);
-  page.once("dialog", async dialog => { expect(dialog.message()).toContain("全部历史版本"); await dialog.accept(); });
   await card.getByRole("button", { name: "永久删除", exact: true }).click();
+  await acceptConfirm(page, "全部历史版本都会从 R2 永久删除");
   await expect(page.getByRole("alert")).toContainText("记录已被其他请求修改");
   await expect(card).toBeVisible();
-  page.once("dialog", dialog => dialog.accept());
   await card.getByRole("button", { name: "永久删除", exact: true }).click();
+  await acceptConfirm(page, "全部历史版本都会从 R2 永久删除");
   await expect(page.locator(".detail-notice[role=status]")).toContainText("全部历史版本已永久删除");
   await expect(card).not.toBeVisible();
   await page.reload(); await expect(card).not.toBeVisible();
@@ -123,20 +124,18 @@ test("清空回收站按确认快照执行并显示部分失败，重试可进�
   const first = await deleted(page, "批量保留新快照"), second = await deleted(page, "批量删除验收");
   await page.goto("/#/trash");
   await expect(page.getByRole("article", { name: "批量删除验收", exact: true })).toBeVisible();
-  page.once("dialog", async dialog => {
-    const old = await item(page, first.meta.id);
-    const response = await page.request.post(`/api/v1/trash/bins/${first.meta.id}/restore`, { headers: { "If-Match": old.etag } });
-    expect(response.status()).toBe(200); const restored = await response.json();
-    await page.request.delete(`/api/v1/bins/${first.meta.id}`, { headers: { "If-Match": restored.etag } });
-    await dialog.accept();
-  });
   await page.getByRole("button", { name: "清空回收站", exact: true }).click();
+  const old = await item(page, first.meta.id);
+  const response = await page.request.post(`/api/v1/trash/bins/${first.meta.id}/restore`, { headers: { "If-Match": old.etag } });
+  expect(response.status()).toBe(200); const restored = await response.json();
+  await page.request.delete(`/api/v1/bins/${first.meta.id}`, { headers: { "If-Match": restored.etag } });
+  await acceptConfirm(page, "全部历史版本都会删除");
   await expect(page.getByRole("alert")).toContainText("1 项未删除");
   await expect(page.getByRole("article", { name: "批量保留新快照", exact: true })).toBeVisible();
   await expect(page.getByRole("article", { name: "批量删除验收", exact: true })).not.toBeVisible();
   expect(await item(page, second.meta.id)).toBeUndefined();
-  page.once("dialog", dialog => dialog.accept());
   await page.getByRole("button", { name: "清空回收站", exact: true }).click();
+  await acceptConfirm(page, "全部历史版本都会删除");
   await expect(page.getByRole("heading", { name: "回收站为空", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "清空回收站", exact: true })).toBeDisabled();
 });
