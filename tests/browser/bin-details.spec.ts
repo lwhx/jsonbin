@@ -425,3 +425,86 @@ test("历史加载可重试，恢复网络失败、锁定和登录过期不丢�
   await page.getByRole("tab", { name: "编辑器", exact: true }).click();
   await expect(page.locator(".monaco-editor .view-lines")).toContainText("draft");
 });
+
+
+test("表单编辑可以新增字段并与 JSON 编辑器双向同步", async ({ page }) => {
+  const record = await create(page);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await expect(panel.getByLabel("字段键").first()).toHaveValue("initial");
+  await page.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段键").last().fill("hello");
+  await panel.getByLabel("字段值").last().fill("666world");
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+
+  const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(saved.value).toEqual({ initial: true, hello: "666world" });
+  expect(saved.meta.currentVersion).toBe(2);
+
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText("hello");
+  await edit(page, '{"fromCode":"同步"}');
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  await expect(panel.getByLabel("字段键")).toHaveCount(1);
+  await expect(panel.getByLabel("字段键").first()).toHaveValue("fromCode");
+  await expect(panel.getByLabel("字段值").first()).toHaveValue("同步");
+});
+
+test("表单编辑支持类型选择、删除字段和批量添加，并拒绝重复键", async ({ page }) => {
+  const record = await create(page);
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+
+  await page.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段键").last().fill("count");
+  await panel.getByLabel("字段类型").last().selectOption("number");
+  await panel.getByLabel("字段值").last().fill("28");
+
+  await page.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段键").last().fill("enabled");
+  await panel.getByLabel("字段类型").last().selectOption("boolean");
+  await panel.getByLabel("字段值").last().selectOption("false");
+
+  await page.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段键").last().fill("remark");
+  await panel.getByLabel("字段类型").last().selectOption("null");
+
+  await page.getByRole("button", { name: "批量添加", exact: true }).click();
+  await panel.getByLabel("批量数据").fill("name=张三\n地方\tdf");
+  await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
+  await expect(panel.getByLabel("字段键")).toHaveCount(6);
+
+  await page.getByRole("button", { name: "批量添加", exact: true }).click();
+  await panel.getByLabel("批量数据").fill("initial=重复");
+  await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("重复");
+
+  await panel.getByRole("button", { name: "删除字段 remark", exact: true }).click();
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(saved.value).toEqual({ initial: true, count: 28, enabled: false, name: "张三", 地方: "df" });
+});
+
+test("表单编辑只处理根对象，数据锁定后保持只读", async ({ page }) => {
+  const record = await create(page);
+  await edit(page, '["a","b"]');
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await expect(panel).toContainText("仅支持根对象");
+  await panel.getByRole("button", { name: "返回编辑器", exact: true }).click();
+
+  await edit(page, '{"lockedField":"value"}');
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "锁定数据仓", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("数据仓已锁定");
+
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  await expect(panel.getByLabel("字段键").first()).toBeDisabled();
+  await expect(panel.getByLabel("字段值").first()).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "添加字段", exact: true })).toBeDisabled();
+  expect((await page.request.get(`/api/v1/bins/${record.meta.id}`)).status()).toBe(200);
+});
