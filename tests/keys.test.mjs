@@ -107,3 +107,46 @@ test('legacy keys without encrypted plaintext remain usable but report that thei
     assert.equal((await request('/bins', { token: created.token })).status, 200);
   });
 });
+
+
+test('API keys can be permanently deleted from R2 and immediately stop authenticating', async () => {
+  await withWorker(undefined, async (request, bucket) => {
+    const createdResponse = await request('/keys', { method: 'POST', value: { name: '永久删除测试', scopes: ['bin:read'] } });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const path = `keys/${created.key.id}/meta.json`;
+    assert.ok(await bucket.get(path));
+    assert.equal((await request('/bins', { token: created.token })).status, 200);
+
+    const purgeResponse = await request(`/keys/${created.key.id}/purge`, { method: 'DELETE' });
+    assert.equal(purgeResponse.status, 200);
+    assert.deepEqual(await purgeResponse.json(), { ok: true, id: created.key.id });
+    assert.equal(await bucket.get(path), null);
+
+    const list = await (await request('/keys')).json();
+    assert.equal(list.items.some(item => item.id === created.key.id), false);
+    assert.equal((await request('/bins', { token: created.token })).status, 401);
+    assert.equal((await request(`/keys/${created.key.id}/purge`, { method: 'DELETE' })).status, 404);
+
+    const activity = await (await request('/activity?action=key.deleted')).json();
+    assert.equal(activity.items.some(item => item.resourceId === created.key.id), true);
+  });
+});
+
+test('revoked API keys can still be permanently deleted, while Bearer auth cannot use key-management purge', async () => {
+  await withWorker(undefined, async (request, bucket) => {
+    const createdResponse = await request('/keys', { method: 'POST', value: { name: '撤销后删除', scopes: ['bin:read'] } });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const path = `keys/${created.key.id}/meta.json`;
+
+    assert.equal((await request(`/keys/${created.key.id}`, { method: 'DELETE' })).status, 200);
+    assert.ok(await bucket.get(path));
+
+    assert.equal((await request(`/keys/${created.key.id}/purge`, { method: 'DELETE', token: created.token })).status, 401);
+    assert.ok(await bucket.get(path));
+
+    assert.equal((await request(`/keys/${created.key.id}/purge`, { method: 'DELETE' })).status, 200);
+    assert.equal(await bucket.get(path), null);
+  });
+});
