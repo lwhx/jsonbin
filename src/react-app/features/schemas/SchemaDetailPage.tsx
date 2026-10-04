@@ -11,6 +11,7 @@ export function SchemaDetailPage({ id, onBack, onSaved, onDeleted, onDirtyChange
   id: string | null; onBack: () => void; onSaved: (id: string) => void; onDeleted: () => void; onDirtyChange: (dirty: boolean) => void;
 }) {
   const client = useQueryClient(), mounted = useRef(false);
+  const confirm = useConfirm();
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const query = useQuery({ queryKey: ["schema", id], queryFn: ({ signal }) => getSchema(id!, signal), enabled: Boolean(id), retry: false });
   const [baseline, setBaseline] = useState<SchemaRecord | null>(null), [form, setForm] = useState(initialForm);
