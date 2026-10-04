@@ -1080,8 +1080,8 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 - [x] Trash/Restore 测试
 - [x] npm run typecheck 通过
 - [x] npm run build 通过
-- [ ] GitHub Actions 通过
-- [ ] Cloudflare Production 部署通过
+- [x] GitHub Actions 通过（功能 SHA d2a2d03）
+- [x] Cloudflare Production 部署通过（同 SHA Workers Builds success；业务运行待验）
 - [x] 手机端基础适配（本地 390px；实际部署待验）
 - [x] 深色模式检查（本地生产构建；实际部署待验）
 - [x] 中文 UI 检查（本地生产构建登录/编辑/保存/退出）
@@ -1115,7 +1115,14 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 | Trash / Restore / Cron | `worker.test.mjs` 的到期、并发恢复/永久删除、续作/终态清理；`backup-restore.test.mjs` 的备份恢复中断与冲突 |
 | 备份与文档 | `backup-*.test.mjs`、`import.test.mjs`、`zip.test.mjs`、`docs-contracts.test.mjs` 的边界、无覆盖恢复及可执行示例 |
 
-本地 `npm run typecheck`、production build、`npm test` 与 `npm run test:browser` 通过：**159 项 Worker/client/Assets 测试与 53 项 Chromium 浏览器测试，0 failed / 0 skipped**。新增生产构建用真实 Assets 路由验证 CSP 下中文登录、Monaco 保存/刷新、ZIP 导出校验、390px 手机深色模式和退出，CSP violation / pageerror 均为 0。远端精确 SHA 检查在推送后补证据。
+本地 `npm run typecheck`、production build、`npm test` 与 `npm run test:browser` 通过：**159 项 Worker/client/Assets 测试与 53 项 Chromium 浏览器测试，0 failed / 0 skipped**。新增生产构建用真实 Assets 路由验证 CSP 下中文登录、Monaco 保存/刷新、ZIP 导出校验、390px 手机深色模式和退出，CSP violation / pageerror 均为 0。
+
+### P12 远端交付证据（2026-10-04，Asia/Shanghai）
+
+- 功能提交 `d2a2d032c50160f99d743a386741e3454c50fdd4` 已推送远程 main。
+- [GitHub CI 37168561281](https://github.com/lwhx/jsonbin/actions/runs/37168561281) success；Node 22 的 typecheck/build、159 项测试（0 failed / 0 skipped）与 53 项 Chromium 浏览器验收全部通过。
+- 同一功能 SHA 的 [Workers Builds 6a15ef37-c2b8-4849-bb7e-5eae5333a4ae](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/6a15ef37-c2b8-4849-bb7e-5eae5333a4ae) success；Cloudflare Version ID：`0eb61451-0e67-4fc7-942c-67af92fe5a90`。
+- 本段作为后续文档提交追加 main，不改变以上已验证实现。P12 安全加固、自动化验收和运维说明已交付；下一步是下方真实生产验收及 stable 发布门槛。
 
 ### stable 发布仍需真实环境证据
 
@@ -1170,12 +1177,12 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、完整回归及运维说明已实现，生产验收及 stable 门槛单独保留；按上方 P12 证据与待验清单继续。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、159 项自动化测试、53 项浏览器验收及运维说明已交付 main，功能提交 d2a2d03 的 GitHub CI / Workers Builds 均通过。下一步是生产验收及 stable 门槛；按上方 P12 证据与待验清单继续。
 
 
 ## 11. 在另一台电脑接续开发
 
-从远程 `main` 接续；代码、P10–P12 设计/计划、运维说明及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 已交付，P12 安全加固与发布验收正在接续；以本文 P12 实现/远端证据、生产待验清单、P12 设计/计划及运维说明继续，不重复开发已有功能。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
+从远程 `main` 接续；代码、P10–P12 设计/计划、运维说明及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 已交付，P12 安全加固与自动化验收已交付，生产验收及 stable 发布继续接续；以本文 P12 实现/远端证据、生产待验清单、P12 设计/计划及运维说明继续，不重复开发已有功能。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
 
 首次检出和验证（Node 22 最新维护版或 Node 24，Python 3，用于 ZIP/示例验证）：
 
