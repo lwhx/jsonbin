@@ -15,6 +15,8 @@ import { BinApiPanel } from "../docs/BinApiPanel";
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 import { JsonTree } from './JsonTree';
 import { JsonFormEditor } from "./JsonFormEditor";
+import { confirmDialog } from "../../components/ConfirmDialog";
+import { ModalDialog } from "../../components/ModalDialog";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
@@ -47,7 +49,6 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [formValid, setFormValid] = useState(true);
-  const deleteDialog = useRef<HTMLDivElement>(null);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
   const dirty = Boolean(draft && (isDirty(draft) || metadataDirty));
   const parsed = useMemo(() => draft ? parseJson(draft.text) : null, [draft?.text]);
@@ -65,28 +66,6 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     window.addEventListener("beforeunload", prevent);
     return () => window.removeEventListener("beforeunload", prevent);
   }, [dirty]);
-  useEffect(() => {
-    if (!deleteOpen) return;
-    const dialog = deleteDialog.current;
-    if (!dialog) return;
-    const previousFocus = document.activeElement;
-    const focusInside = () => {
-      const button = dialog.querySelector<HTMLButtonElement>("button:not(:disabled)");
-      (button ?? dialog).focus();
-    };
-    const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialog.contains(event.target)) focusInside();
-    };
-    focusInside();
-    document.addEventListener("focusin", containFocus);
-    return () => {
-      document.removeEventListener("focusin", containFocus);
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, [deleteOpen]);
-  useEffect(() => {
-    if (deleteOpen && busy === "delete") deleteDialog.current?.focus();
-  }, [deleteOpen, busy]);
 
   async function exportSaved() {
     if (busy || exporting.current) return;
@@ -98,7 +77,14 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   }
   function report(caught: unknown) { setError(caught instanceof Error ? caught : new Error("操作失败，请稍后重试。")); }
   async function refresh() {
-    if (busy || (dirty && !window.confirm("重新加载会丢弃未保存的内容，是否继续？"))) return;
+    if (busy) return;
+    if (dirty && !await confirmDialog({
+      title: "重新加载数据仓？",
+      message: "重新加载会丢弃当前未保存的 JSON 和设置修改。",
+      cancelLabel: "继续编辑",
+      confirmLabel: "放弃并重新加载",
+      tone: "danger",
+    })) return;
     setBusy("reload"); setError(null); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["bin", id] });
@@ -149,7 +135,13 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   }
   async function restore(version: number) {
     if (!draft || busy || draft.record.meta.locked) return;
-    if (!window.confirm(`将 v${version} 的内容恢复为新的最新版本？${dirty ? "未保存的 JSON 和设置修改将被丢弃。" : "已有历史版本不会改变。"}`)) return;
+    if (!await confirmDialog({
+      title: "恢复历史版本？",
+      message: `将 v${version} 的内容恢复为新的最新版本。`,
+      details: [dirty ? "未保存的 JSON 和设置修改将被丢弃。" : "已有历史版本不会改变。", "恢复会生成一个新的最新版本，不会覆盖历史记录。"],
+      cancelLabel: "取消",
+      confirmLabel: `恢复 v${version}`,
+    })) return;
     setBusy("restore"); setError(null); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["bin", id] });
@@ -175,7 +167,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       await client.invalidateQueries({ queryKey: ["collection-bins"] });
       if (!mounted.current) return;
       onDirtyChange(false); onDeleted();
-    } catch (caught) { report(caught); setDeleteOpen(false); } finally { setBusy(null); }
+    } catch (caught) { report(caught); } finally { setBusy(null); }
   }
   async function toggleLock() {
     if (!draft || busy || dirty) return;
@@ -193,6 +185,17 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       setNotice(locked ? "数据仓已锁定，修改和删除已禁止；读取不受影响。" : "数据锁已解除，可以继续编辑。模型锁保持不变。");
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
+  async function relogin() {
+    if (dirty && !await confirmDialog({
+      title: "重新登录？",
+      message: "重新登录会离开当前页面，未保存的内容将丢失。",
+      cancelLabel: "继续编辑",
+      confirmLabel: "放弃并重新登录",
+      tone: "danger",
+    })) return;
+    client.invalidateQueries({ queryKey: ["auth-me"] });
+  }
+
   async function copy(text: string) {
     try { await navigator.clipboard.writeText(text); setNotice("已复制。"); }
     catch { setError(new Error("无法访问剪贴板，请手动选择并复制。")); }
@@ -226,9 +229,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     {error && <div className="detail-error" role="alert">{error.message}
       {error instanceof BinApiError && <SchemaIssues issues={error.issues} />}
       {error instanceof BinApiError && error.status === 412 && <button type="button" className="secondary-button" onClick={refresh}>重新加载最新版本</button>}
-      {error instanceof BinApiError && error.status === 401 && <button type="button" className="secondary-button" onClick={() => {
-        if (!dirty || window.confirm("重新登录会离开当前页面，是否放弃未保存的内容？")) client.invalidateQueries({ queryKey: ["auth-me"] });
-      }}>重新登录</button>}
+      {error instanceof BinApiError && error.status === 401 && <button type="button" className="secondary-button" onClick={relogin}>重新登录</button>}
     </div>}
     <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
       {(["表单编辑", "编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
@@ -307,23 +308,12 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </div>
     <footer className="detail-footer"><p>删除后元数据移入回收站，历史版本保留。</p>
       <button type="button" className="danger-button" onClick={() => setDeleteOpen(true)} disabled={Boolean(busy) || locked}><Trash2 size={15} />删除数据仓</button></footer>
-    {deleteOpen && <div className="dialog-backdrop"><div ref={deleteDialog} tabIndex={-1} className="dialog delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title"
-      onKeyDown={event => {
-        if (event.key === "Escape" && !busy) { event.preventDefault(); setDeleteOpen(false); }
-        if (event.key !== "Tab") return;
-        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
-        const first = buttons[0];
-        const last = buttons.at(-1);
-        if (!first) { event.preventDefault(); event.currentTarget.focus(); }
-        else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
-          event.preventDefault(); last!.focus();
-        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) {
-          event.preventDefault(); first.focus();
-        }
-      }}>
-      <h2 id="delete-title">删除数据仓？</h2><p>“{record.meta.name}”将移入回收站。{dirty && "未保存的修改将被丢弃。"}</p>
+    {deleteOpen && <ModalDialog labelledBy="delete-title" className="delete-dialog" onClose={() => setDeleteOpen(false)} closeDisabled={Boolean(busy)}>
+      <h2 id="delete-title">删除数据仓？</h2>
+      <p>“{record.meta.name}”将移入回收站。{dirty && "未保存的修改将被丢弃。"}</p>
+      {error && <div className="detail-error" role="alert">{error.message}</div>}
       <div className="dialog-actions"><button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={() => setDeleteOpen(false)}>取消</button>
         <button type="button" className="danger-button" disabled={Boolean(busy)} onClick={confirmDelete}>{busy === "delete" ? "正在删除…" : "确认删除"}</button></div>
-    </div></div>}
+    </ModalDialog>}
   </section>;
 }
