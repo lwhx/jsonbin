@@ -1136,9 +1136,11 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 - [x] 可见节点 200 个分批；长文本限量预览、完整值复制，迭代扁平遍历避免深层递归 DOM；手机深色无页面横向溢出。
 - [x] 3 项核心回归、4 项浏览器验收及类型检查通过。
 - [x] production build / typecheck、162 项自动化与 57 项浏览器测试全部通过，0 failed / 0 skipped。生产构建 CSP 含树形值检查，0 violation / pageerror；桌面与 390px 手机深色界面实测无横向溢出。
-- [ ] 同一功能 SHA 的 GitHub CI / Workers Builds（推送后记录）。
+- [x] 功能提交 `17721350bbb07a310de77454be9fb76285f846f6` 已推送 main；[GitHub CI 37170670891](https://github.com/lwhx/jsonbin/actions/runs/37170670891) success，Node 22 的 typecheck/build、162 项测试（0 failed / 0 skipped）与 57 项浏览器验收全部通过。
+- [x] 同 SHA 的 [Workers Builds 32de9dca-2800-4027-bce8-784e78a554ca](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/32de9dca-2800-4027-bce8-784e78a554ca) success；Version ID `b98e4981-70a0-4164-919d-f1e75cbe6e1d`。最初预览创建报告 Worker 不存在（build `b653ad03-d898-455b-aca4-3c6f1e7a2c54`），后续同提交成功构建已恢复，未修改部署配置。
+- 最终交付证据作为后续文档提交追加 main，不改变以上已验证功能。树形视图代码和自动化验收已交付，真实站点/生产验收仍按下方清单接续。
 
-生产接续检查：本地/远程 main 均为 `8d1f784`，该文档提交的 GitHub CI `37168863421` 与 Workers Builds `ba3e4ff0-6ac5-4335-b336-c965c0da8aa4` 也为 success。仓库 homepage `https://jsonbin.org/api/v1/system/health` 当前返回 HTTP 410，不能确认是此 Worker。环境没有适用生产 URL/认证，已保存 `JSONBIN_PRODUCTION_ORIGIN` 环境配置要求；配置草稿尚需用户填写、保存并发布后应用到运行环境。真实生产验收继续保留待验。
+本阶段开始时的生产接续检查：本地/远程 main 均为 `8d1f784`，该文档提交的 GitHub CI `37168863421` 与 Workers Builds `ba3e4ff0-6ac5-4335-b336-c965c0da8aa4` 也为 success。仓库 homepage `https://jsonbin.org/api/v1/system/health` 当前返回 HTTP 410，不能确认是此 Worker。环境没有适用生产 URL/认证，已保存 `JSONBIN_PRODUCTION_ORIGIN` 环境配置要求；配置草稿尚需用户填写、保存并发布后应用到运行环境。真实生产验收继续保留待验。
 
 ### stable 发布仍需真实环境证据
 
@@ -1193,7 +1195,7 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、159 项自动化测试、53 项浏览器验收及运维说明已交付 main，功能提交 d2a2d03 的 GitHub CI / Workers Builds 均通过。下一步是生产验收及 stable 门槛；按上方 P12 证据与待验清单继续。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、159 项自动化测试、53 项浏览器验收及运维说明已交付 main，功能提交 d2a2d03 的 GitHub CI / Workers Builds 均通过。树形视图也已补齐，功能提交 1772135 的 162 项自动化 / 57 项浏览器、GitHub CI / Workers Builds 均通过。下一步是生产验收及 stable 门槛；按上方 P12 证据与待验清单继续。
 
 
 ## 11. 在另一台电脑接续开发
