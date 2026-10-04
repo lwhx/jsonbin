@@ -92,6 +92,13 @@ export async function revealKey(env: Env, id: string) {
   if (!token) return { status: "unavailable" as const };
   return { status: "ok" as const, token };
 }
+export async function purgeKey(env: Env, id: string) {
+  const bucket = requireDataBucket(env);
+  const stored = await getJson<StoredKey>(bucket, keyPath(id));
+  if (!stored) return false;
+  await bucket.delete(keyPath(id));
+  return true;
+}
 export async function revokeKey(env: Env, id: string) {
   const bucket = requireDataBucket(env);
   for (let attempt = 0; attempt < 8; attempt++) {
