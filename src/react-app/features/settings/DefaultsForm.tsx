@@ -12,7 +12,13 @@ export function DefaultsForm({ record, onSaved, onDirtyChange }: { record: Setti
   function apply(r: SettingsRecord) { setSaved(r); setVisibility(r.settings.defaultVisibility); setTtl(r.settings.defaultTtlSeconds?.toString() ?? ''); }
   async function execute(reload: boolean) {
     if (running.current) return;
-    if (reload && dirty && !window.confirm('重新读取将丢弃默认设置草稿，是否继续？')) return;
+    if (reload && dirty && !await confirmDialog({
+      title: "重新读取默认设置？",
+      message: "重新读取会丢弃当前未保存的默认设置草稿。",
+      cancelLabel: "继续编辑",
+      confirmLabel: "放弃并重新读取",
+      tone: "danger",
+    })) return;
     const seconds = ttl === '' ? null : Number(ttl);
     if (!reload && (seconds !== null && (!Number.isInteger(seconds) || seconds < 1 || seconds > 31536000))) { setError('TTL 请填写 1–31536000 的整数秒，或留空表示永不过期。'); return; }
     const token = ++generation.current, abort = new AbortController(); controller.current = abort; running.current = true; setBusy(true); setError(''); setNotice('');
