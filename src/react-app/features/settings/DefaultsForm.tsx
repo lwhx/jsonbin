@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SettingsRecord } from '../../../shared/system.ts';
 import { systemApi } from './api';
+import { confirmDialog } from '../../components/ConfirmDialog';
 export function DefaultsForm({ record, onSaved, onDirtyChange }: { record: SettingsRecord; onSaved: (r: SettingsRecord) => void; onDirtyChange: (dirty: boolean) => void }) {
   const [saved, setSaved] = useState(record), [visibility, setVisibility] = useState(record.settings.defaultVisibility), [ttl, setTtl] = useState(record.settings.defaultTtlSeconds?.toString() ?? '');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
