@@ -108,8 +108,14 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     <button className="secondary-button" disabled={busy} onClick={() => query.refetch()}>刷新密钥列表</button></header>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}
-      {error instanceof KeyApiError && error.status === 401 && <button className="secondary-button" onClick={() => {
-        if (!dirty || window.confirm("重新登录会离开当前页面，是否放弃未保存的表单内容？")) client.invalidateQueries({ queryKey: ["auth-me"] });
+      {error instanceof KeyApiError && error.status === 401 && <button className="secondary-button" onClick={async () => {
+        if (!dirty || await confirm({
+          title: "重新登录？",
+          message: "重新登录会离开当前页面，未保存的表单内容将丢失。",
+          confirmLabel: "重新登录",
+          cancelLabel: "继续编辑",
+          danger: true,
+        })) client.invalidateQueries({ queryKey: ["auth-me"] });
       }}>重新登录</button>}</div>}
     {disclosure && <section className="panel detail-form key-disclosure" aria-label="新密钥明文"><h2>新密钥已创建</h2>
       <p>“{disclosure.key.name}”现在可以直接复制；关闭此提示或刷新页面后，也可以在下方密钥列表中重新显示。</p>
