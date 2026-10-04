@@ -66,3 +66,44 @@ test('an empty Authorization header that reaches the Worker entry rejects Cookie
     assert.equal(response.status, 401);
   }
 });
+
+
+test('created API keys can be revealed later through a Session-only endpoint without exposing plaintext in list or R2', async () => {
+  await withWorker(undefined, async (request, bucket) => {
+    const createdResponse = await request('/keys', { method: 'POST', value: { name: '可再次查看', scopes: ['bin:read'] } });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+
+    const stored = await (await bucket.get(`keys/${created.key.id}/meta.json`)).json();
+    assert.ok(!JSON.stringify(stored).includes(created.token));
+    assert.ok(stored.tokenCiphertext);
+    assert.ok(stored.tokenIv);
+
+    const list = await (await request('/keys')).json();
+    assert.equal(list.items[0].revealable, true);
+    assert.ok(!JSON.stringify(list).includes(created.token));
+
+    const revealedResponse = await request(`/keys/${created.key.id}/token`);
+    assert.equal(revealedResponse.status, 200);
+    assert.deepEqual(await revealedResponse.json(), { token: created.token });
+    assert.equal((await request('/bins', { token: created.token })).status, 200);
+  });
+});
+
+test('legacy keys without encrypted plaintext remain usable but report that their token cannot be revealed', async () => {
+  await withWorker(undefined, async (request, bucket) => {
+    const createdResponse = await request('/keys', { method: 'POST', value: { name: '旧密钥模拟', scopes: ['bin:read'] } });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const path = `keys/${created.key.id}/meta.json`;
+    const stored = await (await bucket.get(path)).json();
+    delete stored.tokenCiphertext;
+    delete stored.tokenIv;
+    await bucket.put(path, JSON.stringify(stored));
+
+    const list = await (await request('/keys')).json();
+    assert.equal(list.items[0].revealable, false);
+    assert.equal((await request(`/keys/${created.key.id}/token`)).status, 409);
+    assert.equal((await request('/bins', { token: created.token })).status, 200);
+  });
+});
