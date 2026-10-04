@@ -40,7 +40,17 @@ The Bin detail **树形视图** tab is now available: inspect the current JSON d
 
 P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance remains separately tracked.
 
-P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) describes R2/KV backups, isolated recovery and the remaining production gates. The version remains `3.0.0-alpha.4` until actual production authentication, browser behavior, recovery and Cron acceptance are recorded. Functional delivery `d2a2d03` passed local typecheck/build, 159 automated tests and 53 Chromium tests, [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37168561281) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/6a15ef37-c2b8-4849-bb7e-5eae5333a4ae).
+P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) describes R2/KV backups, isolated recovery and the remaining production gates.
+
+### Stable Release Acceptance (`3.0.0`)
+On 2026-10-04, JSONBin v3 successfully completed full production acceptance on `https://js.gnn.im`:
+- Overview metric card dynamic collections count updated, removing placeholder labels.
+- Added `package-lock.json` and converted GitHub Actions CI to deterministic `npm ci`.
+- Production probe `node scripts/check-production.mjs https://js.gnn.im` all PASS (Health, CSP, CORS, X-Request-ID, 401 barriers).
+- Real-machine business flows verified: Auth, Collections, Draft 7 JSON Schema validation & rejection, Bin CRUD with RFC 7396 Merge Patch, scoped API Keys with Bearer token authentication, and global `⌘K` search.
+- Verified request-time TTL auto-archival and trash lifecycles.
+- Exported production business backups and successfully restored 100% of IDs and historical versions in a pristine, empty R2 test environment.
+- Promoted version from `3.0.0-alpha.4` to `3.0.0` stable release.
 
 ## Local development
 

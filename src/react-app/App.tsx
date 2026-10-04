@@ -611,6 +611,11 @@ function Overview({
   onOpenBins: () => void;
 }) {
   const recent = bins.slice(0, 4);
+  const collections = useQuery({
+    queryKey: ["collections"],
+    queryFn: ({ signal }) => listCollections(signal),
+    retry: false,
+  });
 
   return (
     <>
@@ -633,7 +638,12 @@ function Overview({
           note={binsError ? "存储不可用" : "R2 对象"}
           icon={FileJson2}
         />
-        <MetricCard label="集合" value="0" note="即将推出" icon={Boxes} />
+        <MetricCard
+          label="集合"
+          value={collections.isLoading ? "—" : String(collections.data?.items.filter(item => item.status === "active").length ?? 0)}
+          note={collections.isError ? "加载失败" : "逻辑分组"}
+          icon={Boxes}
+        />
         <MetricCard label="版本数" value={String(bins.reduce((n, b) => n + b.currentVersion, 0))} note="不可变历史" icon={Activity} />
         <MetricCard
           label="存储用量"
