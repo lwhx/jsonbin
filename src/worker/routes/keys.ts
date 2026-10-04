@@ -2,7 +2,7 @@ import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../middleware/auth";
-import { API_SCOPES, createKey, listKeys, revealKey, revokeKey } from "../storage/keys";
+import { API_SCOPES, createKey, listKeys, purgeKey, revealKey, revokeKey } from "../storage/keys";
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
@@ -34,6 +34,13 @@ app.get("/:id/token", async c => {
   if (result.status === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.status === "unavailable") return c.json({ error: "key_token_unavailable" }, 409);
   return c.json({ token: result.token });
+});
+app.delete("/:id/purge", async c => {
+  if (!z.string().uuid().safeParse(c.req.param("id")).success) return c.json({ error: "not_found" }, 404);
+  const id = c.req.param("id");
+  if (!await purgeKey(c.env, id)) return c.json({ error: "not_found" }, 404);
+  await auditRequest(c, "key.deleted", id);
+  return c.json({ ok: true, id });
 });
 app.delete("/:id", async c => {
   if (!z.string().uuid().safeParse(c.req.param("id")).success) return c.json({ error: "not_found" }, 404);

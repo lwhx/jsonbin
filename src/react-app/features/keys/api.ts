@@ -26,3 +26,5 @@ export async function revealKeyToken(id: string): Promise<{ token: string }> {
   return (await request(`/${encodeURIComponent(id)}/token`)).json();
 }
 export async function revokeKey(id: string): Promise<{ key: ApiKey }> { return (await request(`/${encodeURIComponent(id)}`, { method: "DELETE" })).json(); }
+
+export async function purgeKey(id: string): Promise<{ ok: true; id: string }> { return (await request(`/${encodeURIComponent(id)}/purge`, { method: "DELETE" })).json(); }

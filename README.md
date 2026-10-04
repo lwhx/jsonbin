@@ -174,7 +174,7 @@ Legacy `trash/bins/<id>/meta.json` records remain readable and are conditionally
 
 ## API keys
 
-Create a key from the dashboard's API 密钥 page, select only the needed scopes, and save the token shown once. `GET/POST /api/v1/keys` and `DELETE /api/v1/keys/:id` require a signed admin session; Bearer credentials cannot administer keys. R2 stores the digest and metadata, and list/revoke responses never return the token or digest.
+Create a key from the dashboard's API 密钥 page and select only the needed scopes. New tokens are encrypted for later display/copy while digest/HMAC verification remains the authentication path. Key management requires a signed admin session; Bearer credentials cannot administer keys. Revocation keeps the record but invalidates authentication, while `DELETE /api/v1/keys/:id/purge` permanently removes the R2 key record and cannot be recovered.
 
 For scripts, keep the token in an environment variable:
 
