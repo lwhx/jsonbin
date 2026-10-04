@@ -1,6 +1,6 @@
 # P10 设置、导入与导出设计
 
-状态：用户已确认设计方向及本书面设计（2026-10-04，Asia/Shanghai），包括备份恢复保留原 ID、冲突跳过；实施计划已确认，功能、UI 及 API 文档已实现，完整产品树通过类型检查/构建、132 项自动化及 48 项浏览器验收，定向 API 文档 10 项通过；整分支独立审查完成，3 项重要发现已回归修复、2 项文档说明已纠正；全部改动已合并推送 main，功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均 success；生产 auth/CORS、部署页面及真实 Cron 仍未验证，下一阶段 P11 尚未开始。
+状态：用户已确认设计方向及本书面设计（2026-10-04，Asia/Shanghai），包括备份恢复保留原 ID、冲突跳过；实施计划已确认，功能、UI 及 API 文档已实现，完整产品树通过类型检查/构建、132 项自动化及 48 项浏览器验收，定向 API 文档 10 项通过；整分支独立审查完成，3 项重要发现已回归修复、2 项文档说明已纠正；全部改动已合并推送 main，功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均 success；生产 auth/CORS、部署页面及真实 Cron 仍未验证，P10 交付时 P11 尚未开始；最新进度以 DEVELOPMENT.md 为准。
 
 依据：`docs/DEVELOPMENT.md` 的 P10 清单；基线为已交付 P9 的 `main` 提交 `f2beb35c7fec65c6fe6e5437506e4f8633a22350`。沿用单用户、R2 权威存储、KV 可重建、中文 Dashboard、Session 管理及 ETag 条件写入。
 
