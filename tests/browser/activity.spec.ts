@@ -60,9 +60,12 @@ test('慢分页不能拼入切换过滤后的活动', async ({ page }) => {
 test('有未保存设置时进入活动页仍要求离页确认', async ({ page }) => {
   const bin = await (await page.request.post('/api/v1/bins', { data: { name: '草稿保护', value: null } })).json();
   await page.goto('/#/bins/' + bin.meta.id); await page.getByRole('tab', { name: '设置', exact: true }).click();
-  await page.getByLabel('名称', { exact: true }).fill('未保存的设置'); page.once('dialog', dialog => dialog.dismiss());
-  await page.getByRole('button', { name: '活动记录', exact: true }).click(); await expect(page).toHaveURL(new RegExp(bin.meta.id));
+  await page.getByLabel('名称', { exact: true }).fill('未保存的设置');
+  await page.getByRole('button', { name: '活动记录', exact: true }).click();
+  await page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true }).getByRole('button', { name: '继续编辑', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(bin.meta.id));
   await expect(page.getByLabel('名称', { exact: true })).toHaveValue('未保存的设置');
-  page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: '活动记录', exact: true }).click();
+  await page.getByRole('button', { name: '活动记录', exact: true }).click();
+  await page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true }).getByRole('button', { name: '放弃并离开', exact: true }).click();
   await expect(page).toHaveURL(/#\/activity$/);
 });
