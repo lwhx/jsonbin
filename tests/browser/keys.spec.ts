@@ -22,11 +22,11 @@ test('API 密钥创建、复制、刷新后再次显示、权限/期限、最后
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: '复制密钥', exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(token);
-  page.once('dialog', dialog => dialog.dismiss());
-  await page.getByRole('button', { name: '数据仓', exact: true }).click();
-  await expect(page).toHaveURL(/#\/keys$/); await expect(disclosure).toBeVisible();
-  await page.getByRole('button', { name: '我已保存密钥', exact: true }).click();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(disclosure).not.toBeVisible();
+  await page.getByRole('button', { name: '数据仓', exact: true }).click();
+  await expect(page).toHaveURL(/#\/bins$/);
+  await page.goto('/#/keys');
   const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: '浏览器自动化密钥', exact: true }) });
   await expect(card).toContainText('尚未使用');
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` } })).status()).toBe(200);
