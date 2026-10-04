@@ -418,11 +418,11 @@ test("历史加载可重试，恢复网络失败、锁定和登录过期不丢�
   await expect(page.locator(".detail-error[role=alert]")).toContainText("无法连接");
   await page.unroute(restoreUrl);
   await page.route(restoreUrl, route => route.fulfill({ status: 423, contentType: "application/json", body: '{"error":"bin_locked"}' }));
-  page.once("dialog", dialog => dialog.accept()); await restore.click();
+  await restore.click(); await acceptConfirm(page, "恢复会生成一个新的最新版本");
   await expect(page.locator(".detail-error[role=alert]")).toContainText("已锁定");
   await page.unroute(restoreUrl);
   await page.request.post("/api/v1/auth/logout");
-  page.once("dialog", dialog => dialog.accept()); await restore.click();
+  await restore.click(); await acceptConfirm(page, "恢复会生成一个新的最新版本");
   await expect(page.locator(".detail-error[role=alert]")).toContainText("登录已过期");
   await expect(page.getByText("未保存", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "编辑器", exact: true }).click();
