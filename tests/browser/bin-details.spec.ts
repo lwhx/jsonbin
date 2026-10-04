@@ -76,7 +76,7 @@ test("公开设置开放匿名当前读取，切回私有立即收回，API 页�
     await page.getByRole("tab", { name: "设置", exact: true }).click();
     await page.getByLabel("可见性", { exact: true }).selectOption("private");
     await page.getByRole("button", { name: "保存设置", exact: true }).click();
-    await expect(page.getByRole("button", { name: "保存设置", exact: true })).toBeDisabled();
+    await expect(page.locator(".detail-notice[role=status]")).toContainText("设置保存成功");
     expect((await anonymous.get(path)).status()).toBe(401);
     expect((await anonymous.get(path + "/value/initial")).status()).toBe(401);
     await page.reload();
