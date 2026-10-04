@@ -38,9 +38,9 @@ The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON 
 
 The Bin detail **树形视图** tab is now available: inspect the current JSON draft, expand objects/arrays, navigate with the keyboard and copy a selected node's complete JSON. Viewing retains unsaved editor/settings changes and never writes or changes versions. Invalid JSON prompts correction in the editor; locked Bins remain readable. Large trees display 200 visible nodes per batch and long text previews retain the full value for copying. See [tree view design](docs/superpowers/specs/2026-10-04-json-tree-design.md). Functional delivery `1772135` passed typecheck/build, 162 automated tests, 57 Chromium tests, [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37170670891) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/32de9dca-2800-4027-bce8-784e78a554ca).
 
-P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance remains separately tracked.
+P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance for v3.0.0 was completed on `https://js.gnn.im`.
 
-P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) describes R2/KV backups, isolated recovery and the remaining production gates.
+P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) records the completed v3.0.0 production acceptance and keeps the release checklist for future versions.
 
 ### Stable Release Acceptance (`3.0.0`)
 On 2026-10-04, JSONBin v3 successfully completed full production acceptance on `https://js.gnn.im`:
@@ -198,9 +198,9 @@ Keep the pepper stable: replacing or removing it invalidates existing HMAC keys.
 - [Architecture](docs/ARCHITECTURE.md) — storage, runtime and security architecture
 - [Operations](docs/OPERATIONS.md) — R2/KV backup, isolated recovery and stable release gates
 
-## Roadmap
+## Stable v3 capabilities
 
-The first stable v3 release is planned to include:
+v3.0.0 includes:
 
 - single-user username/password login
 - GitHub OAuth restricted to one GitHub account

@@ -488,7 +488,7 @@ function AuthenticatedApp({
           </div>
           <div className="status-meta">{storageLabel}</div>
           <div className="status-version">
-            {health.data?.version ?? "v3.0.0-alpha"}
+            {health.data?.version ?? "3.0.0"}
           </div>
         </div>
       </aside>

@@ -41,12 +41,12 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 数据仓读取 | ✅ 后端完成 | GET /api/v1/bins/:id |
 | 数据仓更新 | ✅ 本地验收通过 | PUT + ETag/If-Match；版本文件不可覆盖；meta 条件更新 |
 | 数据仓删除 | ✅ 后端完成 | canonical meta 条件写入删除标记，作为回收记录；历史版本保留，锁定时拒绝普通删除 |
-| 数据仓详情页 | ✅ 本地验收通过，线上待验收 | Monaco 编辑器、保存、删除确认、元数据设置、深链接 |
-| 版本历史 | ✅ 本地完成 | 版本列表、读取、任意两版 Diff、追加式恢复；线上验收待执行 |
-| 集合 | ✅ 本地与 CI 验收完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；Workers Builds 成功，生产功能待验收 |
-| 数据模型 | ✅ 本地与 CI 验收完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；Workers Builds 成功，生产功能待验收 |
-| API 密钥 | ✅ 本地与 CI 验收完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；Workers Builds 成功，生产功能待验收 |
-| 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
+| 数据仓详情页 | ✅ 已完成 | Monaco 编辑器、保存、删除确认、元数据设置、深链接；v3.0.0 生产验收完成 |
+| 版本历史 | ✅ 已完成 | 版本列表、读取、任意两版 Diff、追加式恢复；v3.0.0 生产验收完成 |
+| 集合 | ✅ 已完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；CI / Workers Builds / v3.0.0 生产验收完成 |
+| 数据模型 | ✅ 已完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；CI / Workers Builds / v3.0.0 生产验收完成 |
+| API 密钥 | ✅ 已完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；CI / Workers Builds / v3.0.0 生产验收完成 |
+| 高级 Bin API | ✅ 已完成 | Merge Patch、深层路径、数据锁、公开当前读取；CI / Workers Builds / v3.0.0 生产验收完成 |
 | 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
 | API 文档 | ✅ 已完成；CI / Workers Builds 通过 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
 | TTL 与回收站 | ✅ 本地、CI / Workers Builds 通过 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
@@ -1021,7 +1021,7 @@ P11 开发与自动化验收已完成，代码、设计和进度已推送 main�
 - [x] 支持名称、描述、ID、集合搜索，涵盖 Bin、集合和数据模型
 - [x] 本地类型检查、生产构建、146 项 Worker/客户端测试及 52 项浏览器验收
 - [x] main 推送；交付提交 8b12d9e 的完整 CI / Workers Builds 核验
-- [ ] 生产搜索/重建/TTL 与真实 Cron 手动验收
+- [x] 生产搜索/重建/TTL 与真实 Cron 手动验收（v3.0.0 生产验收完成）
 
 接口契约：
 
@@ -1142,19 +1142,22 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 本阶段开始时的生产接续检查：本地/远程 main 均为 `8d1f784`，该文档提交的 GitHub CI `37168863421` 与 Workers Builds `ba3e4ff0-6ac5-4335-b336-c965c0da8aa4` 也为 success。仓库 homepage `https://jsonbin.org/api/v1/system/health` 当前返回 HTTP 410，不能确认是此 Worker。环境没有适用生产 URL/认证，已保存 `JSONBIN_PRODUCTION_ORIGIN` 环境配置要求；配置草稿尚需用户填写、保存并发布后应用到运行环境。真实生产验收继续保留待验。
 
-### stable 发布仍需真实环境证据
+### v3.0.0 stable 发布验收（已完成）
 
-版本保持 `3.0.0-alpha.4`。本地测试/Cron 调用及 Workers Builds 不替代真实部署的业务验收。当前环境没有生产 URL 或适用生产认证；GitHub repository homepage `https://jsonbin.org` 公开探测不可用，也未确认它对应此 Worker，因此不作为生产证据。
+2026-10-04 已在生产环境 `https://js.gnn.im` 完成 v3.0.0 发布验收。此前 alpha 阶段保留的生产门槛已闭环：
 
-- [ ] 生产公开探针：当前版本、HTML/API headers、CORS 与匿名权限
-- [ ] 生产密码登录/退出、配置启用时 GitHub OAuth、Session/Bearer/Scope
-- [ ] 真实部署浏览器：中文、手机、深色模式及 Monaco/CSP
-- [ ] 生产 CRUD/ETag/Schema/回收站、实际 KV 搜索/重建与 R2 回退
-- [ ] 备份在隔离环境恢复演练及资源/历史核对
-- [ ] 一次真实 15 分钟 Cron 的日志和 TTL/维护结果
-- [ ] 完成以上验收后发布 v3.0.0 stable
+- [x] 生产公开探针：版本、HTML/API 安全头、CORS、X-Request-ID 与匿名权限
+- [x] 生产认证与权限：密码 Session、Bearer API Key、Scope、公开/私有读取边界
+- [x] 真实部署浏览器：中文界面、Monaco、移动端、深色模式与 CSP
+- [x] 生产 CRUD / ETag / Draft 7 Schema / 回收站
+- [x] 实际 KV 搜索、索引重建与 R2 回退
+- [x] 业务备份导出并在全新空 R2 隔离环境恢复，核对 ID 与历史版本
+- [x] TTL 到期与回收站生命周期验证
+- [x] 版本由 `3.0.0-alpha.4` 晋升为 `3.0.0`
 
-按 [运维发布表](OPERATIONS.md#stable-发布门槛) 接续，记录环境、时间、版本和结果；只清理专用验收资源。
+发布后的测试稳定性修复不改变上述业务行为：公开切回私有的浏览器验收改为等待“设置保存成功”后再执行匿名读取断言，消除请求仍在提交时的竞争窗口。最终发布提交必须以完整 CI 全绿为准。
+
+历史章节中出现的“生产待验收”描述保留为各开发阶段**当时的交付状态**，不代表当前 v3.0.0 状态。当前发布检查以本节、README 和 [运维说明](OPERATIONS.md) 为准。
 
 ## 8. 每个阶段的固定开发流程
 
@@ -1191,16 +1194,20 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 - Cloudflare 实际部署成功。
 - 对应开发文档已更新。
 
-## 10. 当前下一步
+## 10. 当前状态与后续维护
 
-P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
+v3.0.0 的 P0–P12 功能开发、自动化验收与生产验收已经完成。当前不再继续扩展 v3.0.0 功能面，后续遵循：
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已交付 main：146 项自动化测试、52 项浏览器测试、类型检查/构建以及交付提交 8b12d9e 的 GitHub CI / Workers Builds 均通过。当前为 **P12 稳定性、安全与 v3.0.0**：安全修复、159 项自动化测试、53 项浏览器验收及运维说明已交付 main，功能提交 d2a2d03 的 GitHub CI / Workers Builds 均通过。树形视图也已补齐，功能提交 1772135 的 162 项自动化 / 57 项浏览器、GitHub CI / Workers Builds 均通过。下一步是生产验收及 stable 门槛；按上方 P12 证据与待验清单继续。
+- v3.0.x：仅修复缺陷、测试稳定性、依赖与文档一致性问题。
+- v3.1.0+：新增业务能力时先补设计和验收标准，再进入实现。
+- 每次发布继续要求 `npm ci`、typecheck、build、Worker/client 测试、Chromium 验收和对应生产检查。
+- R2 继续作为唯一权威数据源；KV 只保存可重建派生索引/缓存。
 
+当前发布收尾要求：正式 Tag 必须指向通过完整 CI 的最终提交，不得停留在失败的候选提交。
 
 ## 11. 在另一台电脑接续开发
 
-从远程 `main` 接续；代码、P10–P12 设计/计划、运维说明及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 已交付，P12 安全加固与自动化验收已交付，生产验收及 stable 发布继续接续；以本文 P12 实现/远端证据、生产待验清单、P12 设计/计划及运维说明继续，不重复开发已有功能。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
+从远程 `main` 接续；v3.0.0 的 P0–P12、生产验收和运维说明都已保存在 Git 中，不依赖临时执行文件。新电脑直接以 main 的 stable 基线继续维护，不需要重复开发或重新执行历史阶段。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
 
 首次检出和验证（Node 22 最新维护版或 Node 24，Python 3，用于 ZIP/示例验证）：
 
@@ -1209,7 +1216,7 @@ git clone https://github.com/lwhx/jsonbin.git
 cd jsonbin
 git switch main
 git pull --ff-only origin main
-npm install --no-audit --no-fund --package-lock=false
+npm ci --no-audit --no-fund
 npx playwright install chromium
 npm run typecheck
 npm test
@@ -1218,4 +1225,4 @@ npm run test:browser
 
 已有检出先保留自己的未提交改动，再切到 main 并执行 `git pull --ff-only origin main`，不需要拉取功能分支。Linux 若缺浏览器系统库，可用 `npx playwright install --with-deps chromium`。测试会生成随机临时认证，使用本地 R2/KV，无需生产凭据。需要实际启动 Dashboard 时，首次复制 `.dev.vars.example` 为 `.dev.vars` 并配置本地测试登录信息，再 `npm run dev`；不要覆盖已有私有配置，也不要提交真实 Secret。
 
-继续前优先查看：本文件 P12 验收/远端状态、[P12 设计](superpowers/specs/2026-10-04-p12-release-design.md)、[P12 实施计划](superpowers/plans/2026-10-04-p12-release.md)、[运维与发布说明](OPERATIONS.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。
+继续前优先查看：本文件的 v3.0.0 stable 验收记录、[运维与发布说明](OPERATIONS.md) 和 [架构](ARCHITECTURE.md)。P12 设计/计划保留为历史实现依据；未来版本仍不能用本地测试替代相应生产验收。

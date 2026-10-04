@@ -74,7 +74,7 @@ app.get("/api/v1", (c) => {
   return c.json({
     name: "JSONBin API",
     version: "v1",
-    status: "alpha",
+    status: "stable",
   });
 });
 

@@ -48,6 +48,8 @@ R2 对象包含 immutable versions、模型修订、canonical metadata、legacy 
 
 ## stable 发布门槛
 
+> v3.0.0 状态：✅ 已完成生产验收（2026-10-04，`https://js.gnn.im`）。以下清单继续作为后续 stable / patch 发布的标准验收模板。
+
 本地执行 `npm run typecheck`、`npm test`、`npm run test:browser`。最后两项使用构建后的 Worker / 真实本地 R2/KV；生产构建浏览器另外通过 Assets 路由验证 CSP。用精确功能 SHA 核对 GitHub CI、Workers Builds success 和 Version ID。
 
 生产 URL 确认后运行公开探针（只 GET/OPTIONS，无登录或业务写入）：
@@ -69,4 +71,4 @@ npm run check:production -- https://your-production-domain.example
 | 搜索与恢复 | 实际 KV 重建与 R2 回退；隔离环境导出/恢复演练及资源/历史核对 |
 | TTL/Cron | 一个专用短 TTL Bin 请求到期后不可读；记录一次真实 15 分钟 Cron 日志和维护结果，含活动清理/续作任务 |
 
-只有以上生产项目、本地检查和远端部署全部有证据，才将 package 改为 `3.0.0`、更新发行说明并发布 stable。没有生产 URL、适用凭据或实际 Cron 证据时，保留 alpha 版本及未勾选发布门槛。
+v3.0.0 已按上述门槛完成生产验收并晋升 stable。后续版本仍必须先完成对应生产项目、本地检查和远端部署证据，再更新版本号与发布标签；未完成时不得提前标记为 stable。
