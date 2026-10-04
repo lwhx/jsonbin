@@ -39,6 +39,10 @@ test('生产构建 CSP 下中文登录、Monaco 保存、刷新和手机深色�
     expect(saved.meta.currentVersion).toBe(2);
     await page.reload();
     await expect(editor).toBeVisible();
+    await page.getByRole('tab', { name: '树形视图', exact: true }).click();
+    const tree = page.getByRole('tree', { name: 'JSON 树形视图' });
+    await expect(tree.locator('[data-pointer="/message"]')).toContainText('已保存中文');
+    await expect(tree.locator('[data-pointer="/enabled"]')).toContainText('false');
     await page.getByRole('button', { name: '设置', exact: true }).click();
     await expect(page.getByRole('heading', { name: '系统信息', exact: true })).toBeVisible();
     const download = page.waitForEvent('download');

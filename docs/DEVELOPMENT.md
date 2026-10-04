@@ -365,6 +365,8 @@ P0 收尾技术债务：
 编辑器 | 树形视图 | 历史版本 | API | 设置
 ~~~
 
+树形视图入口已于 2026-10-04 补齐，可展开/折叠当前 JSON 草稿；见 P12 下方树形视图补充记录。其余 Tab 也已按对应阶段实现。
+
 P1 验收：
 
 1. 新建 Bin。
@@ -1123,6 +1125,20 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 - [GitHub CI 37168561281](https://github.com/lwhx/jsonbin/actions/runs/37168561281) success；Node 22 的 typecheck/build、159 项测试（0 failed / 0 skipped）与 53 项 Chromium 浏览器验收全部通过。
 - 同一功能 SHA 的 [Workers Builds 6a15ef37-c2b8-4849-bb7e-5eae5333a4ae](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/6a15ef37-c2b8-4849-bb7e-5eae5333a4ae) success；Cloudflare Version ID：`0eb61451-0e67-4fc7-942c-67af92fe5a90`。
 - 本段作为后续文档提交追加 main，不改变以上已验证实现。P12 安全加固、自动化验收和运维说明已交付；下一步是下方真实生产验收及 stable 发布门槛。
+
+### 树形视图补充（2026-10-04，Asia/Shanghai）
+
+用户发现详情页树形视图仍为禁用占位入口，本次按用户要求补齐；[交互设计](superpowers/specs/2026-10-04-json-tree-design.md)。
+
+- [x] 启用树形 Tab；支持对象/数组展开折叠、基本值/空容器、JSON Pointer 和完整节点 JSON 复制。
+- [x] 使用当前 JSON 草稿；切换保留未保存 JSON/元数据与离开确认，查看不写后端、不修改版本/ETag。语法错误提示修正，不展示旧值；锁定后仍可读。
+- [x] 键盘上下/左右/Home/End/Enter/Space、选中与层级语义；字段/字符串仅作为文本，不解释 HTML。
+- [x] 可见节点 200 个分批；长文本限量预览、完整值复制，迭代扁平遍历避免深层递归 DOM；手机深色无页面横向溢出。
+- [x] 3 项核心回归、4 项浏览器验收及类型检查通过。
+- [x] production build / typecheck、162 项自动化与 57 项浏览器测试全部通过，0 failed / 0 skipped。生产构建 CSP 含树形值检查，0 violation / pageerror；桌面与 390px 手机深色界面实测无横向溢出。
+- [ ] 同一功能 SHA 的 GitHub CI / Workers Builds（推送后记录）。
+
+生产接续检查：本地/远程 main 均为 `8d1f784`，该文档提交的 GitHub CI `37168863421` 与 Workers Builds `ba3e4ff0-6ac5-4335-b336-c965c0da8aa4` 也为 success。仓库 homepage `https://jsonbin.org/api/v1/system/health` 当前返回 HTTP 410，不能确认是此 Worker。环境没有适用生产 URL/认证，已保存 `JSONBIN_PRODUCTION_ORIGIN` 环境配置要求；配置草稿尚需用户填写、保存并发布后应用到运行环境。真实生产验收继续保留待验。
 
 ### stable 发布仍需真实环境证据
 

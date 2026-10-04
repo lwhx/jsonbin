@@ -1,6 +1,6 @@
 import { systemApi } from '../settings/api';
 import { downloadBytes } from '../settings/download';
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, Save, Trash2, Braces, RefreshCw } from "lucide-react";
 import { BinApiError, getBin, removeBin, saveBin, saveBinMetadata, restoreBinVersion } from "./api";
@@ -13,10 +13,11 @@ import { listSchemas } from "../schemas/api";
 import { SchemaIssues } from "../schemas/SchemaIssues";
 import { BinApiPanel } from "../docs/BinApiPanel";
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
+import { JsonTree } from './JsonTree';
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
-type Tab = "编辑器" | "历史版本" | "API" | "设置";
+type Tab = "编辑器" | "树形视图" | "历史版本" | "API" | "设置";
 function metadataOf(record: BinRecord): MetadataInput {
   const { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt } = record.meta;
   return { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt, refreshSchema: false };
@@ -43,6 +44,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const deleteDialog = useRef<HTMLDivElement>(null);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
   const dirty = Boolean(draft && (isDirty(draft) || metadataDirty));
+  const parsed = useMemo(() => draft ? parseJson(draft.text) : null, [draft?.text]);
 
   useEffect(() => {
     if (!query.data) return;
@@ -190,14 +192,13 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     catch { setError(new Error("无法访问剪贴板，请手动选择并复制。")); }
   }
 
-  if (!draft) return <section className="panel detail-empty">
+  if (!draft || !parsed) return <section className="panel detail-empty">
     <button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={16} />返回数据仓</button>
     {query.isError ? <><h1>无法打开数据仓</h1><p role="alert">{query.error.message}</p>
       <button className="secondary-button" onClick={() => query.refetch()}>重试</button></> : <p role="status">正在加载数据仓…</p>}
   </section>;
 
   const record = draft.record;
-  const parsed = parseJson(draft.text);
   const apiUrl = `${window.location.origin}/api/v1/bins/${encodeURIComponent(id)}`;
   const locked = record.meta.locked;
   return <section className="bin-detail">
@@ -224,11 +225,8 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       }}>重新登录</button>}
     </div>}
     <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
-      {(["编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item => {
-        const disabled = item === "树形视图";
-        return <button key={item} type="button" role="tab" aria-selected={tab === item} disabled={disabled}
-          onClick={() => !disabled && setTab(item as Tab)}>{item}{disabled && <small>即将推出</small>}</button>;
-      })}
+      {(["编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
+        <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{item}</button>)}
     </div>
     <div className="panel detail-panel" role="tabpanel" aria-label={tab}>
       {tab === "编辑器" && <>
@@ -242,6 +240,10 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
           <JsonEditor value={draft.text} onChange={text => { setDraft(previous => previous ? { ...previous, text } : previous); setNotice(""); }} readOnly={locked || Boolean(busy)} dark={dark} />
         </Suspense>
       </>}
+      {tab === "树形视图" && (parsed.valid
+        ? <JsonTree value={parsed.value} dirty={isDirty(draft)} onCopy={copy} />
+        : <div className="json-tree-invalid"><p className="detail-error" role="alert">{parsed.error}请返回编辑器修正后查看树形视图。</p>
+          <button type="button" className="secondary-button" onClick={() => setTab('编辑器')}>返回编辑器</button></div>)}
       {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
         <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
       </Suspense>}
