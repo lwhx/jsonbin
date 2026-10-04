@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSchema, saveSchema, removeSchema, validateSample, SchemaApiError } from "./api";
 import type { SchemaRecord, SchemaDefinition, ValidationResult } from "./api";
 import { SchemaIssues } from "./SchemaIssues";
+import { confirmDialog } from "../../components/ConfirmDialog";
 const initialText = JSON.stringify({ $schema: "http://json-schema.org/draft-07/schema#", type: "object", properties: { title: { type: "string" } }, required: ["title"] }, null, 2);
 function fields(record: SchemaRecord) { return { name: record.meta.name, description: record.meta.description, text: JSON.stringify(record.schema, null, 2) }; }
 const initialForm = { name: "", description: "", text: initialText };
