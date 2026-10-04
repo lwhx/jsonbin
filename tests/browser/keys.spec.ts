@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { acceptConfirm, dismissConfirm } from '../support/confirm-dialog';
 
 test.beforeEach(async ({ page }) => {
   expect((await page.request.post('/api/v1/auth/login', { data: { username: 'browser-test', password: process.env.JSONBIN_TEST_PASSWORD } })).status()).toBe(200);
@@ -45,17 +46,17 @@ test('API 密钥创建、复制、刷新后再次显示、权限/期限、最后
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '切换明暗主题', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '撤销密钥 浏览器自动化密钥', exact: true }).click();
+  await dismissConfirm(page, '撤销后该 Token 会立即失效');
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` } })).status()).toBe(200);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '撤销密钥 浏览器自动化密钥', exact: true }).click();
+  await acceptConfirm(page, '撤销后该 Token 会立即失效');
   await expect(card).toContainText('已撤销');
   await expect(page.getByRole('button', { name: '撤销密钥 浏览器自动化密钥', exact: true })).toBeDisabled();
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` } })).status()).toBe(401);
 
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除密钥 浏览器自动化密钥', exact: true }).click();
+  await acceptConfirm(page, '保存的完整密钥无法恢复');
   await expect(card).toHaveCount(0);
 });
 
@@ -75,8 +76,8 @@ test('创建失败、过去的期限、网络和登录过期保留权限草稿�
   await page.getByLabel('过期时间', { exact: true }).fill('2000-01-01T00:00');
   await page.getByRole('button', { name: '创建密钥', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('必须在未来');
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: '数据模型', exact: true }).click();
+  await dismissConfirm(page, '未保存');
   await expect(page).toHaveURL(/#\/keys$/);
   await page.getByLabel('过期时间', { exact: true }).fill('');
   await page.route('**/api/v1/keys', route => route.request().method() === 'POST' ? route.abort('connectionfailed') : route.continue());
@@ -101,8 +102,8 @@ test('列表加载和撤销网络失败可重试，失败不会清除密钥记�
   const card = page.getByRole('listitem').filter({ hasText: '重试密钥' });
   await expect(card).toContainText('history:read');
   await page.route(`**/api/v1/keys/${created.key.id}`, route => route.abort('connectionfailed'));
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '撤销密钥 重试密钥', exact: true }).click();
+  await acceptConfirm(page, '撤销后该 Token 会立即失效');
   await expect(page.locator('.detail-error[role=alert]')).toContainText('无法连接');
   await expect(card).toContainText('状态：有效');
   await page.unroute(`**/api/v1/keys/${created.key.id}`);
@@ -122,8 +123,8 @@ test('有效密钥可以直接永久删除，网络失败不会从列表移除�
   await expect(card).toContainText('状态：有效');
 
   await page.route(`**/api/v1/keys/${created.key.id}/purge`, route => route.abort('connectionfailed'));
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除密钥 永久删除密钥', exact: true }).click();
+  await acceptConfirm(page, '保存的完整密钥无法恢复');
   await expect(page.locator('.detail-error[role=alert]')).toContainText('无法连接');
   await expect(card).toHaveCount(1);
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${created.token}` } })).status()).toBe(200);
