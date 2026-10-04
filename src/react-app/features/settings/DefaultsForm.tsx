@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { useConfirm } from '../../components/ConfirmDialog';
 import type { SettingsRecord } from '../../../shared/system.ts';
 import { systemApi } from './api';
 export function DefaultsForm({ record, onSaved, onDirtyChange }: { record: SettingsRecord; onSaved: (r: SettingsRecord) => void; onDirtyChange: (dirty: boolean) => void }) {
+  const confirm = useConfirm();
   const [saved, setSaved] = useState(record), [visibility, setVisibility] = useState(record.settings.defaultVisibility), [ttl, setTtl] = useState(record.settings.defaultTtlSeconds?.toString() ?? '');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const mounted = useRef(false), generation = useRef(0), controller = useRef<AbortController | null>(null), running = useRef(false);
