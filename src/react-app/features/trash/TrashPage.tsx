@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { emptyTrash, listTrash, purgeTrash, restoreTrash, type TrashRecord } from "./api";
 
 export function TrashPage({ onOpen, onDirtyChange }: { onOpen: (id: string) => void; onDirtyChange: (dirty: boolean) => void }) {
   const client = useQueryClient();
+  const confirm = useConfirm();
   const query = useQuery({ queryKey: ["trash-bins"], queryFn: ({ signal }) => listTrash(signal), retry: false });
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [restoredId, setRestoredId] = useState<string | null>(null);
@@ -14,8 +16,18 @@ export function TrashPage({ onOpen, onDirtyChange }: { onOpen: (id: string) => v
   async function act(action: "restore" | "purge" | "empty", item?: TrashRecord) {
     if (busy) return;
     const items = query.data?.items ?? [];
-    if (action === "purge" && !window.confirm(`永久删除「${item!.meta.name}」及全部历史版本？此操作无法撤销。`)) return;
-    if (action === "empty" && (!items.length || !window.confirm(`永久删除当前回收站中的 ${items.length} 个数据仓及全部历史版本？此操作无法撤销，新进入回收站的记录不会包含在本次操作中。`))) return;
+    if (action === "purge" && !await confirm({
+      title: "永久删除数据仓",
+      message: `确定要永久删除“${item!.meta.name}”及全部历史版本吗？此操作无法撤销。`,
+      confirmLabel: "永久删除",
+      danger: true,
+    })) return;
+    if (action === "empty" && (!items.length || !await confirm({
+      title: "清空回收站",
+      message: `将永久删除当前回收站中的 ${items.length} 个数据仓及全部历史版本。此操作无法撤销，新进入回收站的记录不会包含在本次操作中。`,
+      confirmLabel: "清空回收站",
+      danger: true,
+    }))) return;
     setBusy(true); setError(""); setNotice(""); setRestoredId(null);
     try {
       if (action === "restore") {
