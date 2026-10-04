@@ -51,6 +51,7 @@ On 2026-10-04, JSONBin v3 successfully completed full production acceptance on `
 - Verified request-time TTL auto-archival and trash lifecycles.
 - Exported production business backups and successfully restored 100% of IDs and historical versions in a pristine, empty R2 test environment.
 - Promoted version from `3.0.0-alpha.4` to `3.0.0` stable release.
+- Release metadata is synchronized across `package.json`, `package-lock.json`, Worker API status and dashboard fallback.
 
 ## Local development
 
