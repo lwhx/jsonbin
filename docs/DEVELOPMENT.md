@@ -45,7 +45,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 版本历史 | ✅ 已完成 | 版本列表、读取、任意两版 Diff、追加式恢复；v3.0.0 生产验收完成 |
 | 集合 | ✅ 已完成 | 集合 CRUD、详情、成员计数、移入/移出及删除关联清理；CI / Workers Builds / v3.0.0 生产验收完成 |
 | 数据模型 | ✅ 已完成 | Draft 7 模型 CRUD、样本校验、Bin 固定修订绑定/锁定/升级；CI / Workers Builds / v3.0.0 生产验收完成 |
-| API 密钥 | ✅ 已完成 | Session 管理、一次性明文、Scope/过期/撤销/最后使用、Bearer 认证；CI / Workers Builds / v3.0.0 生产验收完成 |
+| API 密钥 | ✅ 已完成 | Session 管理、加密明文可再次查看/复制、Scope/过期/撤销/永久删除/最后使用、Bearer 认证；CI / Workers Builds / v3.0.0 生产验收完成 |
 | 高级 Bin API | ✅ 已完成 | Merge Patch、深层路径、数据锁、公开当前读取；CI / Workers Builds / v3.0.0 生产验收完成 |
 | 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
 | API 文档 | ✅ 已完成；CI / Workers Builds 通过 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
