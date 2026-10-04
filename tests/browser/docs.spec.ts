@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import { acceptConfirm, dismissConfirm } from '../support/confirm-dialog';
 test.beforeEach(async({page})=>{
   expect((await page.request.post('/api/v1/auth/login',{data:{username:'browser-test',password:process.env.JSONBIN_TEST_PASSWORD}})).status()).toBe(200);
 });
@@ -40,12 +41,12 @@ test('Bin API 只展示演示 JSON，动态状态刷新并保留草稿和离页�
   await page.getByRole('tab',{name:'设置',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('未保存-'+marker);await page.getByLabel('可见性',{exact:true}).selectOption('public');
   await page.getByRole('tab',{name:'API',exact:true}).click();await expect(panel).toContainText('此数据仓为私有');await expect(panel).not.toContainText(marker);
   await page.getByRole('tab',{name:'设置',exact:true}).click();await expect(page.getByLabel('名称',{exact:true})).toHaveValue('未保存-'+marker);
-  await page.getByRole('tab',{name:'API',exact:true}).click();page.once('dialog',d=>d.dismiss());await page.getByRole('button',{name:'API 文档',exact:true}).click();await expect(page).toHaveURL(new RegExp(record.meta.id));expect(writes).toEqual([]);
+  await page.getByRole('tab',{name:'API',exact:true}).click();await page.getByRole('button',{name:'API 文档',exact:true}).click();await dismissConfirm(page,'未保存');await expect(page).toHaveURL(new RegExp(record.meta.id));expect(writes).toEqual([]);
   await page.getByRole('tab',{name:'设置',exact:true}).click();await page.getByRole('button',{name:'保存设置',exact:true}).click();await expect(page.locator('.detail-notice')).toContainText('设置保存成功');
   const saved=await(await page.request.get(path)).json();await page.getByRole('tab',{name:'API',exact:true}).click();await expect(panel).toContainText('此数据仓已公开');await expect(panel).toContainText(saved.etag);
   const remote=await page.request.put(path,{headers:{'If-Match':saved.etag},data:{value:{other:marker}}});expect(remote.status()).toBe(200);const changed=await remote.json();
   await page.getByRole('button',{name:'重新加载',exact:true}).click();await expect(panel).toContainText(changed.etag);await expect(panel).not.toContainText(marker);
-  await page.getByRole('tab',{name:'设置',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('新草稿');page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'API 文档',exact:true}).click();await expect(page).toHaveURL(/#\/docs$/);
+  await page.getByRole('tab',{name:'设置',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('新草稿');await page.getByRole('button',{name:'API 文档',exact:true}).click();await acceptConfirm(page,'未保存');await expect(page).toHaveURL(/#\/docs$/);
 });
 test('JSON 草稿在 API 页签往返保持，移动端示例和复制不泄露内容',async({page})=>{
   const saved='stored-'+crypto.randomUUID(),draft='draft-'+crypto.randomUUID();
