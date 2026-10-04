@@ -44,8 +44,8 @@ test('模型创建、编辑、刷新、样本字段校验与删除，支持移�
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '切换明暗主题' }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除模型', exact: true }).click();
+  await page.getByRole('dialog', { name: '删除数据模型？', exact: true }).getByRole('button', { name: '删除模型', exact: true }).click();
   await expect(page).toHaveURL(/#\/schemas$/);
   expect((await page.request.get(`/api/v1/schemas/${id}`)).status()).toBe(404);
 });
@@ -103,8 +103,8 @@ test('创建时模型失败可修正，历史恢复失败显示字段且不新�
   expect((await page.request.patch(path + '/meta', { headers: { 'If-Match': updated.etag }, data: { schemaId: schema.meta.id } })).status()).toBe(200);
   await page.goto(`/#/bins/${historical.meta.id}`);
   await page.getByRole('tab', { name: '历史版本', exact: true }).click();
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '恢复 v1', exact: true }).click();
+  await page.getByRole('dialog', { name: '恢复历史版本 v1？', exact: true }).getByRole('button', { name: '恢复版本', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('#/count');
   expect((await (await page.request.get(path)).json()).meta.currentVersion).toBe(2);
 });
