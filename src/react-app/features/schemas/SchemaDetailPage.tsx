@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { getSchema, saveSchema, removeSchema, validateSample, SchemaApiError } from "./api";
 import type { SchemaRecord, SchemaDefinition, ValidationResult } from "./api";
 import { SchemaIssues } from "./SchemaIssues";
@@ -46,13 +47,24 @@ export function SchemaDetailPage({ id, onBack, onSaved, onDeleted, onDirtyChange
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
   async function reload() {
-    if (!id || busy || (dirty && !window.confirm("重新加载会丢弃未保存的模型修改，是否继续？"))) return;
+    if (!id || busy || (dirty && !await confirm({
+      title: "重新加载数据模型？",
+      message: "重新加载会丢弃未保存的模型修改。",
+      confirmLabel: "重新加载",
+      cancelLabel: "继续编辑",
+      danger: true,
+    }))) return;
     setBusy(true); setError(null); setNotice("");
     try { await client.cancelQueries({ queryKey: ["schema", id] }); await accept(await getSchema(id)); }
     catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
   async function remove() {
-    if (!id || !baseline || busy || !window.confirm(`删除模型“${baseline.meta.name}”？已有数据仓继续按绑定修订校验，不能再新绑定此模型。${dirty ? "未保存的修改将被丢弃。" : ""}`)) return;
+    if (!id || !baseline || busy || !await confirm({
+      title: "删除数据模型？",
+      message: `删除“${baseline.meta.name}”后，已有数据仓继续按绑定修订校验，但不能再新绑定此模型。${dirty ? "未保存的修改将被丢弃。" : ""}`,
+      confirmLabel: "删除模型",
+      danger: true,
+    })) return;
     setBusy(true); setError(null);
     try {
       await removeSchema(id, baseline.etag); await client.invalidateQueries({ queryKey: ["schemas"] });
@@ -76,8 +88,14 @@ export function SchemaDetailPage({ id, onBack, onSaved, onDeleted, onDirtyChange
       {baseline && <p>当前修订 r{baseline.meta.currentRevision}</p>}</div>{dirty && <span className="dirty-badge">未保存</span>}</header>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}{error instanceof SchemaApiError && <SchemaIssues issues={error.issues} />}
-      {error instanceof SchemaApiError && error.status === 401 && <button className="secondary-button" onClick={() => {
-        if (!dirty || window.confirm("重新登录会离开当前页面，是否放弃未保存的内容？")) client.invalidateQueries({ queryKey: ["auth-me"] });
+      {error instanceof SchemaApiError && error.status === 401 && <button className="secondary-button" onClick={async () => {
+        if (!dirty || await confirm({
+          title: "重新登录？",
+          message: "重新登录会离开当前页面，未保存的内容将丢失。",
+          confirmLabel: "重新登录",
+          cancelLabel: "继续编辑",
+          danger: true,
+        })) client.invalidateQueries({ queryKey: ["auth-me"] });
       }}>重新登录</button>}</div>}
     <form className="panel detail-form" onSubmit={event => { event.preventDefault(); save(); }}>
       <label>模型名称<input required maxLength={160} disabled={busy} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label>
