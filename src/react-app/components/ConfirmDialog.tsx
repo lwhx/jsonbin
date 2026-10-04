@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { ModalDialog } from "./ModalDialog";
 
@@ -26,23 +26,30 @@ export function confirmDialog(options: ConfirmDialogOptions) {
 
 export function ConfirmDialogHost() {
   const [queue, setQueue] = useState<Request[]>([]);
+  const queueRef = useRef<Request[]>([]);
   const current = queue[0] ?? null;
 
+  function replaceQueue(update: (previous: Request[]) => Request[]) {
+    setQueue(previous => {
+      const next = update(previous);
+      queueRef.current = next;
+      return next;
+    });
+  }
+
   useEffect(() => {
-    dispatcher = request => setQueue(previous => [...previous, request]);
+    dispatcher = request => replaceQueue(previous => [...previous, request]);
     return () => {
       dispatcher = null;
-      setQueue(previous => {
-        for (const request of previous) request.resolve(false);
-        return [];
-      });
+      for (const request of queueRef.current) request.resolve(false);
+      queueRef.current = [];
     };
   }, []);
 
   function finish(accepted: boolean) {
     if (!current) return;
     current.resolve(accepted);
-    setQueue(previous => previous.slice(1));
+    replaceQueue(previous => previous.slice(1));
   }
 
   if (!current) return null;
