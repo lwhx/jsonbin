@@ -2,6 +2,7 @@ import type { DocOperation, DocScope, DocSection, DocError } from './types.ts';
 export const DOC_SCOPES: readonly DocScope[] = ['bin:read','bin:create','bin:update','bin:delete','collection:read','collection:write','schema:read','schema:write','history:read'];
 export const DEMO_VALUE = { settings: { theme: 'light' }, enabled: false, note: null };
 export const DOC_SECTIONS: readonly DocSection[] = [
+  {id:'search',title:'全局搜索与索引',introduction:['GET /search 按名称、描述和资源 UUID 搜索数据仓、集合、模型，不检索 JSON 正文。q trim 后 1–160 字符；type=all|bin|collection|schema（默认 all），limit=1–50（默认 20）；未知、重复和错误参数返回 400。Bin 也匹配集合名称或 ID。', '全部搜索需要 bin:read + collection:read + schema:read；Bin 搜索需要 bin:read + collection:read；集合或模型筛选只需各自 read。即使 Bin 公开也不开放匿名搜索，显式 Authorization 不回退 Cookie。', '返回 {items,nextCursor,source}，items 只含当前可用的元数据摘要；source=kv|r2。下一页传 cursor 并保留 q/type/limit；资源变化返回 409 search_changed，应从第一页重查。最多扫描 10000 个 R2 对象 / 200 个资源，超限返回 503 search_limit_exceeded，不返回部分结果。', 'KV 是可丢弃的派生索引，缺失、过期、损坏或不可用时回退 R2。GET /search/index、POST /search/rebuild 仅允许管理 Session，任何 Authorization 都拒绝；重建不修改业务 JSON。KV 未配置或写失败为 503，重建中资源变化为 409。每次最多清理 200 个废弃索引，503 search_cleanup_limit_exceeded 时再次重建继续。设置页提供重建入口。']},
   {id:'auth',title:'登录与认证',introduction:['API 基础路径为 /api/v1。网页登录使用 HttpOnly Session Cookie，有效期 14 天；受 Session 保护的资源写入携带 Origin 时必须与应用一致。','外部调用使用 Authorization: Bearer <API_TOKEN>。显式 Authorization 不回退到 Cookie：Token 无效返回 401，权限不足返回 403。跨站浏览器调用需要符合部署的 CORS 配置。','curl Session 示例先运行登录命令保存 cookies.txt；Python 先执行登录示例创建 session，后续管理请求复用同一个 session；JavaScript Session 示例在已登录的同站浏览器中使用 credentials: include。']},
   {id:'keys',title:'API Key 与权限',introduction:['在 API 密钥页面创建 Token，完整 Token 仅返回一次。为外部调用赋予所需的最小 Scope；不要在共享示例中填写真实密钥。','密钥管理仅允许管理 Session，所有 Authorization（即使 Cookie 有效）都返回 session_required。恢复历史/回收站需要 bin:update + history:read；读取集合成员需要 collection:read + bin:read。']},
   {id:'bins',title:'Bin CRUD',introduction:['演示资源 UUID、<API_TOKEN>、<ETAG>、<USERNAME>、<PASSWORD> 都需要替换；通用代码使用固定演示 JSON。','普通读取返回 meta/value/etag，不是直接返回 JSON 值。创建和 PUT 请求用 {value: ...} 包装；值可为对象、数组、null、布尔、数字或文本。公开 Bin 仅开放匿名当前及路径读取；列表、历史与写入仍需认证。','列表当前返回全部 items/total，不支持分页或服务端搜索参数。创建可传 name、description、visibility、collectionId、schemaId、schemaLocked、expiresAt；expiresAt 是未来 ISO 时间或 null。省略 visibility/expiresAt 使用服务端创建时的默认设置；显式 private/public/null 优先，默认变化不修改既有 Bin。']},
@@ -29,6 +30,12 @@ function op(id: string, sectionId: string, title: string, method: DocOperation['
     requestFields: body === undefined ? '无 JSON 请求体。路径参数见 URL；ID 使用资源 UUID。' : 'JSON 字段：' + (body !== null && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).join('、') : '补丁可为任意 JSON 值') + '。具体约束见本章说明和示例。', ...(body === undefined ? {} : {body})};
 }
 export const DOC_OPERATIONS: readonly DocOperation[] = [
+  op('search-all','search','搜索全部资源','GET','/search?q=demo&type=all&limit=20',['bin:read','collection:read','schema:read'],'{items,nextCursor,source}'),
+  op('search-bins','search','按集合或文本查找 Bin','GET','/search?q=demo&type=bin&limit=20',['bin:read','collection:read'],'{items,nextCursor,source}'),
+  op('search-collections','search','搜索集合','GET','/search?q=demo&type=collection&limit=20',['collection:read'],'{items,nextCursor,source}'),
+  op('search-schemas','search','搜索数据模型','GET','/search?q=demo&type=schema&limit=20',['schema:read'],'{items,nextCursor,source}'),
+  op('search-index','search','索引状态','GET','/search/index',[],'{configured,available,current,builtAt,count}',undefined,'none','count 为最近构建的资源数，不是实时统计。','session'),
+  op('search-rebuild','search','从 R2 重建索引','POST','/search/rebuild',[],'{configured,available,current,builtAt,count}',undefined,'none','可重试；并发变化返回 409，KV 未配置或暂不可用返回 503。','session'),
   op('auth-config','auth','登录方式配置','GET','/auth/config',[],'{passwordEnabled, githubEnabled}',undefined,'none','配置仅表明已配置登录方式。','none'),
   op('auth-login','auth','密码登录','POST','/auth/login',[],'{ok, user}',{username:'<USERNAME>',password:'<PASSWORD>'},'none','成功设置 Session Cookie；示例中的登录信息需要替换。','none'),
   op('auth-logout','auth','退出登录','POST','/auth/logout',[],'{ok}',undefined,'none','清除 Cookie。','session'),
@@ -80,7 +87,7 @@ export const DOC_ERRORS: readonly DocError[] = [
   {status:401,code:'unauthorized / invalid_credentials / session_required',meaning:'登录或 Token 无效，或接口仅允许 Session。',recovery:'重新登录/检查 Token；管理接口不发送 Authorization。'},
   {status:403,code:'insufficient_scope / origin_not_allowed / github_user_not_allowed',meaning:'Scope、来源或 GitHub 用户不允许。',recovery:'检查 requiredScopes、应用 origin 或管理员配置。'},
   {status:404,code:'not_found / path_not_found',meaning:'资源不存在、已删除/到期，或路径不存在。',recovery:'检查 ID/父节点；删除或到期资源查看回收站。'},
-  {status:409,code:'collection_deleting / collection_unavailable / collection_delete_conflict / schema_unavailable / bin_purging / version_missing / schema_revision_missing / key_update_conflict / version_limit_reached / revision_limit_reached / backup_changed / backup_unavailable / restore_conflict / restore_dependency_conflict',meaning:'资源状态冲突或依赖不可用。',recovery:'刷新并检查依赖/回收站；已清理内容不能恢复。'},
+  {status:409,code:'collection_deleting / collection_unavailable / collection_delete_conflict / schema_unavailable / bin_purging / version_missing / schema_revision_missing / key_update_conflict / version_limit_reached / revision_limit_reached / backup_changed / backup_unavailable / restore_conflict / restore_dependency_conflict / search_changed',meaning:'资源状态冲突或依赖不可用。',recovery:'刷新并检查依赖/回收站；已清理内容不能恢复。'},
   {status:412,code:'etag_conflict',meaning:'If-Match 已过期。',recovery:'重新读取最新 ETag，确认合并/覆盖后再提交。'},
   {status:413,code:'payload_too_large',meaning:'实际正文、业务值、备份对象数或字节超限。',recovery:'减少文件、资源或历史数量后重新预览；不靠伪造 Content-Length 绕过限制。'},
   {status:422,code:'validation_failed / invalid_json / invalid_path / invalid_version / patch_too_deep / invalid_schema / schema_validation_failed / schema_required',meaning:'请求字段、JSON、路径或模型不合法。',recovery:'修正 body/路径/版本/模型；issues 提供校验详情。'},
@@ -88,5 +95,5 @@ export const DOC_ERRORS: readonly DocError[] = [
   {status:428,code:'precondition_required',meaning:'缺少必需 If-Match。',recovery:'读取该资源当前 ETag 并携带完整值。'},
   {status:500,code:'internal_server_error',meaning:'内部错误，可能已部分提交。',recovery:'稍后重读状态，写操作不盲目重复。'},
   {status:502,code:'github_token_exchange_failed / github_user_lookup_failed',meaning:'GitHub 网络、响应或 JSON 失败。',recovery:'稍后从登录入口重试。'},
-  {status:503,code:'github_oauth_not_configured / key_service_unavailable / storage_unavailable / settings_unavailable',meaning:'登录未配置、密钥或系统存储/设置暂不可用。',recovery:'检查管理员配置或稍后重试。'},
+  {status:503,code:'github_oauth_not_configured / key_service_unavailable / storage_unavailable / settings_unavailable / search_unavailable / search_index_unavailable / search_limit_exceeded / search_cleanup_limit_exceeded',meaning:'登录未配置、存储/搜索暂不可用，或扫描/清理超出单次上限。',recovery:'检查配置、稍后重试或减少资源；废弃索引清理可再次重建继续。'},
 ];

@@ -1,3 +1,4 @@
+import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import type { ImportMarker } from '../../shared/backup-types.ts';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
@@ -45,6 +46,7 @@ export async function createCollection(env: Env, input: CollectionInput) {
   const meta: CollectionMeta = { id, name: input.name, description: input.description ?? "",
     slug: `collection-${id}`, createdAt: now, updatedAt: now, status: "active" };
   const stored = await putJson(requireDataBucket(env), key(id), meta);
+  await syncSearchResource(env, 'collection', id);
   return { meta, etag: stored.httpEtag };
 }
 
@@ -56,6 +58,7 @@ export async function updateCollection(env: Env, id: string, input: Partial<Coll
   const meta = { ...current.meta, ...input, updatedAt: new Date().toISOString() };
   const stored = await putJson(requireDataBucket(env), key(id), meta, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
   if (!stored) throw new Error("etag_conflict");
+  await syncSearchResource(env, 'collection', id);
   return { meta, etag: stored.httpEtag };
 }
 
@@ -67,7 +70,7 @@ export async function detachBinFromCollection(env: Env, binId: string, collectio
     if (!current || !isActiveBin(current.value) || current.value.collectionId !== collectionId) return false;
     const stored = await putJson(bucket, binKey, { ...current.value, collectionId: null, updatedAt: new Date().toISOString() },
       { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
-    if (stored) return true;
+    if (stored) { await syncSearchResource(env, 'bin', binId); return true; }
   }
   throw new Error("collection_delete_conflict");
 }
@@ -76,7 +79,7 @@ export async function deleteCollection(env: Env, id: string, expectedEtag: strin
   const bucket = requireDataBucket(env);
   let current = await getJson<CollectionMeta | ImportMarker>(bucket, key(id));
   if (!current || isImportMarker(current.value)) return null;
-  if (current.value.status === "deleted") return { ok: true, detached: 0 };
+  if (current.value.status === "deleted") { await syncSearchResource(env, 'collection', id); return { ok: true, detached: 0 }; }
   if (current.value.status === "active") {
     if (normalizeEtag(current.etag) !== normalizeEtag(expectedEtag)) throw new Error("etag_conflict");
     const deleting = { ...current.value, status: "deleting" as const, updatedAt: new Date().toISOString() };
@@ -85,6 +88,7 @@ export async function deleteCollection(env: Env, id: string, expectedEtag: strin
     current = { value: deleting, etag: stored.httpEtag, uploaded: stored.uploaded };
   }
   // A persistent deleting marker blocks new membership and lets a failed cleanup resume.
+  await syncSearchResource(env, 'collection', id);
   const members = await listCollectionBins(env, id) ?? [];
   let detached = 0;
   for (const member of members) if (await detachBinFromCollection(env, member.id, id)) detached++;
@@ -94,5 +98,6 @@ export async function deleteCollection(env: Env, id: string, expectedEtag: strin
     const latest = await getJson<CollectionMeta | ImportMarker>(bucket, key(id));
     if (!latest || isImportMarker(latest.value) || latest.value.status !== "deleted") throw new Error("collection_delete_conflict");
   }
+  await syncSearchResource(env, 'collection', id);
   return { ok: true, detached };
 }

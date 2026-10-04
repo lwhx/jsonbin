@@ -1,3 +1,4 @@
+import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 import { binMetaKey, legacyTrashKey, isExpired, normalizeEtag, type StoredBinMeta } from "./bin-state";
@@ -60,6 +61,7 @@ export async function restoreTrashBin(env: Env, id: string, expectedEtag: string
     updatedAt: new Date().toISOString(), lifecycleId: crypto.randomUUID() };
   const written = await putJson(bucket, binMetaKey(id), meta, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
   if (!written) throw new Error("etag_conflict");
+  await syncSearchResource(env, 'bin', id);
   await bucket.delete(legacyTrashKey(id));
   if (collectionId && (await getCollection(env, collectionId))?.meta.status !== "active") {
     await detachBinFromCollection(env, id, collectionId);
@@ -82,6 +84,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
   if (canonical && !isImportMarker(canonical.value) && canonical.value.purgeState === "purged") {
+    await syncSearchResource(env, 'bin', id);
     await removeContents(bucket, id);
     return { ok: true };
   }
@@ -95,6 +98,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
     etag = claimed.httpEtag;
   }
   // Only the permanent purging state permits physical deletion. Restore cannot win after this CAS.
+  await syncSearchResource(env, 'bin', id);
   await removeContents(bucket, id);
   const written = await putJson(bucket, binMetaKey(id), { id, deletedAt: current.meta.deletedAt, purgeState: "purged" },
     { onlyIf: { etagMatches: normalizeEtag(etag) } });
@@ -119,6 +123,7 @@ export async function sweepBins(env: Env, now = Date.now(), onTransition?: (even
       } else if (!current.value.deletedAt && isExpired(current.value, now)) {
         const deleted = { ...current.value, deletedAt: current.value.expiresAt!, deletionReason: "expired" };
         if (await putJson(bucket, binMetaKey(item.id), deleted, { onlyIf: { etagMatches: normalizeEtag(current.etag) } })) {
+          await syncSearchResource(env, 'bin', item.id);
           result.expired++;
           try { await onTransition?.({ action: "bin.expired", id: item.id }); } catch { console.error("activity_notification_failed"); }
         }

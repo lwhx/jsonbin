@@ -36,6 +36,8 @@ The `main` branch currently has a deployable Cloudflare-native v3 foundation wit
 
 The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. P2 adds version history, read-only comparison of any two versions and restoration into a new immutable version. P3 adds collections, member counts and Bin membership settings. Collection deletion detaches members and preserves their JSON and version history. P4 adds Draft 7 JSON Schema management, sample validation and Bin bindings to immutable model revisions. Creation, updates and historical restoration validate against the pinned revision; model locks protect binding changes, and deleting a model retains existing constraints. P5 adds API key administration, one-time token disclosure, expiry/revocation and scoped Bearer authentication for resource APIs. P6 adds JSON Merge Patch, deep-path reads/writes, data-lock controls and anonymous current reads for public Bins. See the development plan for local, CI and production acceptance status.
 
+P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance remains separately tracked.
+
 ## Local development
 
 ```bash

@@ -41,6 +41,12 @@ function run(command,input,args=['-s']) { return new Promise((resolve,reject)=> 
   child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>error+=c);
   child.on('error',reject);child.on('exit',code=>code===0?resolve(output):reject(new Error('sample exit '+code+': '+error.replaceAll(token,'[redacted]'))));child.stdin.end(input);
 }); }
+test('P11 generated search examples match filters combined scopes and Session-only index management', async () => {
+  for (const id of ['search-all','search-bins','search-collections','search-schemas','search-index']) assert.equal((await send(id)).response.status, 200, id);
+  assert.equal((await app.fetch(new Request(origin+'/api/v1/search?q=demo'),env)).status,401);
+  for (const id of ['search-index','search-rebuild']) assert.equal((await send(id,{},undefined,{Authorization:'Bearer '+token})).response.status,401);
+  assert.equal((await send('search-rebuild')).response.status,503); // This harness has no KV binding.
+});
 test('sequential JavaScript and curl examples use fresh ETags on the real Worker',async()=>{
   assert.equal(typeof examples.buildQuickStart,'function');
   for(const language of ['javascript','curl','python']) {

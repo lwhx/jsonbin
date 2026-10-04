@@ -1,3 +1,4 @@
+import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import { resolveCreateDefaults } from './settings';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
@@ -129,6 +130,7 @@ export async function createBin(
 
   await putJson(bucket, versionKey(id, 1), input.value);
   const metaObject = await putJson(bucket, metaKey(id), meta);
+  await syncSearchResource(env, 'bin', id);
 
   if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
     await detachBinFromCollection(env, id, input.collectionId);
@@ -238,6 +240,7 @@ export async function updateBin(
     throw new Error("etag_conflict");
   }
 
+  await syncSearchResource(env, 'bin', id);
   return {
     meta: nextMeta,
     value,
@@ -272,6 +275,7 @@ export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
   }
   // Canonical metadata is now the trash record. Avoid a second mutable archive
   // which a delayed deletion could overwrite after restoration or permanent purge.
+  await syncSearchResource(env, 'bin', id);
   return true;
 }
 
@@ -313,5 +317,6 @@ export async function updateBinMetadata(
     await detachBinFromCollection(env, id, input.collectionId);
     return getBin(env, id);
   }
+  await syncSearchResource(env, 'bin', id);
   return { meta, value: current.value, etag: written.httpEtag };
 }

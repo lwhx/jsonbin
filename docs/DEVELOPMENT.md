@@ -32,7 +32,7 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | --- | --- | --- |
 | Cloudflare Workers | ✅ 已完成 | Hono API、静态前端、自动部署 |
 | R2 | ✅ 已完成 | DATA 绑定，作为权威数据源 |
-| KV | ✅ 已完成 | CACHE 绑定，暂未承担正式索引职责 |
+| KV | ✅ 已完成 | CACHE 派生元数据/集合 slug 索引与搜索快照；R2 校验及回退 |
 | 登录 | ✅ 基础完成 | 用户名 + 密码；可选 GitHub OAuth |
 | Session | ✅ 已完成 | HMAC 签名 Cookie，14 天有效期 |
 | 中文界面 | ✅ 已完成 | 当前主要可见 UI 已中文化 |
@@ -49,9 +49,9 @@ JSONBin v3 是一个面向个人使用的 Cloudflare 原生 JSON 存储、配置
 | 高级 Bin API | ✅ 本地与 CI 验收完成 | Merge Patch、深层路径、数据锁、公开当前读取；Workers Builds 成功，生产功能待验收 |
 | 活动记录 | ✅ 已完成；CI / Workers Builds 通过 | R2 操作记录、Session-only 列表、筛选/分页和保留清理 |
 | API 文档 | ✅ 已完成；CI / Workers Builds 通过 | 中文文档页、三语言示例、Bin 动态 API 与复制反馈 |
-| TTL 与回收站 | ✅ 本地验收完成，CI 待验证 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
-| 设置 | ⬜ 未开始 | 只有导航占位 |
-| 全局搜索 | ⬜ 未开始 | 顶部仅 UI 占位 |
+| TTL 与回收站 | ✅ 本地、CI / Workers Builds 通过 | 到期读写控制、定时归档、恢复、永久删除及批量清空；兼容旧 trash 记录 |
+| 设置 | ✅ 本地、CI / Workers Builds 通过 | 默认设置、系统信息、JSON 导入及业务备份导出/恢复 |
+| 全局搜索 | ✅ 本地验收通过；远端待核验 | 名称/描述/ID/集合搜索、类型筛选/分页、快捷键、R2 回退与重建 |
 
 ## 3. 不允许随意改变的架构约定
 
@@ -135,7 +135,7 @@ versions 下已经写入的版本不得覆盖。
 
 - 先以 CAS 标记 purging，阻止并发恢复，再删除 bins/<id>/versions/ 下全部版本及旧 trash 记录。
 - 完成后只保留 ID、删除时间和 purged 状态的最小标记，阻止旧客户端/旧归档重新激活数据。原 JSON、名称、描述、模型关联等均移除。
-- 清理失败可重试，定时任务也会续作；目前无正式 KV 派生索引，P11 引入索引后须同步清理。
+- 清理失败可重试，定时任务也会续作；P11 已接入派生索引清理；KV 失败不影响删除提交，搜索仍复核 R2。
 
 ## 4. Cloudflare 配置约定
 
@@ -673,13 +673,13 @@ Bearer 权限规则：
 
 | Scope | 允许的现有接口 |
 | --- | --- |
-| bin:read | Bin 列表、当前 JSON/元数据详情及深层路径读取、回收站列表 |
+| bin:read | Bin 列表、当前 JSON/元数据详情及深层路径读取、回收站列表；Bin 搜索还需 collection:read，全部搜索再需 schema:read |
 | bin:create | 新建 Bin（含可选集合、模型绑定） |
 | bin:update | 替换 JSON、Merge Patch、深层路径写入、修改元数据/绑定/锁定/TTL；恢复历史或回收记录还需 history:read |
 | bin:delete | 普通删除 Bin、回收站永久删除及批量清空 |
-| collection:read | 集合列表/详情；集合内 Bin 列表还需 bin:read |
+| collection:read | 集合列表/详情及集合搜索；集合内 Bin 列表或 Bin 搜索还需 bin:read |
 | collection:write | 集合创建、修改、删除（只解除成员关联） |
-| schema:read | 模型列表/详情、JSON 样本校验 |
+| schema:read | 模型列表/详情、JSON 样本校验、模型搜索；全部搜索还需 bin:read + collection:read |
 | schema:write | 模型创建、替换、删除 |
 | history:read | 历史列表/版本内容；恢复还需 bin:update |
 
@@ -1001,7 +1001,7 @@ Dashboard 内提供可直接复制的文档：
 - 中间功能分支 `9609f49` / `e981357` 的 Workers Builds 曾报告 failure，GitHub 未提供原因且本环境缺少 Cloudflare 日志凭据；这两条历史记录不用于代替已成功的 main 构建验收，也不推测其根因。
 - 后续仅同步进度的文档提交另行核对自身 CI / Workers Builds；验收记录保留精确功能 SHA。最新文档 SHA 的实际状态可在 [main 的检查记录](https://github.com/lwhx/jsonbin/commits/main/) 查看。
 - 缺少生产公开 URL/适用认证，生产 auth/CORS、部署页面交互和真实 Cron 仍未验证。
-- 换电脑直接从 main 接续，见本文 §11；下一阶段 P11 尚未开始。
+- 换电脑直接从 main 接续，见本文 §11；P10 交付时下一阶段为 P11，最新状态见下文。
 
 审查决定：保留私有 restoreOrder 以重建源修订顺序（若错误可能拒绝依赖恢复，不允许覆盖）；按用户要求提前推送中间功能分支并明确未完成状态（若失败需补交修复，main 仍经验证）；按用户要求同步纠正两项 Minor 文档（若错误会留下接口说明差异）；无证据的生产验收和功能分支构建失败根因不作成功宣称/推测（部署差异仍可能待发现）。无延期 Minor。
 
@@ -1009,26 +1009,52 @@ Dashboard 内提供可直接复制的文档：
 
 ## P11 全局搜索与 KV 索引
 
-当前 listBins 会扫描 R2。数据量小可以接受，但长期需要索引。
+本轮 P11 后端和界面已实现并通过本地验收，main 推送及远端构建核验待完成。设计与接续计划已保存：[P11 设计](superpowers/specs/2026-10-04-p11-search-design.md)、[P11 实施计划](superpowers/plans/2026-10-04-p11-search.md)。
 
-KV 计划：
+- [x] 创建/更新时同步更新 KV 派生索引（含关系解除、恢复和备份导入）
+- [x] 删除时清理 KV（含到期 Cron、永久删除及归档模型）
+- [x] 提供“从 R2 重建索引”（设置页与 Session-only API）
+- [x] KV 缺失、失效、损坏或不可用时回退到 R2
+- [x] 顶部全局搜索真正可用，Ctrl/Cmd+K、筛选、分页、空状态及错误重试
+- [x] 支持名称、描述、ID、集合搜索，涵盖 Bin、集合和数据模型
+- [x] 本地类型检查、生产构建、146 项 Worker/客户端测试及 52 项浏览器验收
+- [ ] main 推送及功能提交 CI / Workers Builds 核验
+- [ ] 生产搜索/重建/TTL 与真实 Cron 手动验收
+
+接口契约：
+
+~~~text
+GET  /api/v1/search?q=<1–160字符>&type=all|bin|collection|schema&limit=1–50&cursor=...
+GET  /api/v1/search/index       # 管理 Session
+POST /api/v1/search/rebuild     # 管理 Session
+~~~
+
+- 默认 type=all、limit=20；trim 后按 NFKC/大小写归一化子串匹配名称、描述、UUID。Bin 额外匹配所属集合名称/UUID；不搜索 JSON 正文。未知/重复/无效参数为 400。
+- all 需要 bin:read + collection:read + schema:read；bin 需要 bin:read + collection:read；collection/schema 各需自身 read。公开 Bin 也不开放匿名发现；显式 Authorization 不回退 Cookie。管理接口拒绝所有 Authorization 并复用 Origin 检查。
+- 响应 `{items,nextCursor,source:"kv"|"r2"}`。游标绑定查询、类型、页长和元数据清单；资源变化为 409 search_changed，从第一页重查。搜索页条件保存在 hash，刷新和后退可继续；结果使用既有详情路由与草稿保护。
+
+KV 实际布局（替代原计划 token 倒排与 dashboard summary）：
 
 ~~~text
 idx:bin:<id>
-idx:slug:<slug>
 idx:collection:<id>
-search:bin:<token>
-summary:dashboard
+idx:schema:<id>
+idx:slug:<collectionSlug>
+search:snapshot:<generation>   # 24 小时自动过期
 ~~~
 
-要求：
+R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag 清单的 SHA-256、KV 正文 SHA-256、generation、builtAt 和数量。搜索先核对 R2 清单及正文摘要，避免漏同步或最终一致旧快照隐藏新匹配；回退扫描后尽力生成新缓存。候选返回前复读 R2，并检查 TTL、pending、deleted/purging/purged、模型/集合归档和当前匹配。普通写入不因 KV 失败而失败；重建 KV 写失败返回 503。
 
-- [ ] 创建/更新时同步更新 KV 派生索引
-- [ ] 删除时清理 KV
-- [ ] 提供“从 R2 重建索引”
-- [ ] KV 缺失时功能仍可回退到 R2
-- [ ] 顶部全局搜索真正可用
-- [ ] 支持名称、描述、ID、集合搜索
+重建前后检查 R2 清单变化，同步摘要行、清理废弃派生 key、上传唯一快照并 CAS 发布清单；冲突为 409。索引及派生清单不进入业务备份。搜索/重建上限 10000 个对象、200 个资源元数据（含隐藏/终态）、2 MiB 快照；R2 body 并发 16。重建复用扫描摘要，每次最多清理 200 个废弃 key，避免超出内部服务调用上限；剩余清理为 503 search_cleanup_limit_exceeded，重试可继续。超限返回 503 search_limit_exceeded，不展示部分结果。普通列表和概览仍使用既有 R2 路径，容量优化留待后续设计。
+
+
+本地验收（2026-10-04）：
+
+- 类型检查、生产构建通过；146 项 Worker/客户端测试通过，0 失败/跳过。新增 13 项搜索/重建测试和 1 项 API 文档契约测试，并将九种 Scope 矩阵扩展到搜索全部/三种筛选。
+- Chromium 的 52 项用例均已通过：全量回归中 51 项通过，修正搜索错误重试的 mock（保持失败直到用户点击重试，避免 StrictMode 取消请求消耗一次失败）后，4 项搜索用例定向补验全部通过；CI 将再次运行完整 52 项。
+- 已修复快捷键进入搜索页时初始化 effect 覆盖新输入的时序问题；搜索按 URL 条件重新挂载并同步初始化。覆盖名称/描述/ID/集合、三种资源详情、筛选/刷新、真实分页、迟到请求、重试、手机/深色布局、重建状态及操作中离页保护。
+- 后端覆盖有效缓存减少元数据 body 读取、缺失/损坏/不可用缓存回退、漏同步更新、删除/恢复/归档/导入、未完成恢复隐藏、TTL 与 Cron 清理、分页绑定、到期并丢失缓存的分页、匿名/空 Authorization/组合 Scope/Origin、清单修复、并发重建与容量/内部服务调用预算。
+- Workers Builds 成功只能证明构建/发布；生产登录、实际搜索/重建、真实 TTL/Cron 与部署浏览器验收仍单独待确认。
 
 ---
 
@@ -1040,7 +1066,7 @@ summary:dashboard
 - [ ] R2 storage 测试
 - [ ] ETag 并发测试
 - [ ] Session 测试
-- [x] API Key Scope 测试（P5 / P6 / P7 当前接口全矩阵；后续新增接口需扩展）
+- [x] API Key Scope 测试（P5–P11 当前接口及搜索筛选权限矩阵；后续新增接口需扩展）
 - [ ] Schema 校验测试
 - [ ] Trash/Restore 测试
 - [ ] npm run typecheck 通过
@@ -1095,12 +1121,12 @@ summary:dashboard
 
 P7 TTL 与回收站已完成本地开发、本地验收、GitHub CI 及 Workers Builds。生产功能及真实 Cron 运行验收单独保留待确认状态。
 
-P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。下一阶段为 **P11 全局搜索与 KV 索引**。
+P8 活动记录及 P9 API 文档已实现并合并推送 main，本地验收及功能提交 CI / Workers Builds 均通过；生产功能/真实 Cron 手动验收仍单独保留。P10 设置、导入与导出已完成整阶段审查和修复，全部代码及接续文档已合并推送 main；132 项自动化测试、48 项浏览器测试、类型检查/构建以及功能提交 `804fa4b` 的 GitHub CI / Workers Builds 均通过。**P11 全局搜索与 KV 索引** 已通过本地验收，正在提交及核验远端构建，最新结果见 P11 段落。
 
 
 ## 11. 在另一台电脑接续开发
 
-从远程 `main` 接续；代码、P10 设计/计划及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 尚未开始，下一项是全局搜索与 KV 索引；先按本文 P11 清单设计接口、查询范围与可重建索引，再开发。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
+从远程 `main` 接续；代码、P10/P11 设计/计划及开发进度都在 Git 中，不依赖本次云环境的临时执行文件。P11 已实现，当前回归与交付状态见 P11 段落；以本文验收结果及 P11 设计/计划接续。R2 继续作为权威来源，权限、TTL 和生命周期判断不能只依赖最终一致的 KV。
 
 首次检出和验证（Node 22 最新维护版或 Node 24，Python 3，用于 ZIP/示例验证）：
 
@@ -1118,4 +1144,4 @@ npm run test:browser
 
 已有检出先保留自己的未提交改动，再切到 main 并执行 `git pull --ff-only origin main`，不需要拉取功能分支。Linux 若缺浏览器系统库，可用 `npx playwright install --with-deps chromium`。测试会生成随机临时认证，使用本地 R2/KV，无需生产凭据。需要实际启动 Dashboard 时，首次复制 `.dev.vars.example` 为 `.dev.vars` 并配置本地测试登录信息，再 `npm run dev`；不要覆盖已有私有配置，也不要提交真实 Secret。
 
-继续前优先查看：本文件 P10 验收/远端状态及 P11 清单、[P10 实施计划](superpowers/plans/2026-10-04-p10-settings-backup.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。
+继续前优先查看：本文件 P11 验收/远端状态、[P11 设计](superpowers/specs/2026-10-04-p11-search-design.md)、[P11 实施计划](superpowers/plans/2026-10-04-p11-search.md)、[架构](ARCHITECTURE.md)。生产 auth/CORS、部署浏览器、真实 Cron 及无法获取日志的远端构建问题单独保留状态；本地测试通过不能代替这些验收。

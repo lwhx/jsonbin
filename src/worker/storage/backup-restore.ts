@@ -1,3 +1,4 @@
+import { syncSearchResource } from './search';
 import { readBackupJson } from './backup-json';
 import { SystemError } from '../../shared/system.ts';
 import { canonicalJson, fingerprintResource, isImportMarker, validateImportMarker, validateRestoreRequest } from '../../shared/backup.ts';
@@ -108,7 +109,10 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
     const meta = resource.kind === 'purged' ? { ...resource.data, purgeState: 'purged' }
       : resource.kind === 'bin' ? { ...resource.data.meta, size: new TextEncoder().encode(JSON.stringify(resource.data.versions.find(v => v.version === resource.data.meta.currentVersion)!.value)).length, lifecycleId: crypto.randomUUID() } : resource.data.meta;
     const published = await putJson(bucket, key, meta, { onlyIf: { etagMatches: normalizeEtag(record.object.httpEtag) }, customMetadata: { restoreFingerprint: fingerprint } });
-    if (published) return cleanupCollection(env, input, result('created'));
+    if (published) {
+      await syncSearchResource(env, resource.kind === 'purged' ? 'bin' : resource.kind, id);
+      return cleanupCollection(env, input, result('created'));
+    }
     record = await read(bucket, key); const winner = await existing(); if (winner) return winner; throw conflict();
   } catch (error) { if (error instanceof SystemError) throw error; throw new SystemError(503, 'storage_unavailable'); }
 }

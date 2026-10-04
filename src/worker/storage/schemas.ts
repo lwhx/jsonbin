@@ -1,3 +1,4 @@
+import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import type { ImportMarker } from '../../shared/backup-types.ts';
 import { getJson, putJson, listJsonObjects, requireDataBucket } from "./r2";
@@ -28,6 +29,7 @@ export async function createSchema(env: Env, input: SchemaInput): Promise<Schema
     currentRevision: 1, createdAt: now, updatedAt: now, status: "active" };
   await putJson(bucket, revisionKey(meta.id, 1), input.schema);
   const stored = await putJson(bucket, metaKey(meta.id), meta);
+  await syncSearchResource(env, 'schema', meta.id);
   return { meta, schema: input.schema, etag: stored.httpEtag };
 }
 export async function updateSchema(env: Env, id: string, input: SchemaInput, etag: string) {
@@ -54,6 +56,7 @@ export async function updateSchema(env: Env, id: string, input: SchemaInput, eta
     currentRevision: revision, updatedAt: new Date().toISOString() };
   const stored = await putJson(bucket, metaKey(id), meta, { onlyIf: { etagMatches: normalize(current.etag) } });
   if (!stored) throw new Error("etag_conflict");
+  await syncSearchResource(env, 'schema', id);
   return { meta, schema: input.schema, etag: stored.httpEtag };
 }
 export async function deleteSchema(env: Env, id: string, etag: string) {
@@ -63,6 +66,7 @@ export async function deleteSchema(env: Env, id: string, etag: string) {
   const stored = await putJson(requireDataBucket(env), metaKey(id), { ...current.meta, status: "deleted", updatedAt: new Date().toISOString() },
     { onlyIf: { etagMatches: normalize(current.etag) } });
   if (!stored) throw new Error("etag_conflict");
+  await syncSearchResource(env, 'schema', id);
   return true;
 }
 export async function resolveSchemaBinding(env: Env, id: string | null | undefined, value: unknown) {

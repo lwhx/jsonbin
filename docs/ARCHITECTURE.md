@@ -80,14 +80,11 @@ TTL enforcement happens at request time, independently of cron or caches. A sche
 
 ### KV: disposable edge cache and indexes
 
-KV is reserved for derived or rebuildable data (not yet used for these indexes):
+P11 implements disposable `idx:bin:<id>`, `idx:collection:<id>`, `idx:schema:<id>` metadata rows, `idx:slug:<slug>` collection lookup, and immutable `search:snapshot:<generation>` summaries (24-hour TTL). Resource writes, detach, restore, import, deletion and scheduled expiry maintain rows; KV failures do not roll back business writes.
 
-- slug -> bin ID index;
-- public/read cache;
-- collection list cache;
-- dashboard summaries;
-- search index;
-- short-lived UI/session cache where appropriate.
+The derived R2 manifest `indexes/search/meta.json` stores a metadata inventory fingerprint and the exact KV snapshot SHA-256. Search lists canonical metadata keys/ETags before trusting the snapshot, so missed updates cannot silently hide new hits. Missing, stale, corrupt or unavailable KV falls back to bounded R2 metadata reads and attempts to warm the cache. Returned candidates and collection names are rechecked against R2 for current matching and lifecycle/TTL state. Business JSON is never indexed.
+
+Session-only rebuild scans R2, checks inventory changes, repairs rows, removes abandoned derived keys, uploads a unique snapshot and conditionally publishes the manifest. Concurrent changes return 409. Search scans at most 10000 objects / 200 resource metadata records, reads 16 bodies concurrently, and caps snapshots at 2 MiB; limits return explicit 503 rather than partial results. Rebuild reuses scanned bodies and deletes at most 200 abandoned keys per invocation, leaving room below 1000 internal-service calls; search_cleanup_limit_exceeded preserves completed cleanup and can be retried. Cursors bind query/filter/limit/inventory; changed metadata requires restarting pagination. Normal Bin lists and dashboard summaries retain their R2 paths. Token posting lists and dashboard caching are deferred.
 
 Security decisions, version numbers and canonical metadata must never depend solely on KV because KV is eventually consistent.
 

@@ -1,4 +1,5 @@
 import { SettingsPage } from './features/settings/SettingsPage';
+import { SearchPage } from './features/search/SearchPage';
 import { systemApi } from './features/settings/api';
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -87,7 +88,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash" | "Activity" | "Docs" | "Settings";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash" | "Activity" | "Docs" | "Settings" | "Search";
 
 type NavLink = {
   label: string;
@@ -356,12 +357,16 @@ function AuthenticatedApp({
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
+  const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
   const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); window.location.hash = '/search'; } };
+    window.addEventListener('keydown', shortcut); return () => window.removeEventListener('keydown', shortcut);
+  }, []);
 
   useEffect(() => {
     function changed() {
@@ -426,7 +431,7 @@ function AuthenticatedApp({
     queryClient.removeQueries({ queryKey: ["schema"] });
     queryClient.removeQueries({ queryKey: ["keys"] });
     queryClient.removeQueries({ queryKey: ["trash-bins"] });
-    for (const key of ["system-info", "system-settings", "activity"]) { await queryClient.cancelQueries({ queryKey: [key] }); queryClient.removeQueries({ queryKey: [key] }); }
+    for (const key of ["system-info", "system-settings", "activity", "search", "search-index"]) { await queryClient.cancelQueries({ queryKey: [key] }); queryClient.removeQueries({ queryKey: [key] }); }
   }
 
   const totalStorage =
@@ -490,7 +495,7 @@ function AuthenticatedApp({
 
       <main className="main">
         <header className="topbar">
-          <button className="search-button" type="button">
+          <button className="search-button" type="button" onClick={() => { window.location.hash = '/search'; }}>
             <Search size={16} />
             <span>搜索数据仓、集合、数据模型…</span>
             <kbd>⌘ K</kbd>
@@ -528,7 +533,7 @@ function AuthenticatedApp({
         </header>
 
         <div className="content">
-          {binId ? (
+          {route.startsWith('#/search') ? <SearchPage key={route} route={route} /> : binId ? (
             <BinDetailPage key={binId} id={binId} dark={dark} onDirtyChange={setDetailDirty}
               onBack={() => setSection("Bins")}
               onDeleted={() => {

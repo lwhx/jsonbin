@@ -613,6 +613,10 @@ test('Bearer precedence rejects malformed or unknown credentials even alongside 
 test('every existing resource route enforces the exact Bearer scopes, including collection members and historical restoration', async () => {
   const id = crypto.randomUUID();
   const routes = [
+    ['/search?q=example', 'GET', ['bin:read', 'collection:read', 'schema:read'], undefined, 200],
+    ['/search?q=example&type=bin', 'GET', ['bin:read', 'collection:read'], undefined, 200],
+    ['/search?q=example&type=collection', 'GET', ['collection:read'], undefined, 200],
+    ['/search?q=example&type=schema', 'GET', ['schema:read'], undefined, 200],
     ['/bins', 'GET', ['bin:read'], undefined, 200], ['/bins', 'POST', ['bin:create'], {}, 422],
     [`/bins/${id}`, 'GET', ['bin:read'], undefined, 404], [`/bins/${id}`, 'PUT', ['bin:update'], { value: null }, 404],
     [`/bins/${id}`, 'PATCH', ['bin:update'], {}, 404],
