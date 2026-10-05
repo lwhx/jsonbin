@@ -1,6 +1,19 @@
 import { useState } from "react";
+import { useConfirm } from "../../components/ConfirmDialog";
+
+/** Dangerous operations require an explicit confirmation before sending. */
+function isDangerousRequest(method: string, endpoint: string) {
+  if (method === "DELETE") return true;
+  return /purge|restore|rollback|\/batch|\/import|\/trash/i.test(endpoint);
+}
+
+function resourceHint(endpoint: string) {
+  const segments = endpoint.split("?")[0].split("/").filter(Boolean);
+  return segments.slice(-2).join("/") || endpoint;
+}
 
 export function ApiDebugger() {
+  const confirm = useConfirm();
   const [method, setMethod] = useState<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">("GET");
   const [endpoint, setEndpoint] = useState("/system/health");
   const [bearerToken, setBearerToken] = useState("");
@@ -29,6 +42,17 @@ export function ApiDebugger() {
   ];
 
   async function handleSend() {
+    const normalizedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+    if (isDangerousRequest(method, normalizedEndpoint)) {
+      const okToSend = await confirm({
+        title: "危险操作确认",
+        message: `你正在执行危险操作：\n${method} /api/v1${normalizedEndpoint}\n\n资源：${resourceHint(normalizedEndpoint)}\n该操作可能永久删除或覆盖数据，请确认目标资源正确。`,
+        confirmLabel: "确认执行",
+        danger: true,
+      });
+      if (!okToSend) return;
+    }
+
     setLoading(true);
     setError(null);
     setStatus(null);
@@ -38,7 +62,7 @@ export function ApiDebugger() {
 
     const start = performance.now();
     try {
-      const targetUrl = endpoint.startsWith("/") ? `/api/v1${endpoint}` : `/api/v1/${endpoint}`;
+      const targetUrl = `/api/v1${normalizedEndpoint}`;
       const headers: Record<string, string> = {};
       if (requestBody && (method === "POST" || method === "PUT" || method === "PATCH")) {
         headers["Content-Type"] = "application/json";

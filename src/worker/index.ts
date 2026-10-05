@@ -22,6 +22,9 @@ type Bindings = Env;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// Named export for contract tests (route coverage against the OpenAPI spec).
+export { app };
+
 app.use("/api/*", async (c, next) => {
   const requestId = crypto.randomUUID();
   c.set("requestId", requestId);
