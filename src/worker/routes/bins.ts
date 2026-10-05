@@ -114,6 +114,7 @@ const metadataSchema = z.object({
   schemaLocked: z.boolean().optional(),
   refreshSchema: z.boolean().optional(),
   locked: z.boolean().optional(),
+  contentSearchMode: z.enum(["off", "keys", "all"]).optional(),
   expiresAt: expiresAtSchema,
 }).strict().refine((input) => Object.keys(input).length > 0);
 

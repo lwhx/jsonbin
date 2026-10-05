@@ -356,6 +356,46 @@ test('P17: GET /api/v1/openapi.json serves valid OpenAPI 3.1 schema covering rou
   assert.equal(Boolean(spec.components.securitySchemes.BearerAuth), true);
 });
 
+test('P19: searchJsonContent scans active Bins with contentSearchMode and matches keys or values', async () => {
+  const binOff = await create({ secret: 'hidden-off-value' });
+  const binKeys = await create({ myCustomKey: 'myCustomValue' });
+  const binAll = await create({ user: 'alice', config: { server: 'node-01' } });
+
+  // Update contentSearchMode
+  await request(`/bins/${binKeys.meta.id}/meta`, {
+    method: 'PATCH',
+    etag: binKeys.etag,
+    value: { contentSearchMode: 'keys' },
+  });
+  await request(`/bins/${binAll.meta.id}/meta`, {
+    method: 'PATCH',
+    etag: binAll.etag,
+    value: { contentSearchMode: 'all' },
+  });
+
+  // 1. Search for value 'hidden-off-value' in binOff (contentSearchMode: off) -> 0 matches
+  const resOff = await request('/search/content?q=hidden-off-value');
+  assert.equal(resOff.status, 200);
+  assert.equal((await resOff.json()).items.length, 0);
+
+  // 2. Search for key 'myCustomKey' in binKeys -> 1 match
+  const resKey = await request('/search/content?q=myCustomKey');
+  assert.equal(resKey.status, 200);
+  const dataKey = await resKey.json();
+  assert.equal(dataKey.items.some(i => i.binId === binKeys.meta.id && i.matchType === 'key'), true);
+
+  // 3. Search for value 'myCustomValue' in binKeys (mode keys only) -> should not match value
+  const resValInKeys = await request('/search/content?q=myCustomValue');
+  assert.equal(resValInKeys.status, 200);
+  assert.equal((await resValInKeys.json()).items.some(i => i.binId === binKeys.meta.id), false);
+
+  // 4. Search for value 'alice' in binAll (mode all) -> 1 match
+  const resAll = await request('/search/content?q=alice');
+  assert.equal(resAll.status, 200);
+  const dataAll = await resAll.json();
+  assert.equal(dataAll.items.some(i => i.binId === binAll.meta.id && i.matchType === 'value' && i.snippet === 'alice'), true);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

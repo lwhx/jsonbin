@@ -1192,6 +1192,11 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 数据模型扩充：`StoredKey` 记录 `usageTotal` 与 `usageDaily`（UTC 最近 31 天滑动窗口）。
   - 零额外写开销：统计逻辑完全合并进已有 `useApiKey()` CAS 操作中，严格只统计认证通过的已授权请求。
   - 前端控制台直观呈现：密钥卡片即时展示已授权总请求与今日已授权请求统计。
+- [x] **P19：JSON 内容搜索 Content Search**：
+  - 数据模型支持：`BinMeta` 扩展 `contentSearchMode: "off" | "keys" | "all"`（默认 `off`），前端设置面板支持无缝切换与敏感值安全警示。
+  - 独立搜索端点：`GET /api/v1/search/content?q=...&mode=...`，严格保留在 Management Session，不污染 P11 元数据索引。
+  - R2 权威有界实时检索：最大扫描 100 个有效 Bin，20 MiB 读取上限，64 层递归及 10,000 节点上限保护，超限主动熔断并返回 503 `content_search_limit_exceeded`。
+  - 结果精简安全输出：仅返回路径与最大 120 字符 Snippet，杜绝大 JSON 直接泄露。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

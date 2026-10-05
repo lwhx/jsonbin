@@ -28,6 +28,7 @@ export type BinMeta = {
   createdAt: string;
   updatedAt: string;
   expiresAt: string | null;
+  contentSearchMode?: "off" | "keys" | "all";
   deletedAt?: string;
   deletionReason?: "manual" | "expired";
   purgeState?: "purging";
@@ -425,6 +426,7 @@ export type BinMetadataInput = {
   schemaLocked?: boolean;
   refreshSchema?: boolean;
   locked?: boolean;
+  contentSearchMode?: "off" | "keys" | "all";
   expiresAt?: string | null;
 };
 

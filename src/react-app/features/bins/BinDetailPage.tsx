@@ -388,7 +388,23 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         <label className="schema-checkbox"><input type="checkbox" aria-label="锁定模型绑定" checked={metadata.schemaLocked} disabled={Boolean(busy) || locked || !metadata.schemaId}
           onChange={event => setMetadata({ ...metadata, schemaLocked: event.target.checked })} />锁定模型绑定</label>
         {record.meta.schemaLocked && <p>模型绑定已锁定；更换、解除或升级前，请先取消锁定并单独保存。</p>}
-        <p>{metadata.visibility === "public" ? "公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。" : "私有数据仓的所有读取都需要 Session 或具有所需 Scope 的 API 密钥。"}</p>
+        <label>内容搜索索引模式
+          <select
+            aria-label="内容搜索索引模式"
+            value={metadata.contentSearchMode ?? "off"}
+            disabled={Boolean(busy) || locked}
+            onChange={event => setMetadata({ ...metadata, contentSearchMode: event.target.value as "off" | "keys" | "all" })}
+          >
+            <option value="off">关闭 (不参与内容搜索)</option>
+            <option value="keys">仅索引键 (Keys 及 JSON Pointer)</option>
+            <option value="all">全量索引 (键与数值)</option>
+          </select>
+        </label>
+        {metadata.contentSearchMode === "all" && (
+          <p style={{ color: "#eab308", fontSize: "12px" }}>
+            ⚠️ 提示：JSON 内容可能包含 Token、Cookie 或密码等敏感值。开启全量内容搜索后这些值将参与搜索匹配。
+          </p>
+        )}
         <button type="submit" className="primary-button" disabled={!metadataDirty || !metadata.name.trim() || Boolean(busy) || locked}><Save size={15} />保存设置</button>
         <h3>数据锁</h3>
         <p>锁定后禁止修改 JSON、设置、恢复历史和删除；读取保持可用。解锁单独生效，不改变模型锁。</p>

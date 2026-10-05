@@ -7,6 +7,7 @@ import { requireAccess } from '../middleware/auth';
 import { managementSession } from '../lib/system-http';
 import { rebuildSearchIndex, searchIndexStatus, searchResources } from '../storage/search';
 import { checkResourceAccess, type ApiKey } from '../storage/keys';
+import { searchJsonContent } from '../storage/content-search';
 const app = new Hono<{ Bindings: Env; Variables: { user?: SessionUser; apiKey?: ApiKey } }>();
 app.use('*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
 app.onError((error, c) => {
@@ -16,6 +17,25 @@ app.onError((error, c) => {
 });
 app.get('/index', managementSession, async c => c.json(await searchIndexStatus(c.env)));
 app.post('/rebuild', managementSession, async c => c.json(await rebuildSearchIndex(c.env)));
+
+app.get('/content', managementSession, async (c) => {
+  const q = c.req.query('q')?.trim();
+  if (!q) return c.json({ items: [], total: 0 });
+
+  const rawMode = c.req.query('mode')?.trim();
+  const mode = rawMode === 'keys' ? 'keys' : 'all';
+
+  try {
+    const results = await searchJsonContent(c.env, q, mode);
+    return c.json(results);
+  } catch (err: any) {
+    if (err.message === 'content_search_limit_exceeded') {
+      return c.json({ error: 'content_search_limit_exceeded' }, 503);
+    }
+    throw err;
+  }
+});
+
 app.get('/', async (c, next) => {
   // Invalid filters still require authentication and cannot narrow permissions.
   const type = c.req.query('type');
