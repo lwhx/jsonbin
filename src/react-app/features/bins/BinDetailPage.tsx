@@ -398,6 +398,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         </div>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
         <label>可见性<select aria-label="可见性" value={metadata.visibility} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, visibility: event.target.value as "private" | "public" })}><option value="private">私有</option><option value="public">公开</option></select></label>
+        <p>{metadata.visibility === "public" ? "公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。" : "私有数据仓的所有读取都需要 Session 或具有所需 Scope 的 API 密钥。"}</p>
         <label>集合<select aria-label="集合" value={metadata.collectionId ?? ""} disabled={Boolean(busy) || locked || collections.isPending || collections.isError}
           onChange={event => setMetadata({ ...metadata, collectionId: event.target.value || null })}>
           <option value="">未分组</option>
