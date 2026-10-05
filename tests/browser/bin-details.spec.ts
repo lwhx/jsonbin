@@ -841,3 +841,47 @@ test("表单在 720px 和真实 200% 缩放下操作控件不被裁切", async (
     return panel.scrollWidth <= panel.clientWidth;
   })).toBe(true);
 });
+
+test('取消浏览器返回时恢复原历史位置且不跳过列表页', async ({ page }) => {
+  const record = await create(page);
+  await page.goto('/#/bins');
+  await page.getByRole('button', { name: `打开数据仓 ${record.meta.name}` }).click();
+  await page.getByRole('tab', { name: '设置', exact: true }).click();
+  await page.getByLabel('名称', { exact: true }).fill('修改草稿');
+
+  await page.goBack();
+  const dialog = page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '继续编辑', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(record.meta.id));
+
+  await page.goBack();
+  await dialog.getByRole('button', { name: '放弃并离开', exact: true }).click();
+  await expect(page).toHaveURL(/#\/bins$/);
+});
+
+test('详情页标签支持 WAI-ARIA 键盘切换和无障碍关联', async ({ page }) => {
+  const record = await create(page);
+  await page.goto(`/#/bins/${record.meta.id}`);
+  const tabList = page.getByRole('tablist', { name: '数据仓详情' });
+  const formTab = tabList.getByRole('tab', { name: '表单编辑', exact: true });
+  const editorTab = tabList.getByRole('tab', { name: '编辑器', exact: true });
+
+  await formTab.focus();
+  await expect(formTab).toHaveAttribute('aria-selected', 'true');
+  await expect(formTab).toHaveAttribute('tabindex', '0');
+  await expect(editorTab).toHaveAttribute('tabindex', '-1');
+
+  await page.keyboard.press('ArrowRight');
+  await expect(editorTab).toHaveAttribute('aria-selected', 'true');
+  await expect(editorTab).toBeFocused();
+
+  await page.keyboard.press('End');
+  const settingsTab = tabList.getByRole('tab', { name: '设置', exact: true });
+  await expect(settingsTab).toHaveAttribute('aria-selected', 'true');
+  await expect(settingsTab).toBeFocused();
+
+  await page.keyboard.press('Home');
+  await expect(formTab).toHaveAttribute('aria-selected', 'true');
+  await expect(formTab).toBeFocused();
+});

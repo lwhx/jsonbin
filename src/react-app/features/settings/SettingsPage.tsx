@@ -12,9 +12,9 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean
   const client = useQueryClient();
   const info = useQuery({ queryKey: ['system-info'], queryFn: ({ signal }) => systemApi.getInfo(signal), retry: false });
   const settings = useQuery({ queryKey: ['system-settings'], queryFn: ({ signal }) => systemApi.getSettings(signal), retry: false });
-  const [dirty, setDirty] = useState(false), [importBusy, setImportBusy] = useState(false), [exportBusy, setExportBusy] = useState(false);
+  const [dirty, setDirty] = useState(false), [importDirty, setImportDirty] = useState(false), [importBusy, setImportBusy] = useState(false), [exportBusy, setExportBusy] = useState(false);
   const [indexBusy, setIndexBusy] = useState(false);
-  const guarded = dirty || importBusy || exportBusy || indexBusy;
+  const guarded = dirty || importDirty || importBusy || exportBusy || indexBusy;
   useEffect(() => { onDirtyChange(guarded); }, [guarded, onDirtyChange]);
   useEffect(() => { if (!guarded) return; const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; }; window.addEventListener('beforeunload', prevent); return () => window.removeEventListener('beforeunload', prevent); }, [guarded]);
   const saved = useCallback((r: SettingsRecord) => { client.setQueryData(['system-settings'], r); void client.invalidateQueries({ queryKey: ['activity'] }); }, [client]);
@@ -29,6 +29,6 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean
     <SearchIndexPanel onBusyChange={setIndexBusy} />
     {settings.isPending && <p role="status">正在读取默认设置…</p>}{settings.isError && <p className="detail-error" role="alert">{settings.error.message}<button className="secondary-button" onClick={() => void settings.refetch()}>重试默认设置</button></p>}
     {settings.data && <DefaultsForm record={settings.data} onSaved={saved} onDirtyChange={setDirty} />}
-    <ImportPanel client={systemApi} onBusyChange={setImportBusy} onCompleted={completed} /><ExportPanel client={systemApi} onBusyChange={setExportBusy} />
+    <ImportPanel client={systemApi} onDirtyChange={setImportDirty} onBusyChange={setImportBusy} onCompleted={completed} /><ExportPanel client={systemApi} onBusyChange={setExportBusy} />
   </section>;
 }

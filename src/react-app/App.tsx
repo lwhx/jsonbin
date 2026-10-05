@@ -27,7 +27,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { BinDetailPage } from "./features/bins/BinDetailPage";
 import { binHash, binIdFromHash } from "./features/bins/navigation";
 import { CollectionsPage } from "./features/collections/CollectionsPage";
@@ -183,6 +183,10 @@ function App() {
     return <BootScreen />;
   }
 
+  if (auth.isError) {
+    return <AuthErrorScreen message="无法检查登录状态。" retryLabel="重试登录状态" onRetry={() => void auth.refetch()} />;
+  }
+
   if (!auth.data) {
     return (
       <LoginScreen
@@ -213,6 +217,28 @@ function BootScreen() {
   );
 }
 
+function AuthErrorScreen({
+  message,
+  retryLabel,
+  onRetry,
+}: {
+  message: string;
+  retryLabel: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="boot-screen" role="alert">
+      <div className="brand-mark large">
+        <Code2 size={24} />
+      </div>
+      <span>{message}</span>
+      <button className="secondary-button" type="button" onClick={onRetry}>
+        {retryLabel}
+      </button>
+    </div>
+  );
+}
+
 function LoginScreen({
   dark,
   onToggleTheme,
@@ -234,7 +260,22 @@ function LoginScreen({
       if (!response.ok) throw new Error("无法加载登录配置");
       return response.json();
     },
+    retry: false,
   });
+
+  if (config.isLoading) {
+    return <BootScreen />;
+  }
+
+  if (config.isError) {
+    return (
+      <AuthErrorScreen
+        message="无法加载登录配置。"
+        retryLabel="重试登录配置"
+        onRetry={() => void config.refetch()}
+      />
+    );
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -443,16 +484,8 @@ function AuthenticatedApp({
       credentials: "include",
     });
     queryClient.setQueryData(["auth-me"], null);
-    queryClient.removeQueries({ queryKey: ["bins"] });
-    queryClient.removeQueries({ queryKey: ["bin"] });
-    queryClient.removeQueries({ queryKey: ["collections"] });
-    queryClient.removeQueries({ queryKey: ["collection"] });
-    queryClient.removeQueries({ queryKey: ["collection-bins"] });
-    queryClient.removeQueries({ queryKey: ["schemas"] });
-    queryClient.removeQueries({ queryKey: ["schema"] });
-    queryClient.removeQueries({ queryKey: ["keys"] });
-    queryClient.removeQueries({ queryKey: ["trash-bins"] });
-    for (const key of ["system-info", "system-settings", "activity", "search", "search-index"]) { await queryClient.cancelQueries({ queryKey: [key] }); queryClient.removeQueries({ queryKey: [key] }); }
+    await queryClient.cancelQueries();
+    queryClient.clear();
   }
 
   const totalStorage =
@@ -887,6 +920,18 @@ function CreateBinDialog({
 }`);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    const cancel = () => {
+      mounted.current = false;
+    };
+    window.addEventListener("jsonbin:logout", cancel);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener("jsonbin:logout", cancel);
+    };
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -929,11 +974,15 @@ function CreateBinDialog({
       }
 
       const created = await response.json() as { meta: BinMeta };
+      if (!mounted.current) return;
       onCreated(created.meta.id);
     } catch {
+      if (!mounted.current) return;
       setError("无法连接 Worker API。");
     } finally {
-      setSaving(false);
+      if (mounted.current) {
+        setSaving(false);
+      }
     }
   }
 
@@ -944,7 +993,7 @@ function CreateBinDialog({
             <span className="eyebrow">新建文档</span>
             <h2 id="create-bin-title">新建数据仓</h2>
           </div>
-          <button className="icon-button" type="button" onClick={onClose}>
+          <button className="icon-button" type="button" onClick={onClose} disabled={saving} aria-label="关闭新建数据仓弹窗">
             <X size={17} />
           </button>
         </div>
@@ -1013,7 +1062,7 @@ function CreateBinDialog({
           {error && <div className="login-error" role="alert">{error}<SchemaIssues issues={issues} /></div>}
 
           <div className="dialog-actions">
-            <button className="secondary-button" type="button" onClick={onClose}>
+            <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>
               取消
             </button>
             <button className="primary-button" type="submit" disabled={saving}>

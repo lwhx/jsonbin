@@ -250,11 +250,27 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         })) client.invalidateQueries({ queryKey: ["auth-me"] });
       }}>重新登录</button>}
     </div>}
-    <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
-      {(["表单编辑", "编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
-        <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => void requestTabChange(item)}>{item}</button>)}
+    <div className="detail-tabs" role="tablist" aria-label="数据仓详情" onKeyDown={event => {
+      const tabs = ['表单编辑', '编辑器', '树形视图', '历史版本', 'API', '设置'] as const;
+      const index = tabs.indexOf(tab);
+      let nextIndex = index;
+      if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      const nextTab = tabs[nextIndex];
+      void requestTabChange(nextTab);
+      const button = event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]')[nextIndex];
+      button?.focus();
+    }}>
+      {(['表单编辑', '编辑器', '树形视图', '历史版本', 'API', '设置'] as const).map(item =>
+        <button key={item} id={`detail-tab-${item}`} type="button" role="tab" aria-selected={tab === item}
+          tabIndex={tab === item ? 0 : -1} aria-controls={`detail-panel-${item}`}
+          onClick={() => void requestTabChange(item)}>{item}</button>)}
     </div>
-    <div className="panel detail-panel" role="tabpanel" aria-label={tab}>
+    <div id={`detail-panel-${tab}`} className="panel detail-panel" role="tabpanel" aria-labelledby={`detail-tab-${tab}`}>
       {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
         <div className="editor-toolbar"><span>键值表单</span>
           <button type="button" className="primary-button"

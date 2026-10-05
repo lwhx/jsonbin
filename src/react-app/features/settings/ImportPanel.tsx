@@ -8,12 +8,14 @@ import { parseStandardFiles, readBackupFile, type ImportPreviewItem } from './fi
 import { runRestore } from './transfer';
 import { SystemApiError, type SystemClient } from './api';
 const statusLabels = { created: '创建成功', unchanged: '已恢复，无需修改', skipped: 'ID 冲突，已跳过', dependency_skipped: '关联冲突，已跳过', failed: '失败' };
-export function ImportPanel({ client, onBusyChange, onCompleted }: { client: SystemClient; onBusyChange: (busy: boolean) => void; onCompleted: () => void }) {
+export function ImportPanel({ client, onDirtyChange, onBusyChange, onCompleted }: { client: SystemClient; onDirtyChange?: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void; onCompleted: () => void }) {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ['system-settings'], queryFn: ({ signal }) => client.getSettings(signal), retry: false });
   const [mode, setMode] = useState('json'), [items, setItems] = useState<ImportPreviewItem[]>([]), [backup, setBackup] = useState<BackupPackage | null>(null);
   const [results, setResults] = useState<(RestoreResult | ImportResult)[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [attempted, setAttempted] = useState(false);
   const mounted = useRef(false), generation = useRef(0), controller = useRef<AbortController | null>(null), running = useRef(false), fileInput = useRef<HTMLInputElement>(null);
+  const dirty = (items.length > 0 && !attempted) || (backup !== null && results.length === 0);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { mounted.current = true; const cancel = reset; window.addEventListener('jsonbin:logout', cancel); return () => { mounted.current = false; generation.current++; controller.current?.abort(); window.removeEventListener('jsonbin:logout', cancel); }; }, []);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   function message(e: unknown) { return e instanceof SystemApiError ? e.message : e instanceof SystemError && e.status === 413 ? '文件或批次超过大小、资源或对象数量上限。' : '文件格式、编码或关联不符合要求，请检查后重新选择。'; }
