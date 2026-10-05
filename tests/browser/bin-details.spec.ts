@@ -706,7 +706,7 @@ test("批量添加保留原始文本、失败不部分提交并恢复焦点", as
 });
 
 test("表单保留特殊键并阻止独立回车字符串的有损编辑", async ({ page }) => {
-  const carriageValue = `a${String.fromCharCode(13)}${String.fromCharCode(10)}b${String.fromCharCode(13)}c`;
+  const carriageValue = `a${String.fromCharCode(13)}b${String.fromCharCode(13)}c`;
   const value = Object.fromEntries([
     ["__proto__", "safe"], ["constructor", 1], ["prototype", false], ["", "empty"], ["carriage", carriageValue],
   ]);
@@ -719,12 +719,33 @@ test("表单保留特殊键并阻止独立回车字符串的有损编辑", async
   await expect(panel.getByLabel("字段 4 键", { exact: true })).toHaveValue("");
   const carriage = panel.getByLabel("carriage 文本值", { exact: true });
   await expect(carriage).toHaveAttribute("tabindex", "0");
-  await expect(panel).toContainText("包含独立回车符");
+  await expect(panel).toContainText("包含回车符");
   await page.getByRole("tab", { name: "编辑器", exact: true }).click();
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
   expect(await carriage.evaluate(element => element.textContent)).toBe(carriageValue);
   const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
   expect(saved.value).toEqual(value);
+});
+
+test("表单阻止仅含 CRLF 的字符串被浏览器有损编辑", async ({ page }) => {
+  const crlfValue = `first${String.fromCharCode(13, 10)}second`;
+  const response = await page.request.post("/api/v1/bins", {
+    data: { name: "CRLF 无损表单", value: { crlf: crlfValue } },
+  });
+  const record = await response.json();
+  await page.goto(`/#/bins/${record.meta.id}`);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  const crlf = panel.getByLabel("crlf 文本值", { exact: true });
+
+  await crlf.press("End");
+  await crlf.pressSequentially("!");
+
+  await expect(crlf).toHaveAttribute("tabindex", "0");
+  await expect(panel).toContainText("请使用代码编辑器修改");
+  expect(await crlf.evaluate(element => element.textContent)).toBe(crlfValue);
+  const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(saved.value).toEqual({ crlf: crlfValue });
 });
 
 test("表单拒绝会改变值的超安全数字和负零", async ({ page }) => {

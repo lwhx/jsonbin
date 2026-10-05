@@ -37,13 +37,6 @@ function childPath(parent: string, child: JsonNode, index: number, array: boolea
   return child.key ? `${parent} ${child.key}` : `${parent} 字段 ${index + 1}`;
 }
 
-function hasStandaloneCarriageReturn(value: string) {
-  for (let index = 0; index < value.length; index++) {
-    if (value.charCodeAt(index) === 13 && value.charCodeAt(index + 1) !== 10) return true;
-  }
-  return false;
-}
-
 export function JsonValueField({
   node,
   depth,
@@ -132,8 +125,8 @@ export function JsonValueField({
         </select>}
     </div>
     <div className="json-form-value">
-      {node.type === "string" && (hasStandaloneCarriageReturn(node.raw)
-        ? <div className="json-form-carriage"><pre className="json-form-static" aria-label={`${pathLabel} 文本值`} tabIndex={0}>{node.raw}</pre><span>包含独立回车符；为避免浏览器改写，请使用代码编辑器修改。</span></div>
+      {node.type === "string" && (node.raw.includes("\r")
+        ? <div className="json-form-carriage"><pre className="json-form-static" aria-label={`${pathLabel} 文本值`} tabIndex={0}>{node.raw}</pre><span>包含回车符；为避免浏览器改写，请使用代码编辑器修改。</span></div>
         : node.raw.includes("\n")
         ? <textarea className="json-form-multiline" aria-label={`${pathLabel} 文本值`} value={node.raw} readOnly={readOnly || disabled}
             onChange={event => onChange({ ...node, raw: event.target.value })} />
