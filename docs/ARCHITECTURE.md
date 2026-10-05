@@ -214,16 +214,14 @@ Primary sections:
 
 The implementation order and acceptance criteria are maintained in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-The Bin detail view will eventually contain:
+The Bin detail view contains:
 
-- Editor
-- Tree
-- History
-- Diff
-- API
-- Settings
-
-The editor experience will use Monaco and the history comparison will use Monaco Diff Editor.
+- Form Editor (dual-mode structured editing for root objects, recursive arrays/objects, draft protection)
+- Editor (bundled Monaco JSON editor with format and draft synchronization)
+- Tree (hierarchical JSON tree navigation with full node copy)
+- History (version list, comparison with Monaco Diff Editor, append-only restoration)
+- API (live endpoints, curl/JS/Python snippets with sensitive credential protection)
+- Settings (TTL, name, description, visibility, collections and pinned schema management)
 
 ## Security principles
 
