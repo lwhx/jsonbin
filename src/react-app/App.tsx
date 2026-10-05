@@ -408,7 +408,16 @@ function AuthenticatedApp({
   const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
   useEffect(() => {
-    const shortcut = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); window.location.hash = '/search'; } };
+    const shortcut = (event: KeyboardEvent) => {
+      const isInput = event.target instanceof HTMLElement && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable);
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        window.location.hash = '/search';
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n' && !isInput) {
+        event.preventDefault();
+        setCreateOpen(true);
+      }
+    };
     window.addEventListener('keydown', shortcut); return () => window.removeEventListener('keydown', shortcut);
   }, []);
 

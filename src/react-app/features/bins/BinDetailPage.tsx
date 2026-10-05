@@ -48,6 +48,11 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [busy, setBusy] = useState<"json" | "metadata" | "delete" | "reload" | "restore" | "lock" | "export" | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 3000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [formSession, setFormSession] = useState<JsonFormState | null>(null);
   const [formRevision, setFormRevision] = useState(0);
@@ -64,6 +69,21 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     if (!dirty) setMetadata(metadataOf(query.data));
   }, [query.data]);
   useEffect(() => { onDirtyChange(dirty || Boolean(busy)); }, [dirty, busy, onDirtyChange]);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isLocked = Boolean(draft?.record.meta.locked);
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (tab === "设置") {
+          if (metadataDirty && !busy && !isLocked) void saveSettings();
+        } else if (tab === "表单编辑" || tab === "编辑器") {
+          if (draft && isDirty(draft) && parsed?.valid && !busy && !isLocked) void saveJson();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [tab, metadataDirty, busy, draft, parsed, saveSettings, saveJson]);
   useEffect(() => {
     if (!dirty) return;
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -234,8 +254,11 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </header>
     <div className="detail-info"><span>v{record.meta.currentVersion}</span><span>{record.meta.size} B</span>
       <span>更新于 {new Date(record.meta.updatedAt).toLocaleString("zh-CN")}</span><ExpiryLabel expiresAt={record.meta.expiresAt} /></div>
-    <div className="detail-id"><code>{id}</code><button type="button" className="secondary-button" onClick={() => copy(id)}><Copy size={14} />复制 Bin ID</button>
-      <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button></div>
+    <div className="detail-id"><code>{id}</code>
+      <button type="button" className="secondary-button" onClick={() => copy(id)}><Copy size={14} />复制 Bin ID</button>
+      <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button>
+      <button type="button" className="secondary-button" onClick={() => copy(draft.text)} title="复制当前 JSON 内容"><Copy size={14} />复制 JSON</button>
+    </div>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}
       {error instanceof BinApiError && <SchemaIssues issues={error.issues} />}
@@ -265,11 +288,18 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       const button = event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]')[nextIndex];
       button?.focus();
     }}>
-      {(['表单编辑', '编辑器', '树形视图', '历史版本', 'API', '设置'] as const).map(item =>
-        <button key={item} id={`detail-tab-${item}`} type="button" role="tab" aria-selected={tab === item}
-          tabIndex={tab === item ? 0 : -1} aria-controls={`detail-panel-${item}`}
-          onFocus={() => { if (tab !== item) void requestTabChange(item); }}
-          onClick={() => void requestTabChange(item)}>{item}</button>)}
+      {(['表单编辑', '编辑器', '树形视图', '历史版本', 'API', '设置'] as const).map(item => {
+        const hasDirty = (item === '设置' && metadataDirty) || ((item === '表单编辑' || item === '编辑器') && isDirty(draft));
+        return (
+          <button key={item} id={`detail-tab-${item}`} type="button" role="tab" aria-selected={tab === item}
+            tabIndex={tab === item ? 0 : -1} aria-controls={`detail-panel-${item}`}
+            onFocus={() => { if (tab !== item) void requestTabChange(item); }}
+            onClick={() => void requestTabChange(item)}>
+            {item}
+            {hasDirty && <span className="tab-dirty-indicator" title="此标签下有未保存内容" />}
+          </button>
+        );
+      })}
     </div>
     <div id={`detail-panel-${tab}`} className="panel detail-panel" role="tabpanel" aria-label={tab} aria-labelledby={`detail-tab-${tab}`}>
       {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
