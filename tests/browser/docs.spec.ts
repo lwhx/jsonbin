@@ -9,9 +9,10 @@ test('文档导航刷新三语言复制与移动端深色',async({page})=>{
   await page.context().grantPermissions(['clipboard-read','clipboard-write']);
   for(const language of ['curl','javascript','python']){
     await page.getByLabel('示例语言',{exact:true}).selectOption(language);
-    const block=page.locator('.code-example').first();const code=await block.locator('code').innerText();
+        const block=page.locator('.code-example').first();const code=await block.locator('code').innerText();
     await block.getByRole('button',{name:'复制代码',exact:true}).click();await expect(block.getByRole('status')).toHaveText('已复制。');
-    expect(await page.evaluate(()=>navigator.clipboard.readText())).toBe(code);
+    const copied = await page.evaluate(()=>navigator.clipboard.readText());
+    expect(copied.split(/\r?\n/).join('\n')).toBe(code.split(/\r?\n/).join('\n'));
   }
   await page.getByRole('navigation',{name:'文档目录'}).getByRole('button',{name:'错误码与恢复',exact:true}).click();await expect(page).toHaveURL(/#\/docs$/);
   await page.reload();await expect(page.locator('.docs-page')).toBeVisible();await expect(page.getByLabel('示例语言',{exact:true})).toHaveValue('curl');

@@ -418,7 +418,7 @@ function AuthenticatedApp({
       const next = window.location.hash;
       if (next === route) return;
       if (detailDirty) {
-        window.history.replaceState(null, "", route || window.location.pathname);
+        window.history.pushState(null, "", route || window.location.pathname);
         const leave = await confirm({
           title: "放弃未保存的修改？",
           message: "当前页面还有未保存内容，离开后这些修改将丢失。",
@@ -920,15 +920,14 @@ function CreateBinDialog({
 }`);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const mounted = useRef(true);
+  const loggedOut = useRef(false);
 
   useEffect(() => {
     const cancel = () => {
-      mounted.current = false;
+      loggedOut.current = true;
     };
     window.addEventListener("jsonbin:logout", cancel);
     return () => {
-      mounted.current = false;
       window.removeEventListener("jsonbin:logout", cancel);
     };
   }, []);
@@ -974,13 +973,13 @@ function CreateBinDialog({
       }
 
       const created = await response.json() as { meta: BinMeta };
-      if (!mounted.current) return;
+      if (loggedOut.current) return;
       onCreated(created.meta.id);
     } catch {
-      if (!mounted.current) return;
+      if (loggedOut.current) return;
       setError("无法连接 Worker API。");
     } finally {
-      if (mounted.current) {
+      if (!loggedOut.current) {
         setSaving(false);
       }
     }

@@ -268,9 +268,10 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       {(['表单编辑', '编辑器', '树形视图', '历史版本', 'API', '设置'] as const).map(item =>
         <button key={item} id={`detail-tab-${item}`} type="button" role="tab" aria-selected={tab === item}
           tabIndex={tab === item ? 0 : -1} aria-controls={`detail-panel-${item}`}
+          onFocus={() => { if (tab !== item) void requestTabChange(item); }}
           onClick={() => void requestTabChange(item)}>{item}</button>)}
     </div>
-    <div id={`detail-panel-${tab}`} className="panel detail-panel" role="tabpanel" aria-labelledby={`detail-tab-${tab}`}>
+    <div id={`detail-panel-${tab}`} className="panel detail-panel" role="tabpanel" aria-label={tab} aria-labelledby={`detail-tab-${tab}`}>
       {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
         <div className="editor-toolbar"><span>键值表单</span>
           <button type="button" className="primary-button"

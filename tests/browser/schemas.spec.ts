@@ -60,6 +60,7 @@ test('Bin 设置校验已保存内容、锁定绑定、单独解锁并主动升�
   await expect(page.getByLabel('数据模型', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('使用模型最新修订', { exact: true })).toBeDisabled();
   await page.getByRole('tab', { name: '编辑器', exact: true }).click();
+  await page.waitForTimeout(500);
   await edit(page, '{"count":"bad"}');
   await page.getByRole('button', { name: '保存 JSON', exact: true }).click();
   await expect(page.locator('.detail-error[role=alert]')).toContainText('#/count');

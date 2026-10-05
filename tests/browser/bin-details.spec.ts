@@ -845,7 +845,7 @@ test("表单在 720px 和真实 200% 缩放下操作控件不被裁切", async (
 test('取消浏览器返回时恢复原历史位置且不跳过列表页', async ({ page }) => {
   const record = await create(page);
   await page.goto('/#/bins');
-  await page.getByRole('button', { name: `打开数据仓 ${record.meta.name}` }).click();
+  await page.getByRole('button', { name: `打开数据仓 ${record.meta.name}` }).filter({ hasText: record.meta.id }).click();
   await page.getByRole('tab', { name: '设置', exact: true }).click();
   await page.getByLabel('名称', { exact: true }).fill('修改草稿');
 
