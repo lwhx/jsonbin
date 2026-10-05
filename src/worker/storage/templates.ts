@@ -1,7 +1,9 @@
 import { requireDataBucket } from "./r2";
 import { getJson, putJson } from "./r2";
+import { isImportMarker } from "../../shared/backup.ts";
 import { SchemaError, assertSchemaValue } from "../validation/schema";
-import { getSchema } from "./schemas";
+import { getSchema, assertBoundSchema } from "./schemas";
+import { normalizeEtag } from "./bin-state";
 
 export type TemplateMeta = {
   id: string;
@@ -13,6 +15,7 @@ export type TemplateMeta = {
   schemaRevision: number | null;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
 };
 
 export type TemplateRecord = {
@@ -35,6 +38,9 @@ export async function getTemplate(env: Env, id: string): Promise<TemplateRecord 
   if (!metaObj) return null;
 
   const meta = (await metaObj.json()) as TemplateMeta;
+  // A tombstoned template is being removed or is a pending restore import marker.
+  if (!meta || meta.deletedAt || isImportMarker(meta)) return null;
+
   const valueObj = await bucket.get(templateVersionKey(id, meta.currentVersion));
   const value = valueObj ? await valueObj.json() : null;
 
@@ -55,7 +61,7 @@ export async function listTemplates(env: Env): Promise<TemplateMeta[]> {
     const metaKeys = page.objects.map(o => o.key).filter(k => k.endsWith("/meta.json"));
     for (const k of metaKeys) {
       const stored = await getJson<TemplateMeta>(bucket, k);
-      if (stored?.value) list.push(stored.value);
+      if (stored?.value && !isImportMarker(stored.value) && !stored.value.deletedAt) list.push(stored.value);
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -107,6 +113,29 @@ export async function createTemplate(
   };
 }
 
+/** Reserve the next immutable version slot; concurrent writers never overwrite existing history. */
+async function appendTemplateVersion(bucket: R2Bucket, id: string, currentVersion: number, value: unknown) {
+  let nextVersion = currentVersion + 1;
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: `templates/${id}/versions/`, cursor });
+    for (const object of page.objects) {
+      const number = Number(object.key.split("/").pop()?.replace(/\.json$/, ""));
+      if (Number.isSafeInteger(number)) nextVersion = Math.max(nextVersion, number + 1);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  // Never overwrite an existing version, including an orphan from a failed CAS.
+  for (let attempt = 0; attempt < 8; attempt++, nextVersion++) {
+    if (!Number.isSafeInteger(nextVersion) || nextVersion < 1) throw new Error("version_limit_reached");
+    const written = await putJson(bucket, templateVersionKey(id, nextVersion), value, {
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (written) return nextVersion;
+  }
+  throw new Error("etag_conflict");
+}
+
 export async function updateTemplate(
   env: Env,
   id: string,
@@ -152,8 +181,7 @@ export async function updateTemplate(
 
   let nextVersion = current.meta.currentVersion;
   if (input.value !== undefined) {
-    nextVersion += 1;
-    await putJson(bucket, templateVersionKey(id, nextVersion), nextValue);
+    nextVersion = await appendTemplateVersion(bucket, id, current.meta.currentVersion, nextValue);
   }
 
   const meta: TemplateMeta = {
@@ -167,11 +195,16 @@ export async function updateTemplate(
     updatedAt: now,
   };
 
-  const metaObject = await putJson(bucket, templateMetaKey(id), meta);
+  // Commit the meta pointer against the snapshot that was validated above; the
+  // possibly-orphaned version file left by a lost race is harmless.
+  const metaObject = await putJson(bucket, templateMetaKey(id), meta, {
+    onlyIf: { etagMatches: normalizeEtag(current.etag) },
+  });
+  if (!metaObject) throw new Error("etag_conflict");
   return {
     meta,
     value: nextValue,
-    etag: metaObject.etag,
+    etag: metaObject.httpEtag,
   };
 }
 
@@ -183,8 +216,15 @@ export async function deleteTemplate(env: Env, id: string, ifMatch?: string): Pr
   }
 
   const bucket = requireDataBucket(env);
+  // CAS tombstone first: a concurrent update that changes meta.json makes this
+  // claim fail, so deletion can never destroy a freshly committed new version.
+  const tombstoned = await putJson(bucket, templateMetaKey(id), {
+    ...current.meta, deletedAt: new Date().toISOString(),
+  }, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
+  if (!tombstoned) throw new Error("etag_conflict");
+
   for (let v = 1; v <= current.meta.currentVersion; v++) {
-    await bucket.delete(templateVersionKey(id, v));
+    await bucket.delete(templateVersionKey(id, v)).catch(() => {});
   }
   await bucket.delete(templateMetaKey(id));
   return { ok: true };

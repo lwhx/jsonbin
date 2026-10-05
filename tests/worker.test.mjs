@@ -1685,3 +1685,47 @@ test('audit: two concurrent publishes with the same ETag leave a single winner',
   assert.deepEqual([first.status, second.status].sort(), [200, 412]);
   assert.equal((await (await request(path)).json()).meta.publishedVersion, 1);
 });
+
+test('audit: concurrent template updates never overwrite immutable version history', async () => {
+  const created = await request('/templates', { method: 'POST', value: { name: '并发模板', value: { rev: 1 } } });
+  assert.equal(created.status, 201);
+  const tpl = await created.json();
+
+  const [first, second] = await Promise.all([
+    request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: tpl.etag, value: { value: { rev: 'A' } } }),
+    request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: tpl.etag, value: { value: { rev: 'B' } } }),
+  ]);
+  assert.deepEqual([first.status, second.status].sort(), [200, 412]);
+  const winnerValue = first.status === 200 ? { rev: 'A' } : { rev: 'B' };
+
+  // History is immutable: v1 keeps the original value, v2 holds exactly the winner's value.
+  assert.deepEqual(await (await bucket.get(`templates/${tpl.meta.id}/versions/000001.json`)).json(), { rev: 1 });
+  assert.deepEqual(await (await bucket.get(`templates/${tpl.meta.id}/versions/000002.json`)).json(), winnerValue);
+
+  const current = await (await request(`/templates/${tpl.meta.id}`)).json();
+  assert.equal(current.meta.currentVersion, 2);
+  assert.deepEqual(current.value, winnerValue);
+});
+
+test('audit: racing template update and delete leave exactly one legitimate winner', async () => {
+  const created = await request('/templates', { method: 'POST', value: { name: '竞争模板', value: { v: 1 } } });
+  const tpl = await created.json();
+
+  const [updated, deleted] = await Promise.all([
+    request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: tpl.etag, value: { value: { v: 2 } } }),
+    request(`/templates/${tpl.meta.id}`, { method: 'DELETE', etag: tpl.etag }),
+  ]);
+  // The loser either sees the conflict (412) or the template already gone (404).
+  assert.equal(updated.status === 200, deleted.status === 412);
+  assert.ok([200, 404, 412].includes(updated.status) && [200, 404, 412].includes(deleted.status));
+
+  if (updated.status === 200) {
+    // Update won: the freshly committed version must survive.
+    const current = await (await request(`/templates/${tpl.meta.id}`)).json();
+    assert.equal(current.meta.currentVersion, 2);
+    assert.deepEqual(current.value, { v: 2 });
+    assert.ok(await bucket.get(`templates/${tpl.meta.id}/versions/000002.json`));
+  } else {
+    assert.equal((await request(`/templates/${tpl.meta.id}`)).status, 404);
+  }
+});
