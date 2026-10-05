@@ -42,5 +42,8 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "wrangler": "^4.129.1"
+  },
+  "bin": {
+    "jsonbin": "cli/jsonbin.mjs"
   }
 }

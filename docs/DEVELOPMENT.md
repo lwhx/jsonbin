@@ -265,6 +265,25 @@ If-Match: "xxxx"
 
 所有设置 `ETag` 响应头的 GET 读路径（Bin 详情/值/发布版、`/b/:slug` 系列、Collection/Schema/Template 详情、历史版本）支持 RFC 9110 条件请求：携带与当前 ETag 匹配的 `If-None-Match`（支持裸值、引号、`W/` 弱比较、逗号列表与 `*`）时返回空 body 的 `304 Not Modified`，并保留 `ETag` 与 `Cache-Control: no-store` 头。内容或元数据任何变化都会推进 ETag，轮询方因此只在真实变更时传输数据。认证语义不变：私有资源仍先通过鉴权。
 
+### CLI（cli/jsonbin.mjs）
+
+零依赖 Node CLI（仓库内 `cli/jsonbin.mjs`，Node 18+），面向 CI/脚本场景：
+
+~~~bash
+export JSONBIN_URL=https://your-instance
+export JSONBIN_TOKEN=jb_live_...
+
+jsonbin whoami                       # 验证实例与令牌
+jsonbin list [--limit N]             # 数据仓表格
+jsonbin pull <id|slug> [--published] [-o 文件]   # 拉取当前/已发布 JSON
+jsonbin push 配置.json [--target id|slug] [--name 名称] [--create] [--force]
+jsonbin diff 配置.json <id|slug>      # 深度对比本地与远端（差异退出码 1）
+jsonbin publish <id|slug> [--version N]
+~~~
+
+- push 无 --target 或带 --create 时创建新仓（名称默认取文件名去扩展）；带 --target 时先解析当前 ETag 再条件 PUT，412 时默认退出码 1，--force 会重取 ETag 重试一次
+- 目标参数自动识别 UUID/slug；退出码：0 成功、1 并发冲突或 diff 有差异、2 用法/网络/校验错误
+
 ### API 限流
 
 基于一次性 CACHE KV 的固定 60 秒窗口计数（可重建的派生数据，允许最终一致下的少量少计）：
