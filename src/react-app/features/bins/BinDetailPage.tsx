@@ -296,7 +296,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
             onFocus={() => { if (tab !== item) void requestTabChange(item); }}
             onClick={() => void requestTabChange(item)}>
             {item}
-            {hasDirty && <span className="tab-dirty-indicator" title="此标签下有未保存内容" />}
+            {hasDirty && <span className="tab-dirty-indicator" aria-hidden="true" />}
           </button>
         );
       })}
