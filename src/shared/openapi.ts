@@ -55,7 +55,7 @@ export function generateOpenApiSpec(): Record<string, unknown> {
     info: {
       title: "JSONBin API",
       version,
-      description: "Cloudflare Workers + R2 + KV 原生架构的生产级企业 JSON 存储与管理服务平台。所有带 ETag 的 GET 端点支持 If-None-Match 条件读取（未变化返回空 304）。",
+      description: "Cloudflare Workers + R2 + KV 原生架构的生产级企业 JSON 存储与管理服务平台。所有带 ETag 的 GET 端点支持 If-None-Match 条件读取（未变化返回空 304）。Bearer 请求按密钥限流（默认 120 次/分钟，可配置/关闭），匿名公开读取按 IP 限流 240 次/分钟，超限返回 429 rate_limit_exceeded + Retry-After。",
     },
     servers: [
       {
@@ -212,6 +212,7 @@ export function generateOpenApiSpec(): Record<string, unknown> {
               scopes: { type: "array", items: { type: "string", enum: ["bin:read", "bin:create", "bin:update", "bin:delete", "collection:read", "collection:write", "schema:read", "schema:write", "history:read"] } },
               expiresAt: { type: "string", format: "date-time", nullable: true },
               resourceAccess: { type: "object", description: "{mode:'all'} 或 {mode:'restricted',binIds,collectionIds}" },
+              rateLimitPerMinute: { type: "integer", minimum: 1, maximum: 10000, nullable: true, description: "Bearer 每分钟请求上限；null 不限，缺省 120" },
             },
           }),
           responses: created(),
@@ -236,9 +237,10 @@ export function generateOpenApiSpec(): Record<string, unknown> {
               scopes: { type: "array", items: { type: "string", enum: ["bin:read", "bin:create", "bin:update", "bin:delete", "collection:read", "collection:write", "schema:read", "schema:write", "history:read"] } },
               expiresAt: { type: "string", format: "date-time", nullable: true },
               resourceAccess: { type: "object", description: "{mode:'all'} 或 {mode:'restricted',binIds,collectionIds}" },
+              rateLimitPerMinute: { type: "integer", minimum: 1, maximum: 10000, nullable: true, description: "null 不限" },
             },
           }),
-          responses: { ...ok(), "404": { description: "未找到" }, "409": { description: "key_revoked / key_update_conflict" }, "422": { description: "校验失败" } },
+          responses: { ...ok(), "404": { description: "未找到" }, "409": { description: "key_revoked / key_update_conflict" }, "422": { description: "校验失败" }, "429": { description: "rate_limit_exceeded（密钥自身限流）" } },
         }),
       },
       "/bins": {
@@ -249,7 +251,7 @@ export function generateOpenApiSpec(): Record<string, unknown> {
             { name: "favorite", in: "query", schema: { type: "boolean" } },
             { name: "pinned", in: "query", schema: { type: "boolean" } },
           ],
-          responses: ok("数据仓列表"),
+          responses: { ...ok("数据仓列表"), "429": { description: "rate_limit_exceeded" } },
         }),
         post: op("新建数据仓", {
           scopes: "bin:create",

@@ -265,6 +265,15 @@ If-Match: "xxxx"
 
 所有设置 `ETag` 响应头的 GET 读路径（Bin 详情/值/发布版、`/b/:slug` 系列、Collection/Schema/Template 详情、历史版本）支持 RFC 9110 条件请求：携带与当前 ETag 匹配的 `If-None-Match`（支持裸值、引号、`W/` 弱比较、逗号列表与 `*`）时返回空 body 的 `304 Not Modified`，并保留 `ETag` 与 `Cache-Control: no-store` 头。内容或元数据任何变化都会推进 ETag，轮询方因此只在真实变更时传输数据。认证语义不变：私有资源仍先通过鉴权。
 
+### API 限流
+
+基于一次性 CACHE KV 的固定 60 秒窗口计数（可重建的派生数据，允许最终一致下的少量少计）：
+
+- Bearer 请求按密钥限流：默认 120 次/分钟，可通过 `rateLimitPerMinute`（1~10000，`null` 不限）在创建与 PATCH 时配置，修改即时生效
+- 匿名公开读取按 `CF-Connecting-IP` 限流 240 次/分钟；管理 Session 不限流（单管理员控制台）
+- 超限返回 `429 {error:"rate_limit_exceeded"}` + `Retry-After`（窗口剩余秒数）；429 未到达资源层，不计入密钥使用统计（与 401/403 同规则）
+- 未绑定 CACHE 的部署自动跳过限流
+
 ### Webhook 事件推送
 
 - `GET/POST /api/v1/webhooks`、`GET/PATCH/DELETE /api/v1/webhooks/:id`（Session-only，全部条件写要求 `If-Match`）、`GET /api/v1/webhooks/:id/deliveries`、`POST /api/v1/webhooks/:id/test`。

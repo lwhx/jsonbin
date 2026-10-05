@@ -20,6 +20,8 @@ export type ApiKey = {
   revokedAt: string | null;
   lastUsedAt: string | null;
   revealable: boolean;
+  /** Requests per minute for Bearer use; null opts out of limiting. */
+  rateLimitPerMinute?: number | null;
 };
 type StoredKey = Omit<ApiKey, "revealable"> & {
   digest: string;
@@ -33,6 +35,7 @@ export type KeyInput = {
   scopes: ApiScope[];
   expiresAt?: string | null;
   resourceAccess?: ResourceAccess;
+  rateLimitPerMinute?: number | null;
 };
 const keyPath = (id: string) => `keys/${id}/meta.json`;
 const normalize = (etag: string) => etag.replace(/^"(.*)"$/, "$1");
@@ -115,6 +118,7 @@ export async function createKey(env: Env, input: KeyInput) {
 
   const key: StoredKey = { id, name: input.name, prefix: `jb_live_${selector.slice(0, 8)}…`, scopes: [...input.scopes],
     resourceAccess,
+    ...(input.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: input.rateLimitPerMinute } : {}),
     usageTotal: 0,
     usageDaily: {},
     createdAt: new Date().toISOString(), expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
@@ -154,6 +158,7 @@ export type KeyUpdateInput = {
   scopes?: ApiScope[];
   expiresAt?: string | null;
   resourceAccess?: ResourceAccess;
+  rateLimitPerMinute?: number | null;
 };
 
 /** Edits scopes / resource scope / name / expiry on a live key. Revocation stays terminal. */
@@ -178,6 +183,7 @@ export async function updateKey(env: Env, id: string, input: KeyUpdateInput) {
     if (input.expiresAt !== undefined) {
       next.expiresAt = input.expiresAt ? new Date(input.expiresAt).toISOString() : null;
     }
+    if (input.rateLimitPerMinute !== undefined) next.rateLimitPerMinute = input.rateLimitPerMinute;
     if (await putJson(bucket, keyPath(id), next, { onlyIf: { etagMatches: normalize(stored.etag) } })) return publicKey(next);
   }
   throw new Error("key_update_conflict");

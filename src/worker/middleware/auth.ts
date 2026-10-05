@@ -1,5 +1,6 @@
 import "../activity";
 import { authorizeApiKey, readApiKey, useApiKey, type ApiKey, type ApiScope } from "../storage/keys";
+import { DEFAULT_KEY_RATE_LIMIT, checkRateLimit, rateLimitResponse } from "../storage/rate-limit";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
 import { allowedRequestOrigin } from "../auth/origin";
@@ -49,13 +50,20 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
       c.header("WWW-Authenticate", 'Bearer realm="JSONBin", error="invalid_token"');
       return c.json({ error: "unauthorized" }, 401);
     }
+    // Best-effort per-key rate limit; unlimited only via an explicit null override.
+    const limit = current.key.rateLimitPerMinute ?? DEFAULT_KEY_RATE_LIMIT;
+    if (limit !== null && c.env.CACHE) {
+      const verdict = await checkRateLimit(c.env.CACHE, `k:${current.key.id}`, limit).catch(() => null);
+      if (verdict && !verdict.allowed) return rateLimitResponse(verdict.retryAfterSeconds);
+    }
     c.set("apiKey", current.key);
     c.set("activityIdentity", { actor: { type: "api_key", id: current.key.id }, provider: "api_key" });
     c.set("apiKeyUsage", { token, initial: current });
     await next();
 
     const usage = c.get("apiKeyUsage");
-    if (usage && c.res.status !== 401 && c.res.status !== 403) {
+    // 401/403 were never authorized; 429 never reached the resource: P18 keeps both uncounted.
+    if (usage && c.res.status !== 401 && c.res.status !== 403 && c.res.status !== 429) {
       // The commit is CAS-guarded and swallows failures: a usage bookkeeping
       // error must never turn a completed response into a 500.
       await useApiKey(c.env, usage.token, usage.initial, required).catch(() => {});

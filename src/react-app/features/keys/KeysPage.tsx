@@ -6,13 +6,14 @@ import { useConfirm } from "../../components/ConfirmDialog";
 const defaultScopes: ApiScope[] = ["bin:read"];
 const displayTime = (value: string | null, fallback: string) => value ? new Date(value).toLocaleString("zh-CN") : fallback;
 const toLocalInput = (iso: string) => { const d = new Date(iso); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-type EditState = { id: string; name: string; scopes: ApiScope[]; resourceMode: "all" | "restricted"; binIdsText: string; collectionIdsText: string; expiration: string };
+type EditState = { id: string; name: string; scopes: ApiScope[]; resourceMode: "all" | "restricted"; binIdsText: string; collectionIdsText: string; expiration: string; rateLimitText: string };
 export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
   const client = useQueryClient(), mounted = useRef(false);
   const confirm = useConfirm();
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const query = useQuery({ queryKey: ["keys"], queryFn: ({ signal }) => listKeys(signal), retry: false });
   const [name, setName] = useState(""), [selected, setSelected] = useState<ApiScope[]>(defaultScopes), [expiration, setExpiration] = useState("");
+  const [rateLimitText, setRateLimitText] = useState("");
   const [resourceMode, setResourceMode] = useState<"all" | "restricted">("all");
   const [binIdsText, setBinIdsText] = useState("");
   const [collectionIdsText, setCollectionIdsText] = useState("");
@@ -20,7 +21,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
   const [editing, setEditing] = useState<EditState | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState<Error | null>(null), [notice, setNotice] = useState("");
-  const dirty = Boolean(editing) || Boolean(name || expiration || resourceMode !== "all" || binIdsText || collectionIdsText || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
+  const dirty = Boolean(editing) || Boolean(name || expiration || rateLimitText || resourceMode !== "all" || binIdsText || collectionIdsText || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
   useEffect(() => { onDirtyChange(dirty || busy); }, [dirty, busy, onDirtyChange]);
   useEffect(() => {
     if (!dirty && !busy) return;
@@ -58,9 +59,11 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
       const binIds = binIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
       const collectionIds = collectionIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
       const resourceAccess = resourceMode === "all" ? { mode: "all" as const } : { mode: "restricted" as const, binIds, collectionIds };
-      const created = await createKey({ name, scopes: selected, expiresAt, resourceAccess });
+      const parsedLimit = rateLimitText.trim() === "" ? undefined : Number(rateLimitText);
+      if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit < 0 || parsedLimit > 10000)) { setError(new Error("限流必须是 0～10000 的整数（0 表示不限）。")); return; }
+      const created = await createKey({ name, scopes: selected, expiresAt, resourceAccess, ...(parsedLimit === undefined ? {} : { rateLimitPerMinute: parsedLimit === 0 ? null : parsedLimit }) });
       if (!mounted.current) return;
-      setDisclosure(created); setName(""); setSelected(defaultScopes); setExpiration("");
+      setDisclosure(created); setName(""); setSelected(defaultScopes); setExpiration(""); setRateLimitText("");
       setResourceMode("all"); setBinIdsText(""); setCollectionIdsText("");
       await client.invalidateQueries({ queryKey: ["keys"] });
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
@@ -100,6 +103,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
       binIdsText: key.resourceAccess?.mode === "restricted" ? key.resourceAccess.binIds.join("\n") : "",
       collectionIdsText: key.resourceAccess?.mode === "restricted" ? key.resourceAccess.collectionIds.join("\n") : "",
       expiration: key.expiresAt ? toLocalInput(key.expiresAt) : "",
+      rateLimitText: key.rateLimitPerMinute === null || key.rateLimitPerMinute === undefined ? "" : String(key.rateLimitPerMinute),
     });
     setError(null); setNotice("");
   }
@@ -122,10 +126,17 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     const collectionIds = editing.collectionIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
     setBusy(true); setError(null); setNotice("");
     try {
+      let rateLimitPerMinute: number | null | undefined;
+      if (editing.rateLimitText.trim() !== "") {
+        const parsed = Number(editing.rateLimitText);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 10000) { setError(new Error("限流必须是 0～10000 的整数（0 表示不限）。")); return; }
+        rateLimitPerMinute = parsed === 0 ? null : parsed;
+      }
       await updateKey(editing.id, {
         name: editing.name,
         scopes: editing.scopes,
         expiresAt,
+        ...(rateLimitPerMinute === undefined ? {} : { rateLimitPerMinute }),
         resourceAccess: editing.resourceMode === "all" ? { mode: "all" } : { mode: "restricted", binIds, collectionIds },
       });
       if (!mounted.current) return;
@@ -217,6 +228,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
         </div>}
       </fieldset>
       <label>过期时间<input aria-label="过期时间" type="datetime-local" disabled={busy} value={expiration} onChange={event => setExpiration(event.target.value)} /></label>
+      <label>限流（请求/分钟）<input aria-label="限流" type="number" min={0} max={10000} placeholder="默认 120，0 表示不限" disabled={busy} value={rateLimitText} onChange={event => setRateLimitText(event.target.value)} /></label>
       <p>留空表示不过期；时间按当前设备时区输入。查看集合内数据仓需要 collection:read 和 bin:read；恢复历史版本需要 bin:update 和 history:read。密钥管理仅支持网页登录。</p>
       <button className="primary-button" type="submit" disabled={busy || !name.trim() || !selected.length}>{busy ? "正在处理…" : "创建密钥"}</button>
     </form>
@@ -229,6 +241,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
           <p>资源范围：{key.resourceAccess?.mode === "restricted" ? `${key.resourceAccess.binIds.length} 个 Bin · ${key.resourceAccess.collectionIds.length} 个 Collection` : "所有资源"}</p>
           <p>创建：{displayTime(key.createdAt, "—")} · 过期：{displayTime(key.expiresAt, "永不过期")}</p>
           <p>最后使用：{displayTime(key.lastUsedAt, "尚未使用")}{key.revokedAt && ` · 撤销：${displayTime(key.revokedAt, "—")}`}</p>
+          <p>限流：{key.rateLimitPerMinute === null ? "不限" : `${key.rateLimitPerMinute ?? 120} 次/分钟`}</p>
           <div style={{ marginTop: "8px", padding: "6px 10px", background: "var(--border)", borderRadius: "4px", fontSize: "12px", display: "flex", gap: "16px" }}>
             <span>已授权总请求：<strong>{key.usageTotal ?? 0}</strong> 次</span>
             <span>今日已授权：<strong>{key.usageDaily?.[new Date().toISOString().slice(0, 10)] ?? 0}</strong> 次</span>
@@ -263,6 +276,8 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
             </fieldset>
             <label>过期时间<input aria-label={`编辑过期时间 ${key.name}`} type="datetime-local" disabled={busy} value={editing.expiration}
               onChange={event => setEditing({ ...editing, expiration: event.target.value })} /></label>
+            <label>限流（请求/分钟，留空保持不变，0 表示不限）<input aria-label={`编辑限流 ${key.name}`} type="number" min={0} max={10000} disabled={busy} value={editing.rateLimitText}
+              onChange={event => setEditing({ ...editing, rateLimitText: event.target.value })} placeholder="默认 120" /></label>
             <p>修改立即对后续请求生效，使用统计与已保存的密钥值保持不变；清空过期时间表示永不过期。</p>
             <div className="detail-actions">
               <button className="primary-button" type="submit" disabled={busy || !editing.name.trim() || !editing.scopes.length}>{busy ? "正在保存…" : "保存修改"}</button>

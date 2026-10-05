@@ -25,12 +25,14 @@ const input = z.object({
   scopes: z.array(z.enum(API_SCOPES)).min(1).max(API_SCOPES.length).refine(scopes => new Set(scopes).size === scopes.length),
   expiresAt: z.iso.datetime({ offset: true }).nullable().optional().refine(value => !value || Date.parse(value) > Date.now()),
   resourceAccess: resourceAccessSchema.optional(),
+  rateLimitPerMinute: z.number().int().min(1).max(10000).nullable().optional(),
 }).strict();
 const updateInput = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   scopes: z.array(z.enum(API_SCOPES)).min(1).max(API_SCOPES.length).refine(scopes => new Set(scopes).size === scopes.length).optional(),
   expiresAt: z.iso.datetime({ offset: true }).nullable().optional().refine(value => value === undefined || value === null || Date.parse(value) > Date.now()),
   resourceAccess: resourceAccessSchema.optional(),
+  rateLimitPerMinute: z.number().int().min(1).max(10000).nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0);
 
 app.onError((error, c) => {

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
 import { managementSession } from "../lib/system-http";
 import { conditionalGet } from "../middleware/conditional";
+import { limitAnonymousRequest } from "../storage/rate-limit";
 import {
   cloneBin,
   createBin,
@@ -79,7 +80,11 @@ const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
   if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
   const record = await getBin(c.env, c.req.param("id")!);
   c.set("bin", record);
-  if (record?.meta.visibility === "public") return next();
+  if (record?.meta.visibility === "public") {
+    const limited = await limitAnonymousRequest(c.env, c.req.raw);
+    if (limited) return limited;
+    return next();
+  }
   // The handler uses this exact snapshot, including its visibility and immutable value.
   return requireAccess("bin:read")(c, next);
 };
@@ -647,7 +652,11 @@ const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables
   if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
   const record = await getBinBySlug(c.env, c.req.param("slug")!);
   c.set("bin", record);
-  if (record?.meta.visibility === "public") return next();
+  if (record?.meta.visibility === "public") {
+    const limited = await limitAnonymousRequest(c.env, c.req.raw);
+    if (limited) return limited;
+    return next();
+  }
   return requireAccess("bin:read")(c, next);
 };
 
