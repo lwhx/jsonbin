@@ -618,6 +618,7 @@ function AuthenticatedApp({
               health={health.data}
               onCreate={() => setCreateOpen(true)}
               onOpenBins={() => setSection("Bins")}
+              onOpenBin={id => { window.location.hash = binHash(id); }}
             />
           ) : (
             <BinsPage
@@ -655,6 +656,7 @@ function Overview({
   health,
   onCreate,
   onOpenBins,
+  onOpenBin,
 }: {
   bins: BinMeta[];
   binsLoading: boolean;
@@ -663,6 +665,7 @@ function Overview({
   health?: Health;
   onCreate: () => void;
   onOpenBins: () => void;
+  onOpenBin: (id: string) => void;
 }) {
   const recent = bins.slice(0, 4);
   const collections = useQuery({
@@ -728,7 +731,13 @@ function Overview({
           ) : recent.length ? (
             <div className="activity-table compact">
               {recent.map((item) => (
-                <div className="activity-row" key={item.id}>
+                <button
+                  type="button"
+                  className="activity-row"
+                  key={item.id}
+                  onClick={() => onOpenBin(item.id)}
+                  aria-label={`打开数据仓 ${item.name}`}
+                >
                   <div className="file-icon">
                     <FileJson2 size={17} />
                   </div>
@@ -739,7 +748,7 @@ function Overview({
                   <span className="activity-action">{formatBytes(item.size)}</span>
                   <time>{timeAgo(item.updatedAt)}</time>
                   <ChevronRight className="row-chevron" size={16} />
-                </div>
+                </button>
               ))}
             </div>
           ) : (

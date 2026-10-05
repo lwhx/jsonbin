@@ -569,6 +569,25 @@ kbd {
   gap: 10px;
   min-height: 56px;
   border-top: 1px solid var(--border);
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+button.activity-row:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.03));
+}
+
+button.activity-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .file-icon {
