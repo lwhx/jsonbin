@@ -825,6 +825,11 @@ function BinsPage({
   const [search, setSearch] = useState("");
   const [filterTab, setFilterTab] = useState<"all" | "pinned" | "favorite">("all");
   const [selectedTag, setSelectedTag] = useState<string>("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchAction, setBatchAction] = useState<string>("");
+  const [batchTag, setBatchTag] = useState<string>("");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const client = useQueryClient();
 
   const allTags = Array.from(new Set(bins.flatMap(b => b.tags ?? []))).sort();
 
@@ -844,6 +849,74 @@ function BinsPage({
     );
   });
 
+  const allSelected = filtered.length > 0 && selectedIds.length === filtered.length;
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filtered.map((b) => b.id));
+    }
+  }
+
+  function toggleSelectOne(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  }
+
+  async function executeBatch() {
+    if (!batchAction || selectedIds.length === 0 || batchBusy) return;
+
+    // We need etags for these bins. Fetch from API or bin meta if available.
+    setBatchBusy(true);
+    try {
+      const itemsToProcess: Array<{ id: string; etag: string }> = [];
+      for (const id of selectedIds) {
+        const binRes = await fetch(`/api/v1/bins/${id}`, { credentials: "include" });
+        if (binRes.ok) {
+          const data = await binRes.json();
+          itemsToProcess.push({ id, etag: data.etag });
+        }
+      }
+
+      if (itemsToProcess.length > 0) {
+        let payload: any = undefined;
+        if (batchAction === "add_tags") {
+          payload = { tags: batchTag.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean) };
+        } else if (batchAction === "set_visibility_public") {
+          payload = { visibility: "public" };
+        } else if (batchAction === "set_visibility_private") {
+          payload = { visibility: "private" };
+        }
+
+        const operation =
+          batchAction === "set_visibility_public" || batchAction === "set_visibility_private"
+            ? "set_visibility"
+            : batchAction;
+
+        await fetch("/api/v1/bins/batch", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operation,
+            items: itemsToProcess,
+            payload,
+          }),
+        });
+
+        setSelectedIds([]);
+        setBatchAction("");
+        setBatchTag("");
+        await client.invalidateQueries({ queryKey: ["bins"] });
+      }
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   return (
     <>
       <section className="hero bins-hero">
@@ -859,7 +932,16 @@ function BinsPage({
       </section>
 
       <div className="bins-toolbar" style={{ flexWrap: "wrap", gap: "10px" }}>
-        <div style={{ display: "flex", gap: "6px" }}>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px" }}>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleSelectAll}
+              aria-label="全选数据仓"
+            />
+            <span>全选</span>
+          </label>
           <button
             type="button"
             className={`secondary-button ${filterTab === "all" ? "active" : ""}`}
@@ -910,6 +992,84 @@ function BinsPage({
         <span>共 {filtered.length} 个</span>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div
+          className="panel"
+          style={{
+            margin: "0 0 16px 0",
+            padding: "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            background: "var(--card)",
+            border: "1px solid var(--accent)",
+          }}
+        >
+          <span style={{ fontSize: "13px", fontWeight: "bold" }}>
+            已选 {selectedIds.length} 个数据仓：
+          </span>
+          <select
+            value={batchAction}
+            onChange={(e) => setBatchAction(e.target.value)}
+            disabled={batchBusy}
+            style={{
+              padding: "6px 10px",
+              borderRadius: "6px",
+              border: "1px solid var(--border)",
+              background: "transparent",
+              color: "inherit",
+              fontSize: "13px",
+            }}
+          >
+            <option value="">选择批量操作…</option>
+            <option value="set_favorite">⭐ 设为收藏</option>
+            <option value="unset_favorite">取消收藏</option>
+            <option value="set_pinned">📌 设为置顶</option>
+            <option value="unset_pinned">取消置顶</option>
+            <option value="set_visibility_public">设为公开</option>
+            <option value="set_visibility_private">设为私有</option>
+            <option value="add_tags">添加标签</option>
+            <option value="trash">🗑️ 移入回收站</option>
+          </select>
+
+          {batchAction === "add_tags" && (
+            <input
+              type="text"
+              placeholder="输入标签名（逗号分隔）"
+              value={batchTag}
+              onChange={(e) => setBatchTag(e.target.value)}
+              disabled={batchBusy}
+              style={{
+                padding: "6px 10px",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+                fontSize: "13px",
+              }}
+            />
+          )}
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={executeBatch}
+            disabled={!batchAction || batchBusy}
+            style={{ padding: "6px 14px", fontSize: "13px" }}
+          >
+            {batchBusy ? "正在执行…" : "应用操作"}
+          </button>
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setSelectedIds([])}
+            disabled={batchBusy}
+            style={{ padding: "6px 10px", fontSize: "13px", marginLeft: "auto" }}
+          >
+            取消选择
+          </button>
+        </div>
+      )}
+
       {error ? (
         <div className="panel">
           <EmptyState
@@ -928,8 +1088,17 @@ function BinsPage({
           {filtered.map((bin) => (
             <button type="button" className="bin-card" key={bin.id} onClick={() => onOpen(bin.id)} aria-label={`打开数据仓 ${bin.name}`}>
               <div className="bin-card-top">
-                <div className="file-icon large">
-                  <FileJson2 size={19} />
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(bin.id)}
+                    onClick={(e) => toggleSelectOne(bin.id, e)}
+                    onChange={() => {}}
+                    aria-label={`选择数据仓 ${bin.name}`}
+                  />
+                  <div className="file-icon large">
+                    <FileJson2 size={19} />
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                   {bin.pinned && <span title="已置顶">📌</span>}

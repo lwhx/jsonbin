@@ -286,6 +286,62 @@ test('P15: clone Bin creates private copy preserving JSON, tags, and schema revi
   assert.equal(fromTplBin.meta.schemaId, schema.meta.id);
 });
 
+test('P16: batch operations execute independent CAS and report per-item status', async () => {
+  const bin1 = await create({ item: 1 });
+  const bin2 = await create({ item: 2 });
+  const bin3 = await create({ item: 3 });
+
+  // Lock bin3
+  await request(`/bins/${bin3.meta.id}/meta`, {
+    method: 'PATCH',
+    etag: bin3.etag,
+    value: { locked: true },
+  });
+  const lockedBin3 = await (await request(`/bins/${bin3.meta.id}`)).json();
+
+  // Run batch add_tags
+  const batchRes = await request('/bins/batch', {
+    method: 'POST',
+    value: {
+      operation: 'add_tags',
+      items: [
+        { id: bin1.meta.id, etag: bin1.etag }, // Should succeed
+        { id: bin2.meta.id, etag: '"wrong_etag"' }, // Should fail with etag_conflict
+        { id: lockedBin3.meta.id, etag: lockedBin3.etag }, // Should fail with locked
+      ],
+      payload: {
+        tags: ['batch-test'],
+      },
+    },
+  });
+
+  assert.equal(batchRes.status, 200);
+  const data = await batchRes.json();
+  assert.equal(data.results.length, 3);
+  assert.deepEqual(data.results, [
+    { id: bin1.meta.id, status: 'updated' },
+    { id: bin2.meta.id, status: 'etag_conflict' },
+    { id: lockedBin3.meta.id, status: 'locked' },
+  ]);
+
+  // Check bin1 was updated with tag
+  const check1 = await (await request(`/bins/${bin1.meta.id}`)).json();
+  assert.deepEqual(check1.meta.tags, ['batch-test']);
+
+  // Check duplicate IDs rejected by batch validation
+  const duplicateBatch = await request('/bins/batch', {
+    method: 'POST',
+    value: {
+      operation: 'set_favorite',
+      items: [
+        { id: bin1.meta.id, etag: bin1.etag },
+        { id: bin1.meta.id, etag: bin1.etag },
+      ],
+    },
+  });
+  assert.equal(duplicateBatch.status, 422);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

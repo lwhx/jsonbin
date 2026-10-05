@@ -1179,6 +1179,11 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 支持独立资源 R2 存储体系 `templates/<id>/meta.json` 及不可变版本快照。
   - 提供模板全套 CRUD、`POST /api/v1/bins/:id/save-as-template`（Bin 另存为模板）与 `POST /api/v1/templates/:id/create-bin`（模板实例化）。
   - 前端支持详情页一键「克隆」、新建数据仓弹窗支持「空白创建」与「从模板创建」切换。
+- [x] **P16：批量操作 Batch Operations**：
+  - 核心接口 `POST /api/v1/bins/batch`（注册在 `/:id` 之前），单批最多 100 个 Bin，强制 ID 去重校验。
+  - 严格支持每个 Item 独立 CAS 机制与安全边界（Scope、Resource Access、Lock、ETag、Trash 状态校验），返回逐项执行状态列表。
+  - 支持批量操作：`move_collection`、`set_visibility`、`add_tags`、`remove_tags`、`set_favorite`、`unset_favorite`、`set_pinned`、`unset_pinned`、`trash`。
+  - 前端实现数据仓列表卡片复选框、全选切换与吸顶批量操作面板（设为收藏/置顶、公开/私有、追加标签、批量软删除）。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

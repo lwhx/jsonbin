@@ -197,6 +197,139 @@ app.get("/", requireAccess("bin:read"), async (c) => {
   });
 });
 
+const batchOperationSchema = z.object({
+  operation: z.enum([
+    "move_collection",
+    "set_visibility",
+    "add_tags",
+    "remove_tags",
+    "set_favorite",
+    "unset_favorite",
+    "set_pinned",
+    "unset_pinned",
+    "trash",
+  ]),
+  items: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        etag: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(100)
+    .refine((items) => new Set(items.map((i) => i.id)).size === items.length, {
+      message: "duplicate_ids_in_batch",
+    }),
+  payload: z
+    .object({
+      collectionId: z.string().uuid().nullable().optional(),
+      visibility: z.enum(["private", "public"]).optional(),
+      tags: z.array(z.string().trim().min(1).max(32)).max(20).optional(),
+    })
+    .optional(),
+});
+
+app.post("/batch", async (c) => {
+  const parsed = batchOperationSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
+  }
+
+  const { operation, items, payload } = parsed.data;
+  const requiredScope = operation === "trash" ? "bin:delete" : "bin:update";
+
+  // Check auth scope
+  const authMiddleware = requireAccess(requiredScope);
+  let authed = false;
+  await authMiddleware(c, async () => {
+    authed = true;
+  });
+  if (!authed) return c.res;
+
+  const key = c.get("apiKey");
+  const results: Array<{ id: string; status: "updated" | "etag_conflict" | "not_found" | "locked" | "forbidden" | "error" }> = [];
+
+  for (const item of items) {
+    try {
+      const current = await getBin(c.env, item.id);
+      if (!current) {
+        results.push({ id: item.id, status: "not_found" });
+        continue;
+      }
+
+      if (key && !checkResourceAccess(key, { type: "bin", id: current.meta.id, collectionId: current.meta.collectionId })) {
+        results.push({ id: item.id, status: "forbidden" });
+        continue;
+      }
+
+      if (current.meta.locked) {
+        results.push({ id: item.id, status: "locked" });
+        continue;
+      }
+
+      const match = current.etag === item.etag || `"${current.etag}"` === item.etag || current.etag === `"${item.etag}"`;
+      if (!match) {
+        results.push({ id: item.id, status: "etag_conflict" });
+        continue;
+      }
+
+      if (operation === "trash") {
+        const deleted = await deleteBin(c.env, item.id, item.etag);
+        if (deleted) {
+          await auditRequest(c, "bin.deleted", item.id);
+          results.push({ id: item.id, status: "updated" });
+        } else {
+          results.push({ id: item.id, status: "error" });
+        }
+        continue;
+      }
+
+      let metaPatch: Parameters<typeof updateBinMetadata>[2] = {};
+      if (operation === "move_collection") {
+        const targetCollectionId = payload?.collectionId ?? null;
+        if (key && targetCollectionId && !checkResourceAccess(key, { type: "collection", id: targetCollectionId })) {
+          results.push({ id: item.id, status: "forbidden" });
+          continue;
+        }
+        metaPatch.collectionId = targetCollectionId;
+      } else if (operation === "set_visibility") {
+        metaPatch.visibility = payload?.visibility ?? "private";
+      } else if (operation === "add_tags") {
+        const existing = new Set(current.meta.tags || []);
+        for (const t of payload?.tags || []) existing.add(t);
+        metaPatch.tags = Array.from(existing);
+      } else if (operation === "remove_tags") {
+        const toRemove = new Set(payload?.tags || []);
+        metaPatch.tags = (current.meta.tags || []).filter((t) => !toRemove.has(t));
+      } else if (operation === "set_favorite") {
+        metaPatch.favorite = true;
+      } else if (operation === "unset_favorite") {
+        metaPatch.favorite = false;
+      } else if (operation === "set_pinned") {
+        metaPatch.pinned = true;
+      } else if (operation === "unset_pinned") {
+        metaPatch.pinned = false;
+      }
+
+      const updated = await updateBinMetadata(c.env, item.id, metaPatch, item.etag);
+      if (updated) {
+        await auditRequest(c, "bin.metadata_updated", item.id);
+        results.push({ id: item.id, status: "updated" });
+      } else {
+        results.push({ id: item.id, status: "error" });
+      }
+    } catch (err: any) {
+      if (err.message === "etag_conflict") results.push({ id: item.id, status: "etag_conflict" });
+      else if (err.message === "not_found") results.push({ id: item.id, status: "not_found" });
+      else if (err.message === "locked") results.push({ id: item.id, status: "locked" });
+      else results.push({ id: item.id, status: "error" });
+    }
+  }
+
+  return c.json({ results });
+});
+
 app.post("/:id/save-as-template", requireAccess(["bin:read"]), checkBinMutationAccess, async (c) => {
   const ifMatch = c.req.header("If-Match");
   if (!ifMatch?.trim()) {
