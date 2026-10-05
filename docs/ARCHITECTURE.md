@@ -174,7 +174,7 @@ DELETE /api/v1/keys/:id
 
 ## Bin features
 
-v3.0.0 includes:
+v3.0.0+ (current: 3.1.0-rc.1) includes:
 
 - JSON CRUD;
 - deep-path reads and writes;
