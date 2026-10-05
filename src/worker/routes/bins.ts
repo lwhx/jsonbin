@@ -459,13 +459,22 @@ app.post("/:id/clone", requireAccess(["bin:read", "bin:create"]), checkBinMutati
   const id = c.req.param("id");
   const key = c.get("apiKey");
 
-  try {
-    const cloned = await cloneBin(c.env, id, ifMatch);
-    if (key && key.resourceAccess?.mode === "restricted" && cloned.meta.collectionId) {
-      if (!checkResourceAccess(key, { type: "collection", id: cloned.meta.collectionId })) {
-        return c.json({ error: "resource_forbidden" }, 403);
-      }
+  // Restricted keys authorize the clone target (the inherited collection)
+  // before any R2 write: no permission failure may leave a new Bin behind.
+  const source = await getBin(c.env, id);
+  if (!source) return c.json({ error: "not_found" }, 404);
+  if (source.etag !== ifMatch && `"${source.etag}"` !== ifMatch && source.etag !== `"${ifMatch}"`) {
+    return c.json({ error: "etag_conflict" }, 412);
+  }
+  if (key && key.resourceAccess?.mode === "restricted") {
+    const targetCollectionId = source.meta.collectionId ?? null;
+    if (!targetCollectionId || !checkResourceAccess(key, { type: "collection", id: targetCollectionId })) {
+      return c.json({ error: "resource_forbidden" }, 403);
     }
+  }
+
+  try {
+    const cloned = await cloneBin(c.env, id, ifMatch, source);
 
     c.header("ETag", cloned.etag);
     c.header("X-JSONBin-Version", String(cloned.meta.currentVersion));

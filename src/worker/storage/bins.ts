@@ -147,8 +147,11 @@ export async function cloneBin(
   env: Env,
   id: string,
   ifMatch?: string,
+  source?: BinRecord,
 ): Promise<BinRecord> {
-  const current = await getBin(env, id);
+  // Callers that must authorize against the source may pass the exact snapshot
+  // they inspected, so permission checks and the write use the same data.
+  const current = source ?? await getBin(env, id);
   if (!current) throw new Error("not_found");
   if (ifMatch && current.etag !== ifMatch && `"${current.etag}"` !== ifMatch && current.etag !== `"${ifMatch}"`) {
     throw new Error("etag_conflict");

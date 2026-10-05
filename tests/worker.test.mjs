@@ -1729,3 +1729,39 @@ test('audit: racing template update and delete leave exactly one legitimate winn
     assert.equal((await request(`/templates/${tpl.meta.id}`)).status, 404);
   }
 });
+
+test('audit: restricted key clone authorizes the target collection before any R2 write', async () => {
+  const allowed = await (await request('/collections', { method: 'POST', value: { name: 'Clone Allowed' } })).json();
+  const denied = await (await request('/collections', { method: 'POST', value: { name: 'Clone Denied' } })).json();
+  const binAllowed = await (await request('/bins', { method: 'POST', value: { name: 'In Allowed', collectionId: allowed.meta.id, value: { ok: 1 } } })).json();
+  const binDenied = await (await request('/bins', { method: 'POST', value: { name: 'In Denied', collectionId: denied.meta.id, value: { no: 1 } } })).json();
+  const binLoose = await (await request('/bins', { method: 'POST', value: { name: 'No Collection', value: { loose: true } } })).json();
+
+  const binCount = async () => { let n = 0, cursor; do { const page = await bucket.list({ prefix: 'bins/', cursor, limit: 1000 }); n += page.objects.filter(o => o.key.endsWith('/meta.json')).length; cursor = page.truncated ? page.cursor : undefined; } while (cursor); return n; };
+
+  // Source bin whitelisted by id, but its collection is not grantable -> 403 before the clone writes.
+  const keyDenied = await (await request('/keys', { method: 'POST', value: {
+    name: 'clone-denied', scopes: ['bin:read', 'bin:create'],
+    resourceAccess: { mode: 'restricted', binIds: [binDenied.meta.id, binLoose.meta.id, binAllowed.meta.id], collectionIds: [] },
+  } })).json();
+  const before = await binCount();
+  const deniedRes = await request(`/bins/${binDenied.meta.id}/clone`, { method: 'POST', etag: binDenied.etag, authorization: `Bearer ${keyDenied.token}` });
+  assert.equal(deniedRes.status, 403);
+  assert.equal(await binCount(), before, 'denied clone must not create any Bin');
+
+  // Collection-less Bin cannot be cloned by a restricted key either.
+  const looseRes = await request(`/bins/${binLoose.meta.id}/clone`, { method: 'POST', etag: binLoose.etag, authorization: `Bearer ${keyDenied.token}` });
+  assert.equal(looseRes.status, 403);
+  assert.equal(await binCount(), before, 'collection-less clone must not create any Bin');
+
+  // The allowed target collection succeeds.
+  const keyAllowed = await (await request('/keys', { method: 'POST', value: {
+    name: 'clone-allowed', scopes: ['bin:read', 'bin:create'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [allowed.meta.id] },
+  } })).json();
+  const okRes = await request(`/bins/${binAllowed.meta.id}/clone`, { method: 'POST', etag: binAllowed.etag, authorization: `Bearer ${keyAllowed.token}` });
+  assert.equal(okRes.status, 201);
+  const cloned = await okRes.json();
+  assert.equal(cloned.meta.collectionId, allowed.meta.id);
+  assert.equal(await binCount(), before + 1);
+});
