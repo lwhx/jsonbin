@@ -36,3 +36,40 @@ test('export catches late directory changes and fails closed at package resource
  const r=await h.request('/system/export?scope=all&format=backup',{},env);assert.equal(r.status,409);assert.equal((await r.json()).error,'backup_changed');
  for(let i=0;i<101;i++){const id=crypto.randomUUID();await h.bucket.put(`bins/${id}/meta.json`,JSON.stringify({id,deletedAt:p.exportedAt,purgeState:'purged'}));}assert.equal((await h.request('/system/export?scope=all&format=backup')).status,413);
 });
+
+test('audit: v2 export includes templates with history and round-trips through restore',async t=>{
+ const h=await harness(t);
+ // Build a schema + template with two versions through the live APIs.
+ const schema=await (await h.request('/schemas',{method:'POST',value:{name:'备份模型',schema:{type:'boolean'}}})).json();
+ const tpl=await (await h.request('/templates',{method:'POST',value:{name:'备份模板',value:true,schemaId:schema.meta.id}})).json();
+ const updated=await h.request(`/templates/${tpl.meta.id}`,{method:'PATCH',headers:{'If-Match':tpl.etag},value:{value:false}});
+ assert.equal(updated.status,200);
+
+ const exported=await (await h.request('/system/export?scope=all&format=backup')).json();
+ assert.equal(exported.schemaVersion,2);
+ assert.equal(exported.templates.length,1);
+ const backupTemplate=exported.templates[0];
+ assert.equal(backupTemplate.meta.id,tpl.meta.id);
+ assert.deepEqual(backupTemplate.meta.tags,[]);
+ assert.equal(backupTemplate.meta.schemaId,schema.meta.id);
+ assert.equal(backupTemplate.meta.schemaRevision,1);
+ assert.deepEqual(backupTemplate.versions.map(v=>v.value),[true,false]);
+
+ // Restore into a clean bucket and re-export: the template history must be identical.
+ const other=await harness(t);
+ const fingerprintInput={kind:'schema',data:exported.schemas.find(s=>s.meta.id===schema.meta.id)};
+ const {fingerprintResource}=await import('../src/shared/backup.ts');
+ const restoreRes=await other.request('/system/restore',{method:'POST',value:{resource:fingerprintInput,dependencies:[]}});
+ assert.equal((await restoreRes.json()).status,'created');
+ const tplInput={kind:'template',data:backupTemplate};
+ const tplRestore=await other.request('/system/restore',{method:'POST',value:{resource:tplInput,dependencies:[{kind:'schema',id:schema.meta.id,fingerprint:await fingerprintResource(fingerprintInput)}]}});
+ assert.equal(tplRestore.status,200);
+ assert.equal((await tplRestore.json()).status,'created');
+ const list=await (await other.request('/templates')).json();
+ assert.equal(list.items.length,1);
+ assert.deepEqual(list.items[0],{...backupTemplate.meta});
+ const fetched=await (await other.request(`/templates/${tpl.meta.id}`)).json();
+ assert.deepEqual(fetched.value,false);
+ const reExported=await (await other.request('/system/export?scope=all&format=backup')).json();
+ assert.deepEqual(reExported.templates,exported.templates);
+});

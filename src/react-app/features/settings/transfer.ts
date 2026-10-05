@@ -2,12 +2,19 @@ import { fingerprintResource, validateBackup } from '../../../shared/backup.ts';
 import type { BackupPackage, RestoreRequest, RestoreResource, RestoreResult } from '../../../shared/backup-types.ts';
 import { SystemApiError, type SystemClient } from './api.ts';
 export async function buildRestoreRequests(input: BackupPackage): Promise<RestoreRequest[]> {
-  const p = validateBackup(input), resources: RestoreResource[] = [ ...p.collections.map(data => ({ kind: 'collection' as const, data })), ...p.schemas.map(data => ({ kind: 'schema' as const, data })), ...p.bins.map(data => ({ kind: 'bin' as const, data })), ...p.purged.map(data => ({ kind: 'purged' as const, data })) ];
+  const p = validateBackup(input), resources: RestoreResource[] = [ ...p.collections.map(data => ({ kind: 'collection' as const, data })), ...p.schemas.map(data => ({ kind: 'schema' as const, data })), ...p.templates.map(data => ({ kind: 'template' as const, data })), ...p.bins.map(data => ({ kind: 'bin' as const, data })), ...p.purged.map(data => ({ kind: 'purged' as const, data })) ];
   const fingerprints = new Map<string, string>();
   for (const r of resources) fingerprints.set(`${r.kind}/${r.kind === 'purged' ? r.data.id : r.data.meta.id}`, await fingerprintResource(r));
-  return resources.map(resource => ({ resource, dependencies: resource.kind !== 'bin' ? [] : (['collection', 'schema'] as const).flatMap(kind => {
-    const id = resource.data.meta[kind === 'collection' ? 'collectionId' : 'schemaId']; return id ? [{ kind, id, fingerprint: fingerprints.get(`${kind}/${id}`)! }] : [];
-  }) }));
+  return resources.map(resource => {
+    const dependencies: RestoreRequest['dependencies'] = [];
+    if (resource.kind === 'bin') {
+      for (const [kind, id] of [['collection', resource.data.meta.collectionId], ['schema', resource.data.meta.schemaId]] as const)
+        if (id) dependencies.push({ kind, id, fingerprint: fingerprints.get(`${kind}/${id}`)! });
+    } else if (resource.kind === 'template' && resource.data.meta.schemaId) {
+      dependencies.push({ kind: 'schema', id: resource.data.meta.schemaId, fingerprint: fingerprints.get(`schema/${resource.data.meta.schemaId}`)! });
+    }
+    return { resource, dependencies };
+  });
 }
 export async function runRestore(backup: BackupPackage, client: SystemClient, onResult: (r: RestoreResult) => void, signal?: AbortSignal): Promise<RestoreResult[]> {
   const requests = await buildRestoreRequests(backup), results: RestoreResult[] = [], done = new Map<string, RestoreResult>();

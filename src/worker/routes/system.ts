@@ -39,7 +39,7 @@ app.get('/export', managementSession, async c => {
 app.post('/restore', managementSession, async c => {
   const input = validateRestoreRequest(await readBoundedJson(c.req.raw, MAX_BACKUP_BYTES));
   const result = await restoreResource(c.env, input);
-  if (result.status === 'created') await auditRequest(c, result.kind === 'collection' ? 'collection.imported' : result.kind === 'schema' ? 'schema.imported' : 'bin.imported', result.id);
+  if (result.status === 'created') await auditRequest(c, result.kind === 'collection' ? 'collection.imported' : result.kind === 'schema' ? 'schema.imported' : result.kind === 'template' ? 'template.imported' : 'bin.imported', result.id);
   return c.json(result);
 });
 app.post('/import', managementSession, async c => {

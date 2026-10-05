@@ -4,11 +4,15 @@ const api=await import('../src/shared/backup.ts').catch(e=>{if(e.code==='ERR_MOD
 test('backup validates ordinary JSON without altering keys or scalars',()=>{
  assert.equal(typeof api.validateBackup,'function');
  for(const value of [null,false,[],0,'中文',JSON.parse('{"__proto__":{"x":1},"":"空","format":"jsonbin-backup"}')]) assert.deepEqual(api.validateBackup(minimalBackup(value)).bins[0].versions[0].value,value);
- assert.deepEqual(api.validateBackup(richBackup()),richBackup());
+ // v1 input normalizes with an empty template list; v1→v2 semantic equivalence.
+ assert.deepEqual(api.validateBackup(richBackup()),{...richBackup(),templates:[]});
+ const v2=richBackup();v2.schemaVersion=2;v2.templates=[];
+ {const tid=crypto.randomUUID(),sid=v2.schemas[0].meta.id;v2.templates.push({meta:{id:tid,name:'备份模板',description:'',currentVersion:2,tags:['t'],schemaId:sid,schemaRevision:3,createdAt:v2.exportedAt,updatedAt:v2.exportedAt},versions:[{version:1,uploadedAt:v2.exportedAt,value:true},{version:2,uploadedAt:v2.exportedAt,value:'当前'}]});assert.deepEqual(api.validateBackup(v2).templates.length,1);}
+ {const bad=structuredClone(v2);bad.templates[0].meta.schemaRevision=9;assert.throws(()=>api.validateBackup(bad));}
 });
 test('backup rejects unknown management fields, absent current files, invalid graph and unsafe values',()=>{
  assert.equal(typeof api.validateBackup,'function');
- for(const change of [p=>p.secret='x',p=>p.schemaVersion=2,p=>p.bins[0].meta.etag='x',p=>p.bins[0].versions=[],p=>p.bins.push(p.bins[0]),p=>p.bins[0].meta.collectionId=crypto.randomUUID(),p=>p.bins[0].versions[0].value=Infinity,p=>p.bins[0].versions.push(p.bins[0].versions[0]),p=>p.bins[0].meta.currentVersion=2,p=>p.bins[0].meta.schemaLocked=true,p=>p.scope={kind:'config'}]) {const p=minimalBackup();change(p);assert.throws(()=>api.validateBackup(p));}
+ for(const change of [p=>p.secret='x',p=>p.schemaVersion=3,p=>{p.templates=[{meta:{id:crypto.randomUUID()},versions:[]}]},p=>p.bins[0].meta.etag='x',p=>p.bins[0].versions=[],p=>p.bins.push(p.bins[0]),p=>p.bins[0].meta.collectionId=crypto.randomUUID(),p=>p.bins[0].versions[0].value=Infinity,p=>p.bins[0].versions.push(p.bins[0].versions[0]),p=>p.bins[0].meta.currentVersion=2,p=>p.bins[0].meta.schemaLocked=true,p=>p.scope={kind:'config'}]) {const p=minimalBackup();change(p);assert.throws(()=>api.validateBackup(p));}
  const p=richBackup();p.bins[0].versions[0].value=5;assert.throws(()=>api.validateBackup(p));
 });
 test('backup enforces resource/object/byte and business depth budgets independently of wrappers',()=>{

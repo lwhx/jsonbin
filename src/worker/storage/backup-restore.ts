@@ -2,7 +2,7 @@ import { syncSearchResource } from './search';
 import { readBackupJson } from './backup-json';
 import { SystemError } from '../../shared/system.ts';
 import { canonicalJson, fingerprintResource, isImportMarker, validateImportMarker, validateRestoreRequest } from '../../shared/backup.ts';
-import type { BackupBinMeta, BackupCollection, BackupSchema, RestoreRequest, RestoreResource, RestoreResult } from '../../shared/backup-types.ts';
+import type { BackupBinMeta, BackupCollection, BackupSchema, BackupTemplate, RestoreRequest, RestoreResource, RestoreResult } from '../../shared/backup-types.ts';
 import { assertSchemaDefinition, assertSchemaValue, type JsonSchema } from '../../shared/schema-validation.ts';
 import { historyKey } from './backup-export';
 import { putJson, requireDataBucket } from './r2';
@@ -10,7 +10,7 @@ import { normalizeEtag } from './bin-state';
 import { detachBinFromCollection, getCollection } from './collections';
 const conflict = () => new SystemError(409, 'restore_conflict');
 const dependencyConflict = () => new SystemError(409, 'restore_dependency_conflict');
-const namespace = (kind: RestoreResource['kind']) => kind === 'collection' ? 'collections' : kind === 'schema' ? 'schemas' : 'bins';
+const namespace = (kind: RestoreResource['kind']) => kind === 'collection' ? 'collections' : kind === 'schema' ? 'schemas' : kind === 'template' ? 'templates' : 'bins';
 async function objects(bucket: R2Bucket, prefix: string) {
   const result: R2Object[] = []; let cursor: string | undefined;
   do { const page = await bucket.list({ prefix, cursor, limit: 250 }); result.push(...page.objects); if (result.length > 250) throw conflict(); cursor = page.truncated ? page.cursor : undefined; } while (cursor);
@@ -47,6 +47,13 @@ async function checkDependencies(bucket: R2Bucket, input: RestoreRequest) {
         const bin = input.resource.data, pinned = revisions.find(r => r.revision === bin.meta.schemaRevision);
         if (!pinned) throw dependencyConflict();
         try { assertSchemaDefinition(pinned.schema); assertSchemaValue(pinned.schema, bin.versions.find(v => v.version === bin.meta.currentVersion)!.value); } catch { throw dependencyConflict(); }
+      }
+      if (input.resource.kind === 'template') {
+        const tpl = input.resource.data as BackupTemplate;
+        if (!tpl.meta.schemaId) throw dependencyConflict();
+        const pinned = revisions.find(r => r.revision === tpl.meta.schemaRevision);
+        if (!pinned) throw dependencyConflict();
+        try { assertSchemaDefinition(pinned.schema); assertSchemaValue(pinned.schema, tpl.versions.find(v => v.version === tpl.meta.currentVersion)!.value); } catch { throw dependencyConflict(); }
       }
     }
     // Receipts alone do not authorize changed metadata or changed model files.
@@ -86,7 +93,8 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
       const raced = await existing(); if (raced) return raced;
     }
     const files = resource.kind === 'bin' ? resource.data.versions.map((v, order) => ({ order, key: historyKey('bin', id, v.version), value: v.value, uploadedAt: v.uploadedAt }))
-      : resource.kind === 'schema' ? resource.data.revisions.map((v, order) => ({ order, key: historyKey('schema', id, v.revision), value: v.schema, uploadedAt: v.uploadedAt })) : [];
+      : resource.kind === 'schema' ? resource.data.revisions.map((v, order) => ({ order, key: historyKey('schema', id, v.revision), value: v.schema, uploadedAt: v.uploadedAt }))
+      : resource.kind === 'template' ? (resource.data as BackupTemplate).versions.map((v, order) => ({ order, key: historyKey('template', id, v.version), value: v.value, uploadedAt: v.uploadedAt })) : [];
     const expected = new Set([key, ...files.map(v => v.key)]);
     async function checkFiles(complete: boolean) {
       const stored = await objects(bucket, prefix);
@@ -128,7 +136,8 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
 
     const published = await putJson(bucket, key, meta, { onlyIf: { etagMatches: normalizeEtag(record.object.httpEtag) }, customMetadata: { restoreFingerprint: fingerprint } });
     if (published) {
-      await syncSearchResource(env, resource.kind === 'purged' ? 'bin' : resource.kind, id);
+      // Templates are not part of the search index.
+      if (resource.kind !== 'template') await syncSearchResource(env, resource.kind === 'purged' ? 'bin' : resource.kind, id);
       return cleanupCollection(env, input, result('created'));
     }
     record = await read(bucket, key); const winner = await existing(); if (winner) return winner; throw conflict();

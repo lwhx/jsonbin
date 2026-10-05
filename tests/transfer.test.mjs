@@ -16,7 +16,7 @@ test('file parsing accepts BOM scalar arrays and explicit raw format fields; rej
  for(const file of [new File([Uint8Array.of(255)],'bad.json'),new File([''],'empty.json'),new File(['1e999'],'infinity.json')])await assert.rejects(files.parseStandardFiles([file]));
  let reads=0;const huge={size:1024*1024+1,name:'huge.json',arrayBuffer:async()=>{reads++;return new ArrayBuffer(0)}};await assert.rejects(files.parseStandardFiles([huge]));assert.equal(reads,0);
  await assert.rejects(files.parseStandardFiles(Array.from({length:101},()=>new File(['null'],'x.json'))));
- const p=richBackup();assert.deepEqual(await files.readBackupFile(new File([JSON.stringify(p)],'backup.json')),p);assert.deepEqual(await files.readBackupFile(new File([await encodeBackupZip(p)],'backup.zip')),p);
+ const p=richBackup();assert.deepEqual(await files.readBackupFile(new File([JSON.stringify(p)],'backup.json')),{...p,templates:[]});assert.deepEqual(await files.readBackupFile(new File([await encodeBackupZip(p)],'backup.zip')),{...p,templates:[]});
 });
 test('restore orchestrator orders dependencies, skips their conflicts, continues independent resources and leaves settings unapplied',async()=>{
  assert.equal(typeof transfer.buildRestoreRequests,'function');const p=richBackup(),inputs=await transfer.buildRestoreRequests(p);assert.deepEqual(inputs.map(i=>i.resource.kind),['collection','schema','bin','purged']);

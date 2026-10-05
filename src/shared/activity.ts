@@ -9,7 +9,7 @@ export const ACTIVITY_ACTIONS = {
   'bin.purged': ['bin', '永久删除数据仓'], 'bin.expired': ['bin', '数据仓到期归档'],
   'collection.created': ['collection', '创建集合'], 'collection.updated': ['collection', '修改集合'], 'collection.deleted': ['collection', '删除集合'],
   'schema.created': ['schema', '创建数据模型'], 'schema.updated': ['schema', '修改数据模型'], 'schema.deleted': ['schema', '删除数据模型'],
-  'template.created': ['template', '创建模板'], 'template.updated': ['template', '修改模板'], 'template.deleted': ['template', '删除模板'],
+  'template.created': ['template', '创建模板'], 'template.updated': ['template', '修改模板'], 'template.deleted': ['template', '删除模板'], 'template.imported': ['template', '导入模板'],
   'key.created': ['key', '创建 API 密钥'], 'key.revoked': ['key', '撤销 API 密钥'], 'key.deleted': ['key', '永久删除 API 密钥'],
 } as const;
 export type ActivityAction = keyof typeof ACTIVITY_ACTIONS;

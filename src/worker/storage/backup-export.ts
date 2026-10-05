@@ -1,14 +1,14 @@
 import { readBackupJson } from './backup-json';
 import { version } from '../../../package.json';
 import { SystemError, type ExportPayload, type ExportQuery } from '../../shared/system.ts';
-import { MAX_BACKUP_BYTES, binMetaShape, collectionMetaShape, schemaMetaShape, validateBackup, validateBusinessValue, isImportMarker } from '../../shared/backup.ts';
-import type { BackupPackage, BackupBin, BackupSchema, BackupCollection } from '../../shared/backup-types.ts';
+import { MAX_BACKUP_BYTES, binMetaShape, collectionMetaShape, schemaMetaShape, templateMetaShape, validateBackup, validateBusinessValue, isImportMarker } from '../../shared/backup.ts';
+import type { BackupPackage, BackupBin, BackupSchema, BackupCollection, BackupTemplate } from '../../shared/backup-types.ts';
 import { getSettings } from './settings';
 import { requireDataBucket } from './r2';
 const jsonType = 'application/json; charset=utf-8' as const;
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-const metaPattern = new RegExp(`^(bins|trash/bins|collections|schemas)/(${uuid})/meta\\.json$`);
-export const historyKey = (kind: 'bin' | 'schema', id: string, number: number) => `${kind === 'bin' ? 'bins' : 'schemas'}/${id}/${kind === 'bin' ? 'versions' : 'revisions'}/${String(number).padStart(6, '0')}.json`;
+const metaPattern = new RegExp(`^(bins|trash/bins|collections|schemas|templates)/(${uuid})/meta\\.json$`);
+export const historyKey = (kind: 'bin' | 'schema' | 'template', id: string, number: number) => `${kind === 'bin' ? 'bins' : kind === 'schema' ? 'schemas' : 'templates'}/${id}/${kind === 'schema' ? 'revisions' : 'versions'}/${String(number).padStart(6, '0')}.json`;
 async function list(bucket: R2Bucket, prefix: string): Promise<R2Object[]> {
   const objects: R2Object[] = []; let cursor: string | undefined;
   do { const page = await bucket.list({ prefix, cursor, limit: 1000, include: ['customMetadata'] }); objects.push(...page.objects);
@@ -21,8 +21,8 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
     const bucket = requireDataBucket(env);
     if (query.scope === 'bin' && query.format === 'value') return await exportCurrentValue(bucket, query.id);
     const settings = await getSettings(env);
-    const p: BackupPackage = { format: 'jsonbin-backup', schemaVersion: 1, appVersion: version, exportedAt: new Date().toISOString(), scope: query.scope === 'bin' ? { kind: 'bin', id: query.id } : { kind: query.scope },
-      settings: { defaultVisibility: settings.settings.defaultVisibility, defaultTtlSeconds: settings.settings.defaultTtlSeconds }, collections: [], schemas: [], bins: [], purged: [] };
+    const p: BackupPackage = { format: 'jsonbin-backup', schemaVersion: 2, appVersion: version, exportedAt: new Date().toISOString(), scope: query.scope === 'bin' ? { kind: 'bin', id: query.id } : { kind: query.scope },
+      settings: { defaultVisibility: settings.settings.defaultVisibility, defaultTtlSeconds: settings.settings.defaultTtlSeconds }, collections: [], schemas: [], bins: [], templates: [], purged: [] };
     const checks: (() => Promise<void>)[] = []; let businessBytes = 0, objectCount = 1;
     function budget(value: unknown) { businessBytes += new TextEncoder().encode(JSON.stringify(value)).length; if (businessBytes > MAX_BACKUP_BYTES) throw new SystemError(413, 'payload_too_large'); }
     async function read(key: string) {
@@ -42,6 +42,29 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
       };
       checks.push(checkMeta);
       if (namespace === 'collections') { const result = { meta: project(meta, Object.keys(collectionMetaShape.shape)) } as BackupCollection; budget(result); p.collections.push(result); await checkMeta(); return; }
+      if (namespace === 'templates') {
+        const kind = 'template' as const;
+        const prefix = `templates/${id}/versions/`;
+        const canonical = (objects: R2Object[]) => objects.filter(o => {
+          const filename = o.key.slice(prefix.length), n = Number(filename.slice(0, -5));
+          return /^\d{6,}\.json$/.test(filename) && Number.isSafeInteger(n) && n > 0 && o.key === historyKey(kind, id, n);
+        }).sort((a, b) => a.key.localeCompare(b.key));
+        const files = canonical(await list(bucket, prefix));
+        if (objectCount + files.length > 250) throw new SystemError(413, 'payload_too_large');
+        const snapshot = JSON.stringify(files.map(o => [o.key, o.etag]));
+        checks.push(async () => { if (JSON.stringify(canonical(await list(bucket, prefix)).map(o => [o.key, o.etag])) !== snapshot) throw new SystemError(409, 'backup_changed'); });
+        const history = [];
+        for (const file of files) {
+          const record = await read(file.key); budget(record.value); if (record.object.etag !== file.etag) throw new SystemError(409, 'backup_changed');
+          history.push({ number: Number(file.key.slice(prefix.length, -5)), uploadedAt: record.object.customMetadata?.originalUploadedAt ?? record.object.uploaded.toISOString(), value: record.value });
+        }
+        if (!history.some(v => v.number === meta.currentVersion)) throw new SystemError(409, 'backup_unavailable');
+        const projected = project({ ...meta, tags: Array.isArray(meta.tags) ? meta.tags : [] }, Object.keys(templateMetaShape.shape));
+        budget(projected);
+        p.templates.push({ meta: projected, versions: history.map(v => ({ version: v.number, uploadedAt: v.uploadedAt, value: v.value })) } as BackupTemplate);
+        await checkMeta();
+        return;
+      }
       if (meta.purgeState === 'purged') { const marker = { id, deletedAt: meta.deletedAt as string }; budget(marker); p.purged.push(marker); await checkMeta(); return; }
       const kind = namespace === 'schemas' ? 'schema' : 'bin';
       const prefix = `${kind === 'schema' ? 'schemas' : 'bins'}/${id}/${kind === 'schema' ? 'revisions' : 'versions'}/`;
@@ -72,7 +95,7 @@ export async function exportData(env: Env, query: ExportQuery): Promise<ExportPa
     }
     if (query.scope === 'all') {
       const keys = new Map<string, string>();
-      for (const namespace of ['trash/bins/', 'bins/', 'collections/', 'schemas/']) for (const object of await list(bucket, namespace)) {
+      for (const namespace of ['trash/bins/', 'bins/', 'collections/', 'schemas/', 'templates/']) for (const object of await list(bucket, namespace)) {
         const match = metaPattern.exec(object.key); if (!match) continue;
         keys.set(`${match[1] === 'trash/bins' ? 'bins' : match[1]}/${match[2]}`, object.key);
       }

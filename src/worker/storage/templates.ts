@@ -77,6 +77,7 @@ export async function createTemplate(
     tags?: string[];
     value: unknown;
     schemaId?: string | null;
+    schemaRevision?: number | null;
   },
 ): Promise<TemplateRecord> {
   const bucket = requireDataBucket(env);
@@ -87,8 +88,14 @@ export async function createTemplate(
   if (input.schemaId) {
     const schemaRecord = await getSchema(env, input.schemaId);
     if (!schemaRecord) throw new SchemaError("schema_unavailable");
-    assertSchemaValue(schemaRecord.schema, input.value);
-    schemaRevision = schemaRecord.meta.currentRevision;
+    if (input.schemaRevision) {
+      // Pin the template to the exact revision the caller captured.
+      await assertBoundSchema(env, { schemaId: input.schemaId, schemaRevision: input.schemaRevision }, input.value);
+      schemaRevision = input.schemaRevision;
+    } else {
+      assertSchemaValue(schemaRecord.schema, input.value);
+      schemaRevision = schemaRecord.meta.currentRevision;
+    }
   }
 
   const meta: TemplateMeta = {
