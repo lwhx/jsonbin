@@ -18,6 +18,8 @@ export type BinMeta = {
   updatedAt: string;
   expiresAt: string | null;
   contentSearchMode?: "off" | "keys" | "all";
+  publishedVersion?: number | null;
+  publishedAt?: string | null;
 };
 export type BinRecord = { meta: BinMeta; value: unknown; etag: string };
 export type MetadataInput = Pick<BinMeta, "name" | "slug" | "tags" | "favorite" | "pinned" | "description" | "visibility" | "collectionId" | "schemaId" | "schemaLocked" | "expiresAt" | "contentSearchMode"> & { refreshSchema?: boolean };

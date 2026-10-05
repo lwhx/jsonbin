@@ -5,10 +5,10 @@ import type { BinRecord } from "./types";
 
 const JsonDiff = lazy(() => import("./JsonDiff"));
 
-export default function BinHistory({ record, dark, busy, onRestore }: {
-  record: BinRecord; dark: boolean; busy: boolean; onRestore: (version: number) => void;
+export default function BinHistory({ record, dark, busy, onRestore, onPublish }: {
+  record: BinRecord; dark: boolean; busy: boolean; onRestore: (version: number) => void; onPublish?: (version: number) => void;
 }) {
-  const { id, currentVersion, locked } = record.meta;
+  const { id, currentVersion, locked, publishedVersion } = record.meta;
   const versions = useQuery({ queryKey: ["bin-versions", id, currentVersion],
     queryFn: ({ signal }) => listBinVersions(id, undefined, signal), retry: false });
   const [selected, setSelected] = useState<number | null>(null);
@@ -34,8 +34,8 @@ export default function BinHistory({ record, dark, busy, onRestore }: {
   const ready = Boolean(original.data && (compared === "current" || modified.data));
 
   return <div className="bin-history">
-    <div className="history-heading"><h2>版本历史</h2><span>共 {versions.data.total} 个版本 · 当前 v{currentVersion}</span></div>
-    <p className="history-hint">恢复会将所选内容保存为新版本，已有版本保持不变。</p>
+    <div className="history-heading"><h2>版本历史</h2><span>共 {versions.data.total} 个版本 · 当前 v{currentVersion}{publishedVersion && ` · 已发布 v${publishedVersion}`}</span></div>
+    <p className="history-hint">恢复会将所选内容保存为新版本；发布会将生产只读指针指向所选版本。</p>
     <div className="history-table-wrap"><table className="history-table"><caption>已保存的版本</caption>
       <thead><tr><th scope="col">版本</th><th scope="col">保存时间</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead>
       <tbody>{items.map(item => <tr key={item.version}>
@@ -53,6 +53,16 @@ export default function BinHistory({ record, dark, busy, onRestore }: {
         {items.map(item => <option key={item.version} value={item.version}>v{item.version}</option>)}
       </select></label>
       <button className="primary-button" disabled={busy || locked || !original.data} onClick={() => onRestore(left)}>恢复 v{left}</button>
+      {onPublish && (
+        <button
+          className="secondary-button"
+          disabled={busy || locked || !original.data}
+          onClick={() => onPublish(left)}
+          title={`将生产发布指针指向 v${left}`}
+        >
+          {publishedVersion ? `发布/回滚到 v${left}` : `发布 v${left}`}
+        </button>
+      )}
     </div>
     {locked && <p className="history-hint">数据仓已锁定，可以查看历史，但不能恢复。</p>}
     {error && <div className="history-message"><p role="alert">{error.message}</p>

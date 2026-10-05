@@ -396,6 +396,75 @@ test('P19: searchJsonContent scans active Bins with contentSearchMode and matche
   assert.equal(dataAll.items.some(i => i.binId === binAll.meta.id && i.matchType === 'value' && i.snippet === 'alice'), true);
 });
 
+test('P20: configuration publish, rollback and /published endpoints honor pointers', async () => {
+  const bin = await create({ env: 'development', port: 3000 });
+  const path = `/bins/${bin.meta.id}`;
+
+  // Update to v2
+  const v2Res = await request(path, {
+    method: 'PUT',
+    etag: bin.etag,
+    value: { value: { env: 'staging', port: 4000 } },
+  });
+  const v2 = await v2Res.json();
+  assert.equal(v2.meta.currentVersion, 2);
+
+  // 1. Initially no published version -> 404
+  const noPubRes = await request(`${path}/published`);
+  assert.equal(noPubRes.status, 404);
+
+  // 2. Publish v1 explicitly
+  const pubV1Res = await request(`${path}/publish`, {
+    method: 'POST',
+    etag: v2.etag,
+    value: { version: 1 },
+  });
+  assert.equal(pubV1Res.status, 200);
+  const pubV1 = await pubV1Res.json();
+  assert.equal(pubV1.meta.publishedVersion, 1);
+  assert.equal(pubV1.meta.currentVersion, 2); // currentVersion remains untouched!
+
+  // 3. Read published endpoint -> returns v1 content
+  const readPub1 = await (await request(`${path}/published`)).json();
+  assert.deepEqual(readPub1.value, { env: 'development', port: 3000 });
+
+  // 4. Update to v3
+  const v3Res = await request(path, {
+    method: 'PUT',
+    etag: pubV1.etag,
+    value: { value: { env: 'production', port: 8080 } },
+  });
+  const v3 = await v3Res.json();
+  assert.equal(v3.meta.currentVersion, 3);
+
+  // Published remains v1
+  const readPubStill1 = await (await request(`${path}/published`)).json();
+  assert.deepEqual(readPubStill1.value, { env: 'development', port: 3000 });
+
+  // 5. Publish currentVersion (defaults to latest v3)
+  const pubV3Res = await request(`${path}/publish`, {
+    method: 'POST',
+    etag: v3.etag,
+  });
+  assert.equal(pubV3Res.status, 200);
+  const pubV3 = await pubV3Res.json();
+  assert.equal(pubV3.meta.publishedVersion, 3);
+
+  // 6. Rollback publication to v2
+  const rollbackRes = await request(`${path}/rollback`, {
+    method: 'POST',
+    etag: pubV3.etag,
+    value: { version: 2 },
+  });
+  assert.equal(rollbackRes.status, 200);
+  const rolledBack = await rollbackRes.json();
+  assert.equal(rolledBack.meta.publishedVersion, 2);
+
+  // Read published endpoint -> returns v2 content!
+  const readPub2 = await (await request(`${path}/published`)).json();
+  assert.deepEqual(readPub2.value, { env: 'staging', port: 4000 });
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

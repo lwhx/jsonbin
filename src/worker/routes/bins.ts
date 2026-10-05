@@ -8,13 +8,14 @@ import {
   deleteBin,
   getBin,
   getBinBySlug,
-  listBins,
-  updateBin,
-  updateBinMetadata,
-  listBinVersions,
   getBinVersion,
+  listBins,
+  listBinVersions,
+  publishBinVersion,
   restoreBinVersion,
   transformBin,
+  updateBin,
+  updateBinMetadata,
   type BinRecord,
 } from "../storage/bins";
 import { createTemplate } from "../storage/templates";
@@ -368,6 +369,87 @@ app.post("/:id/save-as-template", requireAccess(["bin:read"]), checkBinMutationA
   }
 });
 
+app.post("/:id/publish", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
+  const ifMatch = c.req.header("If-Match");
+  if (!ifMatch?.trim()) return c.json({ error: "precondition_required" }, 428);
+
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) || {};
+  const version = typeof body.version === "number" ? body.version : undefined;
+
+  try {
+    const updated = await publishBinVersion(c.env, id, version, ifMatch);
+    if (!updated) return c.json({ error: "not_found" }, 404);
+
+    c.header("ETag", updated.etag);
+    c.header("X-JSONBin-Version", String(updated.meta.currentVersion));
+    await auditRequest(c, "bin.metadata_updated", updated.meta.id);
+    return c.json(updated);
+  } catch (err: any) {
+    if (err.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    if (err.message === "invalid_version" || err.message === "version_not_found") return c.json({ error: err.message }, 422);
+    if (err instanceof SchemaError || err.message?.startsWith("schema_")) return c.json({ error: err.message }, 422);
+    throw err;
+  }
+});
+
+app.post("/:id/rollback", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
+  const ifMatch = c.req.header("If-Match");
+  if (!ifMatch?.trim()) return c.json({ error: "precondition_required" }, 428);
+
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) || {};
+  const version = typeof body.version === "number" ? body.version : undefined;
+  if (!version) return c.json({ error: "invalid_version" }, 422);
+
+  try {
+    const updated = await publishBinVersion(c.env, id, version, ifMatch);
+    if (!updated) return c.json({ error: "not_found" }, 404);
+
+    c.header("ETag", updated.etag);
+    c.header("X-JSONBin-Version", String(updated.meta.currentVersion));
+    await auditRequest(c, "bin.metadata_updated", updated.meta.id);
+    return c.json(updated);
+  } catch (err: any) {
+    if (err.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    if (err.message === "invalid_version" || err.message === "version_not_found") return c.json({ error: err.message }, 422);
+    if (err instanceof SchemaError || err.message?.startsWith("schema_")) return c.json({ error: err.message }, 422);
+    throw err;
+  }
+});
+
+app.get("/:id/published", readCurrent, async (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record.meta.publishedVersion) return c.json({ error: "no_published_version" }, 404);
+
+  const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
+  if (!published) return c.json({ error: "published_version_missing" }, 404);
+
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  return c.json({
+    meta: record.meta,
+    value: published.value,
+    etag: record.etag,
+  });
+});
+
+app.on("GET", ["/:id/published/value", "/:id/published/value/*"], readCurrent, async (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record.meta.publishedVersion) return c.json({ error: "no_published_version" }, 404);
+
+  const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
+  if (!published) return c.json({ error: "published_version_missing" }, 404);
+
+  const path = valuePath(c.req.url);
+  const value = readValue(published.value, path);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  return c.json({ id: record.meta.id, path, value, etag: record.etag, version: record.meta.publishedVersion });
+});
+
 app.post("/:id/clone", requireAccess(["bin:read", "bin:create"]), checkBinMutationAccess, async (c) => {
   const ifMatch = c.req.header("If-Match");
   if (!ifMatch?.trim()) {
@@ -551,6 +633,23 @@ const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables
 
 export const slugApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 slugApp.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+slugApp.get("/:slug/published", readCurrentBySlug, async (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record.meta.publishedVersion) return c.json({ error: "no_published_version" }, 404);
+
+  const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
+  if (!published) return c.json({ error: "published_version_missing" }, 404);
+
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  return c.json({
+    meta: record.meta,
+    value: published.value,
+    etag: record.etag,
+  });
+});
+
 slugApp.get("/:slug", readCurrentBySlug, async (c) => {
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);

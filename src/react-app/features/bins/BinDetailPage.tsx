@@ -179,6 +179,38 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       setNotice(`已恢复 v${version}，生成新版本 v${record.meta.currentVersion}。`);
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
+  async function publish(version: number) {
+    if (!draft || busy || draft.record.meta.locked) return;
+    if (!await confirm({
+      title: `发布配置版本 v${version}？`,
+      message: `将生产已发布指针 (Published Version) 指向 v${version}。通过 /published 读取的外部应用将即时切换到该版本。`,
+      confirmLabel: "确认发布",
+    })) return;
+    setBusy("metadata"); setError(null); setNotice("");
+    try {
+      const res = await fetch(`/api/v1/bins/${id}/publish`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "If-Match": draft.record.etag },
+        body: JSON.stringify({ version }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(new Error(body.error === "schema_validation_failed" ? "该历史版本不符合当前数据模型，无法发布。" : "发布失败，可能版本冲突，请重试。"));
+        return;
+      }
+      const updated = await res.json();
+      if (!mounted.current) return;
+      setDraft(createDraft(updated)); setMetadata(metadataOf(updated));
+      client.setQueryData(["bin", id], updated);
+      await client.invalidateQueries({ queryKey: ["bins"] });
+      setNotice(`已成功发布配置 v${version}！`);
+    } catch {
+      setError(new Error("网络异常，无法发布配置。"));
+    } finally {
+      setBusy(null);
+    }
+  }
   async function confirmDelete() {
     if (busy || !draft || draft.record.meta.locked) return;
     setBusy("delete"); setError(null);
@@ -350,7 +382,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         : <div className="json-tree-invalid"><p className="detail-error" role="alert">{parsed.error}请返回编辑器修正后查看树形视图。</p>
           <button type="button" className="secondary-button" onClick={() => setTab('编辑器')}>返回编辑器</button></div>)}
       {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
-        <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} />
+        <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} onPublish={publish} />
       </Suspense>}
       {tab === "API" && <BinApiPanel bin={{id: record.meta.id, etag: record.etag, visibility: record.meta.visibility, locked: record.meta.locked, expiresAt: record.meta.expiresAt}} />}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>

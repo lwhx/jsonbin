@@ -29,6 +29,8 @@ export type BinMeta = {
   updatedAt: string;
   expiresAt: string | null;
   contentSearchMode?: "off" | "keys" | "all";
+  publishedVersion?: number | null;
+  publishedAt?: string | null;
   deletedAt?: string;
   deletionReason?: "manual" | "expired";
   purgeState?: "purging";
@@ -429,6 +431,50 @@ export type BinMetadataInput = {
   contentSearchMode?: "off" | "keys" | "all";
   expiresAt?: string | null;
 };
+
+export async function publishBinVersion(
+  env: Env,
+  id: string,
+  targetVersion?: number,
+  expectedEtag?: string,
+): Promise<BinRecord | null> {
+  const current = await getBin(env, id);
+  if (!current) return null;
+  assertWritable(current.meta, current.etag, expectedEtag);
+
+  const versionToPublish = targetVersion ?? current.meta.currentVersion;
+  if (!Number.isInteger(versionToPublish) || versionToPublish < 1 || versionToPublish > current.meta.currentVersion) {
+    throw new Error("invalid_version");
+  }
+
+  // Load target version value to validate against schema
+  const versionObj = await getBinVersion(env, id, versionToPublish);
+  if (!versionObj) throw new Error("version_not_found");
+
+  if (current.meta.schemaId && current.meta.schemaRevision) {
+    await assertBoundSchema(
+      env,
+      { schemaId: current.meta.schemaId, schemaRevision: current.meta.schemaRevision },
+      versionObj.value,
+    );
+  }
+
+  const bucket = requireDataBucket(env);
+  const now = new Date().toISOString();
+  const meta: BinMeta = {
+    ...current.meta,
+    publishedVersion: versionToPublish,
+    publishedAt: now,
+    updatedAt: now,
+  };
+
+  const metaObject = await putJson(bucket, metaKey(id), meta);
+  return {
+    meta,
+    value: current.value,
+    etag: metaObject.etag,
+  };
+}
 
 export async function updateBinMetadata(
   env: Env, id: string, input: BinMetadataInput, expectedEtag?: string,
