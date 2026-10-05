@@ -140,6 +140,62 @@ export async function listBins(env: Env, options?: { tag?: string; favorite?: bo
   });
 }
 
+export async function cloneBin(
+  env: Env,
+  id: string,
+  ifMatch?: string,
+): Promise<BinRecord> {
+  const current = await getBin(env, id);
+  if (!current) throw new Error("not_found");
+  if (ifMatch && current.etag !== ifMatch && `"${current.etag}"` !== ifMatch && current.etag !== `"${ifMatch}"`) {
+    throw new Error("etag_conflict");
+  }
+
+  // Schema pinned revision validation
+  if (current.meta.schemaId && current.meta.schemaRevision) {
+    await assertBoundSchema(env, { schemaId: current.meta.schemaId, schemaRevision: current.meta.schemaRevision }, current.value);
+  }
+
+  const name = `${current.meta.name} - 副本`.slice(0, 160);
+  const bucket = requireDataBucket(env);
+  const newId = crypto.randomUUID();
+  const lifecycleId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const json = JSON.stringify(current.value);
+
+  const meta: BinMeta = {
+  id: newId,
+  name,
+  slug: null,
+  tags: Array.isArray(current.meta.tags) ? [...current.meta.tags] : [],
+  favorite: false,
+    pinned: false,
+    description: current.meta.description ?? "",
+    visibility: "private",
+    collectionId: current.meta.collectionId ?? null,
+    schemaId: current.meta.schemaId ?? null,
+    schemaRevision: current.meta.schemaRevision ?? null,
+    currentVersion: 1,
+    size: new TextEncoder().encode(json).byteLength,
+    locked: false,
+    schemaLocked: false,
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: null,
+    lifecycleId,
+  };
+
+  await putJson(bucket, versionKey(newId, 1), current.value);
+  const metaObject = await putJson(bucket, metaKey(newId), meta);
+  await syncSearchResource(env, "bin", newId);
+
+  return {
+    meta,
+    value: current.value,
+    etag: metaObject.etag,
+  };
+}
+
 export async function createBin(
   env: Env,
   input: {

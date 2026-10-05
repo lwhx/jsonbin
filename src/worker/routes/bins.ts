@@ -3,6 +3,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
 import {
+  cloneBin,
   createBin,
   deleteBin,
   getBin,
@@ -16,6 +17,7 @@ import {
   transformBin,
   type BinRecord,
 } from "../storage/bins";
+import { createTemplate } from "../storage/templates";
 import { mergePatch, readValue, valuePath, writeValue } from "../validation/json-operations";
 
 import { SchemaError } from "../validation/schema";
@@ -193,6 +195,74 @@ app.get("/", requireAccess("bin:read"), async (c) => {
     items,
     total: items.length,
   });
+});
+
+app.post("/:id/save-as-template", requireAccess(["bin:read"]), checkBinMutationAccess, async (c) => {
+  const ifMatch = c.req.header("If-Match");
+  if (!ifMatch?.trim()) {
+    return c.json({ error: "precondition_required" }, 428);
+  }
+
+  const id = c.req.param("id");
+  const current = await getBin(c.env, id);
+  if (!current) return c.json({ error: "not_found" }, 404);
+
+  if (current.etag !== ifMatch && `"${current.etag}"` !== ifMatch && current.etag !== `"${ifMatch}"`) {
+    return c.json({ error: "etag_conflict" }, 412);
+  }
+
+  const body = (await c.req.json().catch(() => ({}))) || {};
+  const name = body.name?.trim() || `${current.meta.name} 模板`;
+  const description = body.description !== undefined ? body.description.trim() : (current.meta.description || "");
+
+  try {
+    const template = await createTemplate(c.env, {
+      name,
+      description,
+      tags: Array.isArray(current.meta.tags) ? [...current.meta.tags] : [],
+      value: current.value,
+      schemaId: current.meta.schemaId,
+    });
+    c.header("ETag", template.etag);
+    await auditRequest(c, "template.created", template.meta.id);
+    return c.json(template, 201);
+  } catch (error: any) {
+    if (error instanceof SchemaError || error.message?.startsWith("schema_")) {
+      return c.json({ error: error.message }, 422);
+    }
+    throw error;
+  }
+});
+
+app.post("/:id/clone", requireAccess(["bin:read", "bin:create"]), checkBinMutationAccess, async (c) => {
+  const ifMatch = c.req.header("If-Match");
+  if (!ifMatch?.trim()) {
+    return c.json({ error: "precondition_required" }, 428);
+  }
+
+  const id = c.req.param("id");
+  const key = c.get("apiKey");
+
+  try {
+    const cloned = await cloneBin(c.env, id, ifMatch);
+    if (key && key.resourceAccess?.mode === "restricted" && cloned.meta.collectionId) {
+      if (!checkResourceAccess(key, { type: "collection", id: cloned.meta.collectionId })) {
+        return c.json({ error: "resource_forbidden" }, 403);
+      }
+    }
+
+    c.header("ETag", cloned.etag);
+    c.header("X-JSONBin-Version", String(cloned.meta.currentVersion));
+    await auditRequest(c, "bin.created", cloned.meta.id);
+    return c.json(cloned, 201);
+  } catch (error: any) {
+    if (error.message === "not_found") return c.json({ error: "not_found" }, 404);
+    if (error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    if (error instanceof SchemaError || error.message?.startsWith("schema_")) {
+      return c.json({ error: error.message }, 422);
+    }
+    throw error;
+  }
 });
 
 app.post("/", requireAccess("bin:create"), async (c) => {

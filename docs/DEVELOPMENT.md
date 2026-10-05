@@ -1174,6 +1174,11 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 实现基于 R2 权威元数据的动态两层校验（Scope + Resource Policy），Bin 移出 Collection 权限即刻失效。
   - 路由安全防御：受限 Key 只能在授权集合下创建 Bin，列表与全局搜索自动修剪防信息嗅探泄露。
   - 网页控制台支持资源范围单选与 UUID 配置，密钥卡片清晰呈现受限范围。
+- [x] **P15：Bin 克隆与 JSON Template 模板库体系**：
+  - 支持 `POST /api/v1/bins/:id/clone`，遵循强条件写入（`If-Match`），私有化重置、新 UUID、重置锁与生命周期状态，保留 JSON、标签与绑定 Schema Revision。
+  - 支持独立资源 R2 存储体系 `templates/<id>/meta.json` 及不可变版本快照。
+  - 提供模板全套 CRUD、`POST /api/v1/bins/:id/save-as-template`（Bin 另存为模板）与 `POST /api/v1/templates/:id/create-bin`（模板实例化）。
+  - 前端支持详情页一键「克隆」、新建数据仓弹窗支持「空白创建」与「从模板创建」切换。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

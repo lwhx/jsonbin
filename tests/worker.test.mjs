@@ -7,7 +7,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 let mf, cookie, bucket;
 const password = randomBytes(32).toString('hex');
 const sessionSecret = randomBytes(32).toString('hex');
-export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin, body, contentType = 'application/json' } = {}) {
+export async function request(path, { method = 'GET', value, etag, authenticated = true, authorization, origin, body, contentType = 'application/json', headers = {} } = {}) {
   return mf.dispatchFetch('http://localhost/api/v1' + path, {
     method,
     headers: {
@@ -16,6 +16,7 @@ export async function request(path, { method = 'GET', value, etag, authenticated
       ...(etag ? { 'If-Match': etag } : {}),
       ...(authorization !== undefined ? { Authorization: authorization } : {}),
       ...(origin !== undefined ? { Origin: origin } : {}),
+      ...headers,
     },
     ...(body !== undefined ? { body } : value !== undefined ? { body: JSON.stringify(value) } : {}),
   });
@@ -211,6 +212,78 @@ test('P13: custom slug, alias endpoints, tags, favorite and pinned filtering', a
 
   const favFilter = await (await request('/bins?favorite=true')).json();
   assert.equal(favFilter.items.some(i => i.id === created.meta.id), false);
+});
+
+test('P15: clone Bin creates private copy preserving JSON, tags, and schema revision', async () => {
+  const schema = await (await request('/schemas', {
+    method: 'POST',
+    value: { name: 'Simple Schema', schema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] } },
+  })).json();
+
+  const bin = await (await request('/bins', {
+    method: 'POST',
+    value: {
+      name: 'Original Bin',
+      slug: 'original-slug',
+      tags: ['important', 'v1'],
+      favorite: true,
+      pinned: true,
+      value: { count: 42 },
+      schemaId: schema.meta.id,
+    },
+  })).json();
+
+  // 1. Precondition required
+  const noEtag = await request(`/bins/${bin.meta.id}/clone`, { method: 'POST', etag: undefined });
+  console.log("NoEtag status:", noEtag.status, await noEtag.text());
+  assert.equal(noEtag.status, 428);
+
+  // 2. ETag conflict
+  const wrongEtag = await request(`/bins/${bin.meta.id}/clone`, { method: 'POST', headers: { 'If-Match': '"wrong"' } });
+  assert.equal(wrongEtag.status, 412);
+
+  // 3. Successful Clone
+  const clonedRes = await request(`/bins/${bin.meta.id}/clone`, { method: 'POST', etag: bin.etag });
+  assert.equal(clonedRes.status, 201);
+  const cloned = await clonedRes.json();
+
+  assert.notEqual(cloned.meta.id, bin.meta.id);
+  assert.equal(cloned.meta.name, 'Original Bin - 副本');
+  assert.equal(cloned.meta.slug, null); // Slug not cloned
+  assert.equal(cloned.meta.favorite, false); // favorite reset
+  assert.equal(cloned.meta.pinned, false); // pinned reset
+  assert.equal(cloned.meta.visibility, 'private'); // visibility reset to private
+  assert.equal(cloned.meta.schemaId, schema.meta.id);
+  assert.equal(cloned.meta.schemaRevision, 1);
+  assert.deepEqual(cloned.meta.tags, ['important', 'v1']);
+  assert.deepEqual(cloned.value, { count: 42 });
+
+  // 4. Save as Template
+  const tplRes = await request(`/bins/${bin.meta.id}/save-as-template`, {
+    method: 'POST',
+    etag: bin.etag,
+    value: { name: 'My Template' },
+  });
+  assert.equal(tplRes.status, 201);
+  const tpl = await tplRes.json();
+  assert.equal(tpl.meta.name, 'My Template');
+  assert.equal(tpl.meta.schemaId, schema.meta.id);
+  assert.deepEqual(tpl.value, { count: 42 });
+
+  // 5. Template list and create bin from template
+  const tplListRes = await request('/templates');
+  const tplList = await tplListRes.json();
+  assert.equal(tplList.items.some(t => t.id === tpl.meta.id), true);
+
+  const fromTplRes = await request(`/templates/${tpl.meta.id}/create-bin`, {
+    method: 'POST',
+    value: { name: 'From Template Bin' },
+  });
+  assert.equal(fromTplRes.status, 201);
+  const fromTplBin = await fromTplRes.json();
+  assert.equal(fromTplBin.meta.name, 'From Template Bin');
+  assert.deepEqual(fromTplBin.value, { count: 42 });
+  assert.equal(fromTplBin.meta.schemaId, schema.meta.id);
 });
 
 test('history lists stored versions with upload metadata and serves immutable values', async () => {

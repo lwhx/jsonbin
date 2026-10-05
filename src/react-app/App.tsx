@@ -1005,6 +1005,17 @@ function CreateBinDialog({
   const [schemaId, setSchemaId] = useState("");
   const [schemaLocked, setSchemaLocked] = useState(false);
   const [issues, setIssues] = useState<SchemaIssue[]>([]);
+  const [createMode, setCreateMode] = useState<"blank" | "template">("blank");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const templates = useQuery({
+    queryKey: ["templates"],
+    queryFn: async ({ signal }) => {
+      const res = await fetch("/api/v1/templates", { credentials: "include", signal });
+      if (!res.ok) return { items: [] };
+      return (await res.json()) as { items: Array<{ id: string; name: string; schemaId: string | null }> };
+    },
+    retry: false,
+  });
   const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const [jsonText, setJsonText] = useState(`{
@@ -1095,6 +1106,62 @@ function CreateBinDialog({
         </div>
 
         <form className="create-form" onSubmit={submit}>
+          <div className="form-grid" style={{ marginBottom: "12px" }}>
+            <label>
+              创建方式
+              <div style={{ display: "flex", gap: "16px", marginTop: "6px" }}>
+                <label className="schema-checkbox">
+                  <input
+                    type="radio"
+                    name="create-mode"
+                    value="blank"
+                    checked={createMode === "blank"}
+                    onChange={() => setCreateMode("blank")}
+                  />
+                  <span>空白 JSON</span>
+                </label>
+                <label className="schema-checkbox">
+                  <input
+                    type="radio"
+                    name="create-mode"
+                    value="template"
+                    checked={createMode === "template"}
+                    onChange={() => setCreateMode("template")}
+                  />
+                  <span>从模板创建</span>
+                </label>
+              </div>
+            </label>
+            {createMode === "template" && (
+              <label>
+                选择模板
+                <select
+                  value={selectedTemplateId}
+                  onChange={async (e) => {
+                    const id = e.target.value;
+                    setSelectedTemplateId(id);
+                    if (id) {
+                      try {
+                        const res = await fetch(`/api/v1/templates/${id}`, { credentials: "include" });
+                        if (res.ok) {
+                          const data = await res.json();
+                          setJsonText(JSON.stringify(data.value, null, 2));
+                          if (data.meta.schemaId) setSchemaId(data.meta.schemaId);
+                        }
+                      } catch {}
+                    }
+                  }}
+                >
+                  <option value="">请选择模板…</option>
+                  {templates.data?.items.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>
+                      {tpl.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
           <div className="form-grid">
             <label>
               名称

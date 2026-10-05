@@ -258,6 +258,24 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       <button type="button" className="secondary-button" onClick={() => copy(id)}><Copy size={14} />复制 Bin ID</button>
       <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button>
       <button type="button" className="secondary-button" onClick={() => copy(draft.text)} title="复制当前 JSON 内容"><Copy size={14} />复制 JSON</button>
+      <button type="button" className="secondary-button" onClick={async () => {
+        try {
+          const res = await fetch(`/api/v1/bins/${id}/clone`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "If-Match": record.etag },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setNotice("克隆成功，正在跳转…");
+            window.location.hash = `#/bins/${data.meta.id}`;
+          } else {
+            setError(new Error("克隆失败，可能版本已变更，请刷新重试。"));
+          }
+        } catch {
+          setError(new Error("网络异常，无法克隆数据仓。"));
+        }
+      }} title="基于当前快照克隆为新数据仓"><Copy size={14} />克隆</button>
     </div>
     {notice && <p className="detail-notice" role="status">{notice}</p>}
     {error && <div className="detail-error" role="alert">{error.message}

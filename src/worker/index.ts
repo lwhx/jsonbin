@@ -12,6 +12,7 @@ import binRoutes, { slugApp } from "./routes/bins";
 import schemaRoutes from "./routes/schemas";
 import collectionRoutes from "./routes/collections";
 import trashRoutes from "./routes/trash";
+import templateRoutes from "./routes/templates";
 import { sweepBins } from "./storage/trash";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
@@ -56,6 +57,7 @@ app.route("/api/v1/b", slugApp);
 app.route("/api/v1/collections", collectionRoutes);
 app.route("/api/v1/schemas", schemaRoutes);
 app.route("/api/v1/trash", trashRoutes);
+app.route("/api/v1/templates", templateRoutes);
 
 app.get("/api/v1/system/health", (c) => {
   return c.json({

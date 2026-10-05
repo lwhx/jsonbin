@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { ACTIVITY_ACTIONS, type ActivityAction, type ActivityPage as Page, type ActivityResourceType } from '../../../shared/activity';
 import { ActivityApiError, listActivity } from './api';
-const resources = { system: '系统', auth: '登录', bin: '数据仓', collection: '集合', schema: '数据模型', key: 'API 密钥' };
+const resources: Record<ActivityResourceType, string> = {
+  system: '系统', auth: '身份认证', bin: '数据仓', collection: '集合', schema: '数据模型', key: 'API 密钥', template: '模板',
+};
 const identities = { session: '管理 Session', api_key: 'API Key', anonymous: '匿名', system: '系统任务' };
 const providers = { password: '密码', github: 'GitHub', api_key: 'API Key', anonymous: '匿名', system: '系统' };
 export function ActivityPage() {
