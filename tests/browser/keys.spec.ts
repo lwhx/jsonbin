@@ -134,3 +134,23 @@ test('有效密钥可以直接永久删除，网络失败不会从列表移除�
   await expect(card).toHaveCount(0);
   expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${created.token}` } })).status()).toBe(401);
 });
+
+test('创建受限资源 API 密钥，界面正确展示资源范围标签与输入', async ({ page }) => {
+  await page.goto('/#/keys');
+  await expect(page.getByRole('heading', { name: 'API 密钥', level: 1 })).toBeVisible();
+
+  await page.getByLabel('密钥名称', { exact: true }).fill('只读受限密钥');
+  await page.getByRole('radio', { name: '限制资源' }).check();
+  await expect(page.getByLabel('允许的 Bin ID')).toBeVisible();
+  await expect(page.getByLabel('允许的 Collection ID')).toBeVisible();
+
+  await page.getByLabel('允许的 Bin ID').fill('11111111-1111-4111-8111-111111111111, 22222222-2222-4222-8222-222222222222');
+  await page.getByLabel('允许的 Collection ID').fill('33333333-3333-4333-8333-333333333333');
+
+  await page.getByRole('button', { name: '创建密钥', exact: true }).click();
+  await expect(page.getByRole('region', { name: '新密钥明文' })).toBeVisible();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+
+  const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: '只读受限密钥', exact: true }) });
+  await expect(card).toContainText('资源范围：2 个 Bin · 1 个 Collection');
+});

@@ -20,16 +20,32 @@ import { mergePatch, readValue, valuePath, writeValue } from "../validation/json
 
 import { SchemaError } from "../validation/schema";
 
+import { checkResourceAccess, type ApiKey } from "../storage/keys";
+
 type Variables = {
   bin?: BinRecord | null;
-  user: {
+  user?: {
     id: string;
     username: string;
     provider: "password" | "github";
   };
+  apiKey?: ApiKey;
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+const checkBinMutationAccess: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
+  const key = c.get("apiKey");
+  if (!key || key.resourceAccess?.mode !== "restricted") return next();
+
+  const id = c.req.param("id");
+  if (!id) return next();
+
+  const current = await getBin(c.env, id);
+  if (current && !checkResourceAccess(key, { type: "bin", id: current.meta.id, collectionId: current.meta.collectionId })) {
+    return c.json({ error: "resource_forbidden" }, 403);
+  }
+  await next();
+};
 const expiresAtSchema = z.iso.datetime({ offset: true }).refine(value => Date.parse(value) > Date.now(), "expiresAt must be in the future")
   .transform(value => new Date(value).toISOString()).nullable().optional();
 
@@ -37,7 +53,21 @@ const expiresAtSchema = z.iso.datetime({ offset: true }).refine(value => Date.pa
 app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
 
 const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
-  const load = async () => { c.set("bin", await getBin(c.env, c.req.param("id")!)); await next(); };
+  const load = async (): Promise<void> => {
+    const record = await getBin(c.env, c.req.param("id")!);
+    c.set("bin", record);
+    if (!record) {
+      await next();
+      return;
+    }
+
+    const key = c.get("apiKey");
+    if (key && !checkResourceAccess(key, { type: "bin", id: record.meta.id, collectionId: record.meta.collectionId })) {
+      c.res = c.json({ error: "resource_forbidden" }, 403);
+      return;
+    }
+    await next();
+  };
   // Explicit credentials keep their authentication and scope semantics on public Bins.
   if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
   const record = await getBin(c.env, c.req.param("id")!);
@@ -110,13 +140,13 @@ function parseVersion(value: string) {
   return Number.isSafeInteger(version) ? version : null;
 }
 
-app.get("/:id/versions", requireAccess("history:read"), async (c) => {
+app.get("/:id/versions", requireAccess("history:read"), checkBinMutationAccess, async (c) => {
   const versions = await listBinVersions(c.env, c.req.param("id"));
   if (!versions) return c.json({ error: "not_found" }, 404);
   return c.json(versions);
 });
 
-app.get("/:id/versions/:version", requireAccess("history:read"), async (c) => {
+app.get("/:id/versions/:version", requireAccess("history:read"), checkBinMutationAccess, async (c) => {
   const version = parseVersion(c.req.param("version"));
   if (version === null) return c.json({ error: "invalid_version" }, 422);
   const record = await getBinVersion(c.env, c.req.param("id"), version);
@@ -126,7 +156,7 @@ app.get("/:id/versions/:version", requireAccess("history:read"), async (c) => {
   return c.json(record);
 });
 
-app.post("/:id/versions/:version/restore", requireAccess(["bin:update", "history:read"]), async (c) => {
+app.post("/:id/versions/:version/restore", requireAccess(["bin:update", "history:read"]), checkBinMutationAccess, async (c) => {
   const version = parseVersion(c.req.param("version"));
   if (version === null) return c.json({ error: "invalid_version" }, 422);
   const expectedEtag = c.req.header("If-Match");
@@ -153,7 +183,12 @@ app.get("/", requireAccess("bin:read"), async (c) => {
   const favorite = favoriteParam === "true" ? true : favoriteParam === "false" ? false : undefined;
   const pinned = pinnedParam === "true" ? true : pinnedParam === "false" ? false : undefined;
 
-  const items = await listBins(c.env, { tag: tag || undefined, favorite, pinned });
+  let items = await listBins(c.env, { tag: tag || undefined, favorite, pinned });
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess && key.resourceAccess.mode === "restricted") {
+    items = items.filter(item => checkResourceAccess(key, { type: "bin", id: item.id, collectionId: item.collectionId }));
+  }
+
   return c.json({
     items,
     total: items.length,
@@ -167,6 +202,13 @@ app.post("/", requireAccess("bin:create"), async (c) => {
       { error: "validation_failed", issues: parsed.error.issues },
       422,
     );
+  }
+
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess && key.resourceAccess.mode === "restricted") {
+    if (!parsed.data.collectionId || !checkResourceAccess(key, { type: "collection", id: parsed.data.collectionId })) {
+      return c.json({ error: "resource_forbidden" }, 403);
+    }
   }
 
   const created = await createBin(c.env, parsed.data);
@@ -196,7 +238,7 @@ app.on("GET", ["/:id/value", "/:id/value/*"], readCurrent, (c) => {
   return c.json({ id: record.meta.id, path, value, etag: record.etag, version: record.meta.currentVersion });
 });
 
-app.patch("/:id", requireAccess("bin:update"), async (c) => {
+app.patch("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   let patch: unknown;
@@ -209,7 +251,7 @@ app.patch("/:id", requireAccess("bin:update"), async (c) => {
     return c.json(record);
 });
 
-app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), async (c) => {
+app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   const parsed = updateSchema.strict().safeParse(await c.req.json().catch(() => undefined));
@@ -223,7 +265,7 @@ app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), async
     return c.json(record);
 });
 
-app.put("/:id", requireAccess("bin:update"), async (c) => {
+app.put("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const parsed = updateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json(
@@ -259,19 +301,27 @@ app.put("/:id", requireAccess("bin:update"), async (c) => {
   }
 });
 
-app.delete("/:id", requireAccess("bin:delete"), async (c) => {
+app.delete("/:id", requireAccess("bin:delete"), checkBinMutationAccess, async (c) => {
   const deleted = await deleteBin(c.env, c.req.param("id"), c.req.header("If-Match"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
   await auditRequest(c, "bin.deleted", c.req.param("id"));
   return c.json({ ok: true });
 });
 
-app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
+app.patch("/:id/meta", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const parsed = metadataSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }
   if ((parsed.data.locked !== undefined || parsed.data.expiresAt !== undefined) && !c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
+
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess?.mode === "restricted" && parsed.data.collectionId) {
+    if (!checkResourceAccess(key, { type: "collection", id: parsed.data.collectionId })) {
+      return c.json({ error: "resource_forbidden" }, 403);
+    }
+  }
+
   try {
     const record = await updateBinMetadata(c.env, c.req.param("id"), parsed.data, c.req.header("If-Match"));
     if (!record) return c.json({ error: "not_found" }, 404);

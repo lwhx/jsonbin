@@ -2,11 +2,12 @@ export const scopes = ["bin:read", "bin:create", "bin:update", "bin:delete", "co
 export type ApiScope = typeof scopes[number];
 export const scopeLabels: Record<ApiScope, string> = { "bin:read": "读取数据仓", "bin:create": "创建数据仓", "bin:update": "修改数据仓", "bin:delete": "删除数据仓",
   "collection:read": "读取集合", "collection:write": "管理集合", "schema:read": "读取及校验模型", "schema:write": "管理模型", "history:read": "读取版本历史" };
-export type ApiKey = { id: string; name: string; prefix: string; scopes: ApiScope[]; createdAt: string;
+export type ResourceAccess = { mode: "all" } | { mode: "restricted"; binIds: string[]; collectionIds: string[] };
+export type ApiKey = { id: string; name: string; prefix: string; scopes: ApiScope[]; resourceAccess?: ResourceAccess; createdAt: string;
   expiresAt: string | null; revokedAt: string | null; lastUsedAt: string | null; revealable: boolean };
-export type KeyInput = { name: string; scopes: ApiScope[]; expiresAt: string | null };
+export type KeyInput = { name: string; scopes: ApiScope[]; expiresAt: string | null; resourceAccess?: ResourceAccess };
 const messages: Record<number, string> = { 0: "无法连接 Worker API，请重试。", 401: "登录已过期，请重新登录。", 403: "请求来源无权限，请从当前站点重新操作。", 404: "密钥不存在，请刷新列表。",
-  409: "该密钥的完整明文不可用；旧版本创建的密钥需要新建替代密钥。", 422: "请检查名称、权限和未来的过期时间。", 503: "密钥服务配置有误，请检查系统配置。" };
+  409: "该密钥的完整明文不可用；旧版本创建的密钥需要新建替代密钥。", 422: "请检查名称、权限、资源范围 UUID 格式和未来的过期时间。", 503: "密钥服务配置有误，请检查系统配置。" };
 export class KeyApiError extends Error {
   status: number;
   constructor(status: number) { super(messages[status] ?? "密钥操作失败，请重试。"); this.status = status; }

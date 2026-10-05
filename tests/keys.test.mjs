@@ -109,6 +109,73 @@ test('legacy keys without encrypted plaintext remain usable but report that thei
 });
 
 
+test('P14 resource policies restrict Bin and Collection access dynamically', async () => {
+  await withWorker(undefined, async (request) => {
+    const collectionA = await (await request('/collections', { method: 'POST', value: { name: 'Allowed' } })).json();
+    const collectionB = await (await request('/collections', { method: 'POST', value: { name: 'Denied' } })).json();
+
+    const binA = await (await request('/bins', { method: 'POST', value: { name: 'Bin A', collectionId: collectionA.meta.id, value: { allowed: true } } })).json();
+    const binB = await (await request('/bins', { method: 'POST', value: { name: 'Bin B', collectionId: collectionB.meta.id, value: { denied: true } } })).json();
+    const binDirect = await (await request('/bins', { method: 'POST', value: { name: 'Bin Direct', value: { direct: true } } })).json();
+
+    // 1. Old / unspecified key defaults to "all" mode
+    const defaultKeyRes = await request('/keys', { method: 'POST', value: { name: 'Default All', scopes: ['bin:read', 'collection:read'] } });
+    const defaultKey = await defaultKeyRes.json();
+    assert.equal(defaultKey.key.resourceAccess.mode, 'all');
+    const defaultBinList = await (await request('/bins', { token: defaultKey.token })).json();
+    assert.equal(defaultBinList.items.length >= 3, true);
+
+    // 2. Restricted key with collection A and binDirect
+    const keyResponse = await request('/keys', {
+      method: 'POST',
+      value: {
+        name: 'Restricted',
+        scopes: ['bin:read', 'bin:create', 'bin:update', 'collection:read', 'history:read'],
+        resourceAccess: {
+          mode: 'restricted',
+          binIds: [binDirect.meta.id],
+          collectionIds: [collectionA.meta.id],
+        },
+      },
+    });
+    assert.equal(keyResponse.status, 201);
+    const key = await keyResponse.json();
+    assert.equal(key.key.resourceAccess.mode, 'restricted');
+
+    // 3. List only returns allowed Bin/Collection
+    const binList = await (await request('/bins', { token: key.token })).json();
+    assert.deepEqual(binList.items.map(item => item.id).sort(), [binA.meta.id, binDirect.meta.id].sort());
+    const collectionList = await (await request('/collections', { token: key.token })).json();
+    assert.deepEqual(collectionList.items.map(item => item.id), [collectionA.meta.id]);
+
+    // 4. Direct access honors collection & direct bin policy
+    assert.equal((await request('/bins/' + binA.meta.id, { token: key.token })).status, 200);
+    assert.equal((await request('/bins/' + binDirect.meta.id, { token: key.token })).status, 200);
+    assert.equal((await request('/bins/' + binB.meta.id, { token: key.token })).status, 403);
+    assert.equal((await request('/collections/' + collectionA.meta.id, { token: key.token })).status, 200);
+    assert.equal((await request('/collections/' + collectionB.meta.id, { token: key.token })).status, 403);
+
+    // 5. Deep path and history access
+    assert.equal((await request('/bins/' + binA.meta.id + '/value/allowed', { token: key.token })).status, 200);
+    assert.equal((await request('/bins/' + binB.meta.id + '/value/denied', { token: key.token })).status, 403);
+    assert.equal((await request('/bins/' + binA.meta.id + '/versions', { token: key.token })).status, 200);
+    assert.equal((await request('/bins/' + binB.meta.id + '/versions', { token: key.token })).status, 403);
+
+    // 6. Dynamic move: Move binA from collectionA to collectionB -> access immediately lost
+    const moveRes = await request('/bins/' + binA.meta.id + '/meta', {
+      method: 'PATCH',
+      value: { collectionId: collectionB.meta.id },
+    });
+    assert.equal(moveRes.status, 200);
+    assert.equal((await request('/bins/' + binA.meta.id, { token: key.token })).status, 403);
+
+    // 7. Restricted key cannot create ungrouped Bin, but can create inside allowed Collection
+    assert.equal((await request('/bins', { method: 'POST', token: key.token, value: { name: 'Ungrouped', value: {} } })).status, 403);
+    assert.equal((await request('/bins', { method: 'POST', token: key.token, value: { name: 'Allowed Create', collectionId: collectionA.meta.id, value: {} } })).status, 201);
+    assert.equal((await request('/bins', { method: 'POST', token: key.token, value: { name: 'Denied Create', collectionId: collectionB.meta.id, value: {} } })).status, 403);
+  });
+});
+
 test('API keys can be permanently deleted from R2 and immediately stop authenticating', async () => {
   await withWorker(undefined, async (request, bucket) => {
     const createdResponse = await request('/keys', { method: 'POST', value: { name: '永久删除测试', scopes: ['bin:read'] } });

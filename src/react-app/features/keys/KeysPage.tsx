@@ -11,17 +11,30 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const query = useQuery({ queryKey: ["keys"], queryFn: ({ signal }) => listKeys(signal), retry: false });
   const [name, setName] = useState(""), [selected, setSelected] = useState<ApiScope[]>(defaultScopes), [expiration, setExpiration] = useState("");
+  const [resourceMode, setResourceMode] = useState<"all" | "restricted">("all");
+  const [binIdsText, setBinIdsText] = useState("");
+  const [collectionIdsText, setCollectionIdsText] = useState("");
   const [disclosure, setDisclosure] = useState<{ key: ApiKey; token: string } | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState<Error | null>(null), [notice, setNotice] = useState("");
-  const dirty = Boolean(name || expiration || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
+  const dirty = Boolean(name || expiration || resourceMode !== "all" || binIdsText || collectionIdsText || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
   useEffect(() => { onDirtyChange(dirty || busy); }, [dirty, busy, onDirtyChange]);
   useEffect(() => {
     if (!dirty && !busy) return;
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", prevent); return () => window.removeEventListener("beforeunload", prevent);
   }, [dirty, busy]);
-  function report(caught: unknown) { if (mounted.current) setError(caught instanceof Error ? caught : new Error("操作失败，请重试。")); }
+  function report(caught: unknown) {
+    if (mounted.current) {
+      if (caught instanceof KeyApiError) {
+        if (caught.status === 422) {
+          setError(new Error("请检查名称、权限、资源范围 UUID 格式和未来的过期时间。"));
+          return;
+        }
+      }
+      setError(caught instanceof Error ? caught : new Error("操作失败，请重试。"));
+    }
+  }
   function hideToken(id: string) {
     setRevealed(previous => {
       const next = { ...previous };
@@ -39,9 +52,13 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     }
     setBusy(true); setError(null); setNotice("");
     try {
-      const created = await createKey({ name, scopes: selected, expiresAt });
+      const binIds = binIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
+      const collectionIds = collectionIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
+      const resourceAccess = resourceMode === "all" ? { mode: "all" as const } : { mode: "restricted" as const, binIds, collectionIds };
+      const created = await createKey({ name, scopes: selected, expiresAt, resourceAccess });
       if (!mounted.current) return;
       setDisclosure(created); setName(""); setSelected(defaultScopes); setExpiration("");
+      setResourceMode("all"); setBinIdsText(""); setCollectionIdsText("");
       await client.invalidateQueries({ queryKey: ["keys"] });
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
@@ -131,6 +148,26 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
           onChange={event => setSelected(previous => scopes.filter(item => item === scope ? event.target.checked : previous.includes(item)))} />
           <span>{scopeLabels[scope]} <code>{scope}</code></span></label>)}
       </fieldset>
+      <fieldset className="key-scopes" disabled={busy}>
+        <legend>资源范围</legend>
+        <label className="schema-checkbox">
+          <input type="radio" name="resource-mode" value="all" checked={resourceMode === "all"} onChange={() => setResourceMode("all")} />
+          <span>所有资源</span>
+        </label>
+        <label className="schema-checkbox">
+          <input type="radio" name="resource-mode" value="restricted" checked={resourceMode === "restricted"} onChange={() => setResourceMode("restricted")} />
+          <span>限制资源</span>
+        </label>
+        {resourceMode === "restricted" && <div className="detail-form" style={{ padding: 0, marginTop: "12px" }}>
+          <label>允许的 Bin ID
+            <textarea aria-label="允许的 Bin ID" value={binIdsText} onChange={e => setBinIdsText(e.target.value)} placeholder="每行或用逗号分隔 UUID" />
+          </label>
+          <label>允许的 Collection ID
+            <textarea aria-label="允许的 Collection ID" value={collectionIdsText} onChange={e => setCollectionIdsText(e.target.value)} placeholder="每行或用逗号分隔 UUID" />
+          </label>
+          <p>限制模式下，直接授权的 Bin 或当前位于授权 Collection 中的 Bin 可访问；Bin 移出集合后权限立即失效。</p>
+        </div>}
+      </fieldset>
       <label>过期时间<input aria-label="过期时间" type="datetime-local" disabled={busy} value={expiration} onChange={event => setExpiration(event.target.value)} /></label>
       <p>留空表示不过期；时间按当前设备时区输入。查看集合内数据仓需要 collection:read 和 bin:read；恢复历史版本需要 bin:update 和 history:read。密钥管理仅支持网页登录。</p>
       <button className="primary-button" type="submit" disabled={busy || !name.trim() || !selected.length}>{busy ? "正在处理…" : "创建密钥"}</button>
@@ -140,7 +177,9 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
         <button className="secondary-button" onClick={() => query.refetch()}>重试密钥列表</button></> : query.data.items.length ?
         <ul className="key-list">{query.data.items.map(key => <li key={key.id}><div className="key-card-main"><h3>{key.name}</h3><code>{key.prefix}</code>
           <p>状态：{key.revokedAt ? "已撤销" : key.expiresAt && Date.parse(key.expiresAt) <= Date.now() ? "已过期" : "有效"}</p>
-          <p>权限：{key.scopes.join(" · ")}</p><p>创建：{displayTime(key.createdAt, "—")} · 过期：{displayTime(key.expiresAt, "永不过期")}</p>
+          <p>权限：{key.scopes.join(" · ")}</p>
+          <p>资源范围：{key.resourceAccess?.mode === "restricted" ? `${key.resourceAccess.binIds.length} 个 Bin · ${key.resourceAccess.collectionIds.length} 个 Collection` : "所有资源"}</p>
+          <p>创建：{displayTime(key.createdAt, "—")} · 过期：{displayTime(key.expiresAt, "永不过期")}</p>
           <p>最后使用：{displayTime(key.lastUsedAt, "尚未使用")}{key.revokedAt && ` · 撤销：${displayTime(key.revokedAt, "—")}`}</p>
           {revealed[key.id] && <label className="key-revealed">完整密钥<input aria-label={`API 密钥 ${key.name}`} readOnly type="text" spellCheck={false} autoComplete="off" value={revealed[key.id]} onFocus={event => event.target.select()} /></label>}
           {!key.revealable && <p className="key-unavailable">此密钥创建于旧版本，完整明文当时没有保存；它仍可继续用于 API，若需要查看完整值请新建替代密钥。</p>}

@@ -1169,6 +1169,11 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 支持可选自定义别名（`slug`），通过 `aliases/bins/<slug>.json` 实现 R2 权威原子抢占，提供 `/api/v1/b/:slug` 及深层路径访问。
   - 支持标签（`tags`）、收藏（`favorite`）、置顶（`pinned`）字段与筛选，列表默认按 `pinned DESC, updatedAt DESC` 排序。
   - 前端支持别名输入、标签胶囊展示与过滤、置顶/收藏状态切换。
+- [x] **P14：API Key 资源级权限**：
+  - 支持细粒度 `resourceAccess` 策略（`all` 或 `restricted`，包含 `binIds` 与 `collectionIds`）。
+  - 实现基于 R2 权威元数据的动态两层校验（Scope + Resource Policy），Bin 移出 Collection 权限即刻失效。
+  - 路由安全防御：受限 Key 只能在授权集合下创建 Bin，列表与全局搜索自动修剪防信息嗅探泄露。
+  - 网页控制台支持资源范围单选与 UUID 配置，密钥卡片清晰呈现受限范围。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

@@ -1,11 +1,12 @@
 import "../activity";
-import { readApiKey, useApiKey, type ApiScope } from "../storage/keys";
+import { readApiKey, useApiKey, type ApiKey, type ApiScope } from "../storage/keys";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
 import { allowedRequestOrigin } from "../auth/origin";
 
 type Variables = {
-  user: SessionUser;
+  user?: SessionUser;
+  apiKey?: ApiKey;
 };
 
 export const requireSession: MiddlewareHandler<{
@@ -46,6 +47,7 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
       c.header("WWW-Authenticate", 'Bearer realm="JSONBin", error="invalid_token"');
       return c.json({ error: "unauthorized" }, 401);
     }
+    c.set("apiKey", current.key);
     c.set("activityIdentity", { actor: { type: "api_key", id: current.key.id }, provider: "api_key" });
     await next();
   };

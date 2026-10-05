@@ -6,7 +6,8 @@ import type { SearchType } from '../../shared/search.ts';
 import { requireAccess } from '../middleware/auth';
 import { managementSession } from '../lib/system-http';
 import { rebuildSearchIndex, searchIndexStatus, searchResources } from '../storage/search';
-const app = new Hono<{ Bindings: Env; Variables: { user: SessionUser } }>();
+import { checkResourceAccess, type ApiKey } from '../storage/keys';
+const app = new Hono<{ Bindings: Env; Variables: { user?: SessionUser; apiKey?: ApiKey } }>();
 app.use('*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
 app.onError((error, c) => {
   if (error instanceof SystemError) return c.json({ error: error.code }, error.status as ContentfulStatusCode);
@@ -26,6 +27,15 @@ app.get('/', async (c, next) => {
   const q = (params.get('q') ?? '').trim(), type = params.get('type') ?? 'all', rawLimit = params.get('limit') ?? '20', cursor = params.get('cursor') ?? undefined;
   if (!q || q.length > 160 || !['all', 'bin', 'collection', 'schema'].includes(type) || !/^[1-9]\d?$/.test(rawLimit)
     || Number(rawLimit) > 50 || cursor !== undefined && (!cursor || cursor.length > 512)) throw new SystemError(400, 'invalid_query');
-  return c.json(await searchResources(c.env, { q, type: type as SearchType, limit: Number(rawLimit), cursor }));
+  const result = await searchResources(c.env, { q, type: type as SearchType, limit: Number(rawLimit), cursor });
+  const key = c.get('apiKey');
+  if (key && key.resourceAccess?.mode === 'restricted') {
+    result.items = result.items.filter(item => {
+      if (item.type === 'bin') return checkResourceAccess(key, { type: 'bin', id: item.id, collectionId: item.collectionId });
+      if (item.type === 'collection') return checkResourceAccess(key, { type: 'collection', id: item.id });
+      return true;
+    });
+  }
+  return c.json(result);
 });
 export default app;

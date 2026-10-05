@@ -11,9 +11,20 @@ app.use("*", async (c, next) => {
   await next();
 });
 app.use("*", requireSession);
-const input = z.object({ name: z.string().trim().min(1).max(160),
+const resourceAccessSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("all") }).strict(),
+  z.object({
+    mode: z.literal("restricted"),
+    binIds: z.array(z.string().uuid()),
+    collectionIds: z.array(z.string().uuid()),
+  }).strict(),
+]);
+
+const input = z.object({
+  name: z.string().trim().min(1).max(160),
   scopes: z.array(z.enum(API_SCOPES)).min(1).max(API_SCOPES.length).refine(scopes => new Set(scopes).size === scopes.length),
   expiresAt: z.iso.datetime({ offset: true }).nullable().optional().refine(value => !value || Date.parse(value) > Date.now()),
+  resourceAccess: resourceAccessSchema.optional(),
 }).strict();
 app.onError((error, c) => {
   if (error.message === "token_pepper_invalid" || error.message === "token_encryption_unavailable") return c.json({ error: "key_service_unavailable" }, 503);

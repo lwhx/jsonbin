@@ -1,10 +1,15 @@
 import { auditRequest } from "../activity";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
 import { createCollection, deleteCollection, getCollection, listCollectionBins, listCollections, updateCollection } from "../storage/collections";
+import { checkResourceAccess, type ApiKey } from "../storage/keys";
 
-const app = new Hono<{ Bindings: Env }>();
+type Variables = {
+  apiKey?: ApiKey;
+};
+
+const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const createSchema = z.object({ name: z.string().trim().min(1).max(160), description: z.string().max(1000).optional() }).strict();
 const updateSchema = createSchema.partial().refine(input => Object.keys(input).length > 0);
 app.onError((error, c) => {
@@ -12,26 +17,59 @@ app.onError((error, c) => {
   if (error.message === "collection_deleting" || error.message === "collection_delete_conflict") return c.json({ error: error.message }, 409);
   throw error;
 });
-app.get("/", requireAccess("collection:read"), async c => { const items = await listCollections(c.env); return c.json({ items, total: items.length }); });
+
+const checkCollectionAccess: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
+  const key = c.get("apiKey");
+  if (!key || key.resourceAccess?.mode !== "restricted") return next();
+
+  const id = c.req.param("id");
+  if (!id) return next();
+
+  if (!checkResourceAccess(key, { type: "collection", id })) {
+    return c.json({ error: "resource_forbidden" }, 403);
+  }
+  await next();
+};
+
+app.get("/", requireAccess("collection:read"), async c => {
+  let items = await listCollections(c.env);
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess?.mode === "restricted") {
+    items = items.filter(item => checkResourceAccess(key, { type: "collection", id: item.id }));
+  }
+  return c.json({ items, total: items.length });
+});
 app.post("/", requireAccess("collection:write"), async c => {
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess?.mode === "restricted") {
+    return c.json({ error: "resource_forbidden" }, 403);
+  }
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const record = await createCollection(c.env, parsed.data); c.header("ETag", record.etag);
   await auditRequest(c, "collection.created", record.meta.id); return c.json(record, 201);
 });
-app.get("/:id/bins", requireAccess(["collection:read", "bin:read"]), async c => {
-  const items = await listCollectionBins(c.env, c.req.param("id"));
+app.get("/:id/bins", requireAccess(["collection:read", "bin:read"]), checkCollectionAccess, async c => {
+  let items = await listCollectionBins(c.env, c.req.param("id"));
   if (!items) return c.json({ error: "not_found" }, 404);
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess?.mode === "restricted") {
+    items = items.filter(item => checkResourceAccess(key, { type: "bin", id: item.id, collectionId: item.collectionId }));
+  }
   return c.json({ items, total: items.length });
 });
-app.get("/:id", requireAccess("collection:read"), async c => {
+app.get("/:id", requireAccess("collection:read"), checkCollectionAccess, async c => {
   const record = await getCollection(c.env, c.req.param("id"));
   if (!record) return c.json({ error: "not_found" }, 404);
-  const members = await listCollectionBins(c.env, record.meta.id);
+  let members = await listCollectionBins(c.env, record.meta.id);
+  const key = c.get("apiKey");
+  if (key && key.resourceAccess?.mode === "restricted" && members) {
+    members = members.filter(item => checkResourceAccess(key, { type: "bin", id: item.id, collectionId: item.collectionId }));
+  }
   c.header("ETag", record.etag);
   return c.json({ ...record, binCount: members?.length ?? 0 });
 });
-app.patch("/:id", requireAccess("collection:write"), async c => {
+app.patch("/:id", requireAccess("collection:write"), checkCollectionAccess, async c => {
   const parsed = updateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const etag = c.req.header("If-Match");
@@ -40,7 +78,7 @@ app.patch("/:id", requireAccess("collection:write"), async c => {
   if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag); await auditRequest(c, "collection.updated", record.meta.id); return c.json(record);
 });
-app.delete("/:id", requireAccess("collection:write"), async c => {
+app.delete("/:id", requireAccess("collection:write"), checkCollectionAccess, async c => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
   const result = await deleteCollection(c.env, c.req.param("id"), etag);

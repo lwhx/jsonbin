@@ -3,8 +3,22 @@ import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 
 export const API_SCOPES = ["bin:read", "bin:create", "bin:update", "bin:delete", "collection:read", "collection:write", "schema:read", "schema:write", "history:read"] as const;
 export type ApiScope = typeof API_SCOPES[number];
-export type ApiKey = { id: string; name: string; prefix: string; scopes: ApiScope[];
-  createdAt: string; expiresAt: string | null; revokedAt: string | null; lastUsedAt: string | null; revealable: boolean };
+export type ResourceAccess =
+  | { mode: "all" }
+  | { mode: "restricted"; binIds: string[]; collectionIds: string[] };
+
+export type ApiKey = {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: ApiScope[];
+  resourceAccess?: ResourceAccess;
+  createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  revealable: boolean;
+};
 type StoredKey = Omit<ApiKey, "revealable"> & {
   digest: string;
   digestAlgorithm: "sha256" | "hmac-sha256";
@@ -12,7 +26,12 @@ type StoredKey = Omit<ApiKey, "revealable"> & {
   tokenIv?: string;
   tokenCiphertext?: string;
 };
-export type KeyInput = { name: string; scopes: ApiScope[]; expiresAt?: string | null };
+export type KeyInput = {
+  name: string;
+  scopes: ApiScope[];
+  expiresAt?: string | null;
+  resourceAccess?: ResourceAccess;
+};
 const keyPath = (id: string) => `keys/${id}/meta.json`;
 const normalize = (etag: string) => etag.replace(/^"(.*)"$/, "$1");
 const encoder = new TextEncoder();
@@ -20,7 +39,11 @@ const decoder = new TextDecoder();
 
 function publicKey(stored: StoredKey): ApiKey {
   const { digest: _digest, digestAlgorithm: _algorithm, tokenEncryption: _encryption, tokenIv: _iv, tokenCiphertext: _ciphertext, ...key } = stored;
-  return { ...key, revealable: Boolean(stored.tokenEncryption === "aes-gcm-v1" && stored.tokenIv && stored.tokenCiphertext) };
+  return {
+    ...key,
+    resourceAccess: stored.resourceAccess ?? { mode: "all" },
+    revealable: Boolean(stored.tokenEncryption === "aes-gcm-v1" && stored.tokenIv && stored.tokenCiphertext)
+  };
 }
 function tokenId(token: string) {
   const selector = /^jb_live_([0-9a-f]{32})_[A-Za-z0-9_-]{43}$/.exec(token)?.[1];
@@ -78,7 +101,16 @@ export async function createKey(env: Env, input: KeyInput) {
   const digestAlgorithm = env.TOKEN_PEPPER ? "hmac-sha256" : "sha256";
   const digest = (await tokenDigest(env, token, digestAlgorithm))!;
   const encrypted = await encryptToken(env, id, token);
+  const resourceAccess: ResourceAccess = input.resourceAccess?.mode === "restricted"
+    ? {
+        mode: "restricted",
+        binIds: Array.from(new Set(input.resourceAccess.binIds || [])),
+        collectionIds: Array.from(new Set(input.resourceAccess.collectionIds || [])),
+      }
+    : { mode: "all" };
+
   const key: StoredKey = { id, name: input.name, prefix: `jb_live_${selector.slice(0, 8)}…`, scopes: [...input.scopes],
+    resourceAccess,
     createdAt: new Date().toISOString(), expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
     revokedAt: null, lastUsedAt: null, digest, digestAlgorithm, ...encrypted };
   const created = await putJson(requireDataBucket(env), keyPath(id), key, { onlyIf: { etagDoesNotMatch: "*" } });
@@ -118,6 +150,27 @@ export async function readApiKey(env: Env, token: string) {
   if (!expected || !await timingSafeEqualBase64Url(expected, stored.value.digest)) return null;
   return { key: publicKey(stored.value), stored: stored.value, etag: stored.etag };
 }
+export function checkResourceAccess(
+  key: ApiKey,
+  resource: { type: "bin" | "collection"; id?: string; collectionId?: string | null },
+): boolean {
+  const policy = key.resourceAccess ?? { mode: "all" };
+  if (policy.mode === "all") return true;
+
+  if (resource.type === "bin") {
+    if (resource.id && policy.binIds.includes(resource.id)) return true;
+    if (resource.collectionId && policy.collectionIds.includes(resource.collectionId)) return true;
+    return false;
+  }
+
+  if (resource.type === "collection") {
+    if (resource.id && policy.collectionIds.includes(resource.id)) return true;
+    return false;
+  }
+
+  return false;
+}
+
 export async function useApiKey(env: Env, token: string, initial: NonNullable<Awaited<ReturnType<typeof readApiKey>>>, required: ApiScope[]) {
   const bucket = requireDataBucket(env);
   let current: typeof initial | null = initial;
