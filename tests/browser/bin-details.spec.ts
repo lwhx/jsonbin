@@ -435,24 +435,28 @@ test("表单编辑可以新增字段并与 JSON 编辑器双向同步", async ({
   const record = await create(page);
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "表单编辑" });
-  await expect(panel.getByLabel("字段键").first()).toHaveValue("initial");
+  await expect(panel.getByLabel("字段 1 键", { exact: true })).toHaveValue("initial");
   await page.getByRole("button", { name: "添加字段", exact: true }).click();
-  await panel.getByLabel("字段键").last().fill("hello");
-  await panel.getByLabel("字段值").last().fill("666world");
+  await panel.getByLabel("字段 2 键", { exact: true }).fill("hello");
+  await panel.getByLabel("hello 文本值", { exact: true }).fill("666world");
   await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
   await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
 
   const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
   expect(saved.value).toEqual({ initial: true, hello: "666world" });
   expect(saved.meta.currentVersion).toBe(2);
+  const savedValue = panel.getByLabel("hello 文本值", { exact: true });
+  await savedValue.fill("临时修改");
+  await savedValue.fill("666world");
+  await expect(page.getByText("未保存", { exact: true })).not.toBeVisible();
 
   await page.getByRole("tab", { name: "编辑器", exact: true }).click();
   await expect(page.locator(".monaco-editor .view-lines")).toContainText("hello");
   await edit(page, '{"fromCode":"同步"}');
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
-  await expect(panel.getByLabel("字段键")).toHaveCount(1);
-  await expect(panel.getByLabel("字段键").first()).toHaveValue("fromCode");
-  await expect(panel.getByLabel("字段值").first()).toHaveValue("同步");
+  await expect(panel.getByLabel(/字段 \d+ 键/)).toHaveCount(1);
+  await expect(panel.getByLabel("字段 1 键", { exact: true })).toHaveValue("fromCode");
+  await expect(panel.getByLabel("fromCode 文本值", { exact: true })).toHaveValue("同步");
 });
 
 test("表单编辑支持类型选择、删除字段和批量添加，并拒绝重复键", async ({ page }) => {
@@ -461,34 +465,85 @@ test("表单编辑支持类型选择、删除字段和批量添加，并拒绝�
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
 
   await page.getByRole("button", { name: "添加字段", exact: true }).click();
-  await panel.getByLabel("字段键").last().fill("count");
-  await panel.getByLabel("字段类型").last().selectOption("number");
-  await panel.getByLabel("字段值").last().fill("28");
+  await panel.getByLabel("字段 2 键", { exact: true }).fill("count");
+  await panel.getByLabel("count 类型", { exact: true }).selectOption("number");
+  await panel.getByLabel("count 数字值", { exact: true }).fill("28");
 
   await page.getByRole("button", { name: "添加字段", exact: true }).click();
-  await panel.getByLabel("字段键").last().fill("enabled");
-  await panel.getByLabel("字段类型").last().selectOption("boolean");
-  await panel.getByLabel("字段值").last().selectOption("false");
+  await panel.getByLabel("字段 3 键", { exact: true }).fill("enabled");
+  await panel.getByLabel("enabled 类型", { exact: true }).selectOption("boolean");
+  await panel.getByLabel("enabled 布尔值", { exact: true }).selectOption("false");
 
   await page.getByRole("button", { name: "添加字段", exact: true }).click();
-  await panel.getByLabel("字段键").last().fill("remark");
-  await panel.getByLabel("字段类型").last().selectOption("null");
+  await panel.getByLabel("字段 4 键", { exact: true }).fill("remark");
+  await panel.getByLabel("remark 类型", { exact: true }).selectOption("null");
 
   await page.getByRole("button", { name: "批量添加", exact: true }).click();
   await panel.getByLabel("批量数据").fill("name=张三\n地方\tdf");
   await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
-  await expect(panel.getByLabel("字段键")).toHaveCount(6);
+  await expect(panel.getByLabel(/字段 \d+ 键/)).toHaveCount(6);
 
   await page.getByRole("button", { name: "批量添加", exact: true }).click();
   await panel.getByLabel("批量数据").fill("initial=重复");
   await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
   await expect(panel.getByRole("alert")).toContainText("重复");
 
-  await panel.getByRole("button", { name: "删除字段 remark", exact: true }).click();
+  await panel.getByRole("button", { name: "删除 remark", exact: true }).click();
   await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
   await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
   const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
   expect(saved.value).toEqual({ initial: true, count: 28, enabled: false, name: "张三", 地方: "df" });
+});
+
+test("表单数组支持混合类型和递归对象数组", async ({ page }) => {
+  const response = await page.request.post("/api/v1/bins", { data: { name: "递归表单", value: { prices: [] } } });
+  expect(response.status()).toBe(201);
+  const record = await response.json();
+  await page.goto(`/#/bins/${record.meta.id}`);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await panel.getByRole("button", { name: "展开 prices" }).click();
+
+  for (const type of ["number", "string", "boolean", "null", "object", "array"] as const) {
+    await panel.getByRole("button", { name: "添加 prices 数组项" }).click();
+    await panel.getByLabel(/prices 数组第 \d+ 项 类型/).last().selectOption(type);
+  }
+  await panel.getByLabel("prices 数组第 1 项 数字值").fill("19.9");
+  await panel.getByLabel("prices 数组第 2 项 文本值").fill("会员价");
+  await panel.getByLabel("prices 数组第 3 项 布尔值").selectOption("false");
+  await panel.getByRole("button", { name: "展开 prices 数组第 5 项" }).click();
+  await panel.getByRole("button", { name: "添加 prices 数组第 5 项 对象字段" }).click();
+  await panel.getByLabel("prices 数组第 5 项 字段 1 键").fill("currency");
+  await panel.getByLabel("prices 数组第 5 项 currency 文本值").fill("CNY");
+  await panel.getByRole("button", { name: "展开 prices 数组第 6 项" }).click();
+  await panel.getByRole("button", { name: "添加 prices 数组第 6 项 数组项" }).click();
+  await panel.getByLabel("prices 数组第 6 项 数组第 1 项 类型").selectOption("number");
+  await panel.getByLabel("prices 数组第 6 项 数组第 1 项 数字值").fill("1");
+
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(saved.value).toEqual({ prices: [19.9, "会员价", false, null, { currency: "CNY" }, [1]] });
+});
+
+test("表单数组排序删除并与 JSON 编辑器双向同步", async ({ page }) => {
+  const response = await page.request.post("/api/v1/bins", { data: { name: "数组同步", value: { items: ["a", "b", "c"] } } });
+  const record = await response.json();
+  await page.goto(`/#/bins/${record.meta.id}`);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await panel.getByRole("button", { name: "展开 items" }).click();
+  await panel.getByRole("button", { name: "上移 items 数组第 3 项" }).click();
+  await panel.getByRole("button", { name: "上移 items 数组第 2 项" }).click();
+  await panel.getByRole("button", { name: "删除 items 数组第 2 项" }).click();
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText('"c"');
+  await expect(page.locator(".monaco-editor .view-lines")).toContainText('"b"');
+  await edit(page, '{"nested":{"values":[1,true]}}');
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  await panel.getByRole("button", { name: "展开 nested" }).click();
+  await panel.getByRole("button", { name: "展开 nested values" }).click();
+  await expect(panel.getByLabel("nested values 数组第 1 项 数字值")).toHaveValue("1");
 });
 
 test("表单编辑只处理根对象，数据锁定后保持只读", async ({ page }) => {
@@ -507,8 +562,150 @@ test("表单编辑只处理根对象，数据锁定后保持只读", async ({ pa
   await expect(page.locator(".detail-notice[role=status]")).toContainText("数据仓已锁定");
 
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
-  await expect(panel.getByLabel("字段键").first()).toBeDisabled();
-  await expect(panel.getByLabel("字段值").first()).toBeDisabled();
+  await expect(panel.getByRole("status")).toContainText("只读：数据仓已锁定");
+  const lockedKey = panel.getByLabel("字段 1 键", { exact: true });
+  const lockedValue = panel.getByLabel("lockedField 文本值", { exact: true });
+  await expect(lockedKey).toHaveAttribute("readonly", "");
+  await expect(lockedValue).toHaveAttribute("readonly", "");
+  await lockedKey.focus();
+  await expect(lockedKey).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(lockedValue).toBeFocused();
   await expect(panel.getByRole("button", { name: "添加字段", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "删除 lockedField", exact: true })).toBeDisabled();
   expect((await page.request.get(`/api/v1/bins/${record.meta.id}`)).status()).toBe(200);
+});
+
+test("非法表单草稿参与页面 dirty 和 Tab 放弃保护", async ({ page }) => {
+  await create(page);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await panel.getByRole("button", { name: "添加字段", exact: true }).click();
+  const duplicate = panel.getByLabel("字段 2 键", { exact: true });
+  await duplicate.fill("initial");
+  await expect(duplicate).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("未保存", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存 JSON", exact: true })).toBeDisabled();
+
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  const tabDialog = page.getByRole("dialog", { name: "放弃无效的表单修改？", exact: true });
+  await tabDialog.getByRole("button", { name: "继续修正", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "表单编辑", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(duplicate).toHaveValue("initial");
+  await expect(duplicate).toBeFocused();
+
+  await page.getByRole("button", { name: "重新加载", exact: true }).click();
+  await page.getByRole("dialog", { name: "重新加载数据仓？", exact: true }).getByRole("button", { name: "继续编辑", exact: true }).click();
+  await expect(duplicate).toHaveValue("initial");
+  await page.getByRole("button", { name: "返回数据仓", exact: true }).click();
+  await page.getByRole("dialog", { name: "放弃未保存的修改？", exact: true }).getByRole("button", { name: "继续编辑", exact: true }).click();
+  await expect(duplicate).toHaveValue("initial");
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page.getByRole("dialog", { name: "退出登录？", exact: true }).getByRole("button", { name: "继续编辑", exact: true }).click();
+  await expect(duplicate).toHaveValue("initial");
+
+  await page.getByRole("tab", { name: "编辑器", exact: true }).click();
+  await page.getByRole("dialog", { name: "放弃无效的表单修改？", exact: true }).getByRole("button", { name: "放弃并切换", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "编辑器", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  await expect(panel.getByLabel("字段 2 键", { exact: true })).toHaveValue("");
+});
+
+test("表单新增删除管理焦点且错误与字段关联", async ({ page }) => {
+  const response = await page.request.post("/api/v1/bins", { data: { name: "焦点表单", value: { first: "a", second: "b", list: ["x"] } } });
+  const record = await response.json();
+  await page.goto(`/#/bins/${record.meta.id}`);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+
+  await panel.getByRole("button", { name: "添加字段", exact: true }).click();
+  const added = panel.getByLabel("字段 4 键", { exact: true });
+  await expect(added).toBeFocused();
+  await added.fill("first");
+  await expect(added).toHaveAttribute("aria-invalid", "true");
+  const keyErrorId = await added.getAttribute("aria-errormessage");
+  expect(keyErrorId).toBeTruthy();
+  await expect(page.locator(`#${keyErrorId}`)).toBeVisible();
+  await added.fill("third");
+  await expect(added).not.toHaveAttribute("aria-invalid", "true");
+
+  await panel.getByRole("button", { name: "删除 second", exact: true }).click();
+  await expect(panel.getByLabel("字段 2 键", { exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "删除 third", exact: true }).click();
+  await expect(panel.getByLabel("字段 2 键", { exact: true })).toBeFocused();
+
+  await panel.getByRole("button", { name: "展开 list", exact: true }).click();
+  await panel.getByRole("button", { name: "添加 list 数组项", exact: true }).click();
+  await expect(panel.getByLabel("list 数组第 2 项 类型", { exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "删除 list 数组第 2 项", exact: true }).click();
+  await expect(panel.getByLabel("list 数组第 1 项 类型", { exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "删除 list 数组第 1 项", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "添加 list 数组项", exact: true })).toBeFocused();
+
+  await panel.getByRole("button", { name: "删除 list", exact: true }).click();
+  await expect(panel.getByLabel("字段 1 键", { exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "删除 first", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "添加字段", exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段 1 键", { exact: true }).fill("first");
+
+  await panel.getByLabel("first 类型", { exact: true }).selectOption("number");
+  const number = panel.getByLabel("first 数字值", { exact: true });
+  await number.fill("01");
+  await expect(number).toHaveAttribute("aria-invalid", "true");
+  const numberErrorId = await number.getAttribute("aria-errormessage");
+  expect(numberErrorId).toBeTruthy();
+  await expect(page.locator(`#${numberErrorId}`)).toContainText("JSON 数字");
+  await number.fill("1");
+  await expect(number).not.toHaveAttribute("aria-invalid", "true");
+});
+
+test("批量添加保留原始文本、失败不部分提交并恢复焦点", async ({ page }) => {
+  await create(page);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  const batch = panel.getByRole("button", { name: "批量添加", exact: true });
+  await batch.click();
+  const textarea = panel.getByLabel("批量数据", { exact: true });
+  await expect(textarea).toBeFocused();
+  await textarea.fill("will-not-apply=ok\ninitial=duplicate");
+  await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("重复");
+  await expect(panel.getByLabel(/字段 \d+ 键/)).toHaveCount(1);
+  await expect(textarea).toBeFocused();
+  await textarea.fill("space=  保留两端空格  \nequals=a=b\n padded key =value\n地方\tdf");
+  await panel.getByRole("button", { name: "添加到表单", exact: true }).click();
+  await expect(batch).toBeFocused();
+  await expect(panel.getByLabel(/字段 \d+ 键/)).toHaveCount(5);
+
+  await batch.click();
+  await expect(textarea).toBeFocused();
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(batch).toBeFocused();
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  const recordId = page.url().split("/").at(-1)!;
+  const saved = await (await page.request.get(`/api/v1/bins/${recordId}`)).json();
+  expect(saved.value).toEqual({ initial: true, space: "  保留两端空格  ", equals: "a=b", " padded key ": "value", 地方: "df" });
+});
+
+test("表单在 720px 和 200% 缩放下操作控件不被裁切", async ({ page }) => {
+  const response = await page.request.post("/api/v1/bins", { data: { name: "窄屏表单", value: { longField: { nested: ["a", "b", "c"] } } } });
+  const record = await response.json();
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto(`/#/bins/${record.meta.id}`);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  await panel.getByRole("button", { name: "展开 longField", exact: true }).click();
+  await panel.getByRole("button", { name: "展开 longField nested", exact: true }).click();
+  await page.setViewportSize({ width: 360, height: 900 });
+  const clipped = await panel.locator("button").evaluateAll((buttons, root) => {
+    const panelRect = (root as HTMLElement).getBoundingClientRect();
+    return buttons.filter(button => {
+      const rect = button.getBoundingClientRect();
+      return rect.left < panelRect.left - 1 || rect.right > panelRect.right + 1;
+    }).map(button => button.getAttribute("aria-label") || button.textContent);
+  }, await panel.elementHandle());
+  expect(clipped).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

@@ -14,14 +14,14 @@ import { SchemaIssues } from "../schemas/SchemaIssues";
 import { BinApiPanel } from "../docs/BinApiPanel";
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 import { JsonTree } from './JsonTree';
-import { JsonFormEditor } from "./JsonFormEditor";
+import { JsonFormEditor, type JsonFormState } from "./JsonFormEditor";
 import { Dialog } from "../../components/Dialog";
 import { useConfirm } from "../../components/ConfirmDialog";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
 type Tab = "表单编辑" | "编辑器" | "树形视图" | "历史版本" | "API" | "设置";
-function isJsonObject(value: unknown): value is Record<string, unknown> {
+function isJsonObject(value: unknown): value is Record<string, import("./json-form-model").JsonValue> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -49,15 +49,16 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [formValid, setFormValid] = useState(true);
+  const [formSession, setFormSession] = useState<JsonFormState | null>(null);
+  const [formRevision, setFormRevision] = useState(0);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
-  const dirty = Boolean(draft && (isDirty(draft) || metadataDirty));
+  const dirty = Boolean(draft && (metadataDirty || formSession?.dirty || (!formSession && isDirty(draft))));
   const parsed = useMemo(() => draft ? parseJson(draft.text) : null, [draft?.text]);
 
   useEffect(() => {
     if (!query.data) return;
     // An automatic refresh must never replace either JSON or metadata drafts.
-    setDraft(previous => previous && (isDirty(previous) || metadataDirty) ? previous : previous ? receiveRecord(previous, query.data!) : createDraft(query.data!));
+    setDraft(previous => previous && (isDirty(previous) || metadataDirty || formSession?.dirty) ? previous : previous ? receiveRecord(previous, query.data!) : createDraft(query.data!));
     if (!dirty) setMetadata(metadataOf(query.data));
   }, [query.data]);
   useEffect(() => { onDirtyChange(dirty || Boolean(busy)); }, [dirty, busy, onDirtyChange]);
@@ -92,7 +93,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       if (!mounted.current) return;
       await client.cancelQueries({ queryKey: ["bin", id] });
       if (!mounted.current) return;
-      setDraft(createDraft(record)); setMetadata(metadataOf(record));
+      setDraft(createDraft(record)); setMetadata(metadataOf(record)); setFormSession(null); setFormRevision(value => value + 1);
       client.setQueryData(["bin", id], record);
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
@@ -108,6 +109,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       await client.cancelQueries({ queryKey: ["bin", id] });
       if (!mounted.current) return;
       setDraft(previous => previous ? savedDraft(previous, record, submittedText) : createDraft(record));
+      setFormSession(null);
       client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
       setNotice("保存成功，已生成新的版本。");
@@ -148,7 +150,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       if (!mounted.current) return;
       await client.cancelQueries({ queryKey: ["bin", id] });
       if (!mounted.current) return;
-      setDraft(createDraft(record)); setMetadata(metadataOf(record));
+      setDraft(createDraft(record)); setMetadata(metadataOf(record)); setFormSession(null); setFormRevision(value => value + 1);
       client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
       await client.invalidateQueries({ queryKey: ["bin-versions", id] });
@@ -178,7 +180,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       if (!mounted.current) return;
       await client.cancelQueries({ queryKey: ["bin", id] });
       if (!mounted.current) return;
-      setDraft(createDraft(record)); setMetadata(metadataOf(record));
+      setDraft(createDraft(record)); setMetadata(metadataOf(record)); setFormSession(null); setFormRevision(value => value + 1);
       client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
       setNotice(locked ? "数据仓已锁定，修改和删除已禁止；读取不受影响。" : "数据锁已解除，可以继续编辑。模型锁保持不变。");
@@ -187,6 +189,25 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   async function copy(text: string) {
     try { await navigator.clipboard.writeText(text); setNotice("已复制。"); }
     catch { setError(new Error("无法访问剪贴板，请手动选择并复制。")); }
+  }
+  async function requestTabChange(nextTab: Tab) {
+    if (nextTab === tab) return;
+    if (tab === "表单编辑" && formSession?.dirty && !formSession.valid) {
+      const discard = await confirm({
+        title: "放弃无效的表单修改？",
+        message: "当前表单包含无法生成 JSON 的修改。请继续修正，或明确放弃后切换。",
+        confirmLabel: "放弃并切换",
+        cancelLabel: "继续修正",
+        danger: true,
+      });
+      if (!discard) {
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('[role="tabpanel"][aria-label="表单编辑"] [aria-invalid="true"]')?.focus());
+        return;
+      }
+      setFormSession(null);
+      setFormRevision(value => value + 1);
+    }
+    setTab(nextTab);
   }
 
   if (!draft || !parsed) return <section className="panel detail-empty">
@@ -229,18 +250,18 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     </div>}
     <div className="detail-tabs" role="tablist" aria-label="数据仓详情">
       {(["表单编辑", "编辑器", "树形视图", "历史版本", "API", "设置"] as const).map(item =>
-        <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{item}</button>)}
+        <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => void requestTabChange(item)}>{item}</button>)}
     </div>
     <div className="panel detail-panel" role="tabpanel" aria-label={tab}>
       {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
         <div className="editor-toolbar"><span>键值表单</span>
           <button type="button" className="primary-button"
-            disabled={!formValid || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}>
+            disabled={formSession?.valid === false || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}>
             <Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}
           </button>
         </div>
-        <JsonFormEditor value={parsed.value} sourceText={draft.text} disabled={locked || Boolean(busy)}
-          onValidityChange={setFormValid}
+        <JsonFormEditor key={formRevision} value={parsed.value} sourceText={draft.text} baselineText={draft.savedText} disabled={locked || Boolean(busy)}
+          onStateChange={setFormSession}
           onChange={text => { setDraft(previous => previous ? { ...previous, text } : previous); setNotice(""); }} />
       </> : <div className="json-form-invalid">
         <p className="detail-error" role="alert">{parsed.valid ? "表单编辑仅支持根对象（{ }）。数组、字符串、数字等根值请使用代码编辑器。" : parsed.error + "请返回编辑器修正后再使用表单编辑。"}</p>
