@@ -1465,16 +1465,19 @@ kbd {
 .json-form-batch label { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
 .json-form-batch textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .json-form-batch > p { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.json-form-batch-preview { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.json-form-batch-preview th, .json-form-batch-preview td { padding: 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.json-form-batch-preview code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.json-form-carriage { display: grid; gap: 6px; min-width: 0; }
+.json-form-carriage pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.json-form-carriage span { color: var(--muted); font-size: 11px; }
 .json-form-invalid { padding: 16px; }
 @container (max-width: 680px) {
   .json-value-row { grid-template-columns: minmax(0, 1fr); }
   .json-value-children { grid-column: 1; padding-left: 10px; }
   .json-value-operations { justify-content: flex-start; }
 }
-@media (min-resolution: 1.5dppx), (min-resolution: 144dpi) {
-  .json-value-row { grid-template-columns: minmax(0, 1fr); }
-  .json-value-children { grid-column: 1; padding-left: 10px; }
-}
+
 @media (max-width: 700px) {
   .json-value-row { grid-template-columns: minmax(0, 1fr); }
   .json-value-children { grid-column: 1; padding-left: 10px; }

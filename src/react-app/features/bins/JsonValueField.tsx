@@ -13,6 +13,7 @@ type Props = {
   depth: number;
   pathLabel: string;
   readOnly: boolean;
+  disabled?: boolean;
   onChange: (node: JsonNode) => void;
   onDelete?: () => void;
   onMove?: (direction: -1 | 1) => void;
@@ -36,11 +37,19 @@ function childPath(parent: string, child: JsonNode, index: number, array: boolea
   return child.key ? `${parent} ${child.key}` : `${parent} 字段 ${index + 1}`;
 }
 
+function hasStandaloneCarriageReturn(value: string) {
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) === 13 && value.charCodeAt(index + 1) !== 10) return true;
+  }
+  return false;
+}
+
 export function JsonValueField({
   node,
   depth,
   pathLabel,
   readOnly,
+  disabled = readOnly,
   onChange,
   onDelete,
   onMove,
@@ -97,12 +106,12 @@ export function JsonValueField({
 
   const controls = <>
     {onMove && <>
-      <button type="button" className="secondary-button json-value-icon" disabled={readOnly || moveUpDisabled}
+      <button type="button" className="secondary-button json-value-icon" disabled={disabled || moveUpDisabled}
         aria-label={`上移 ${pathLabel}`} onClick={() => onMove(-1)}><ChevronUp size={14} /></button>
-      <button type="button" className="secondary-button json-value-icon" disabled={readOnly || moveDownDisabled}
+      <button type="button" className="secondary-button json-value-icon" disabled={disabled || moveDownDisabled}
         aria-label={`下移 ${pathLabel}`} onClick={() => onMove(1)}><ChevronDown size={14} /></button>
     </>}
-    {onDelete && <button type="button" className="secondary-button json-form-delete" disabled={readOnly}
+    {onDelete && <button type="button" className="secondary-button json-form-delete" disabled={disabled}
       aria-label={`删除 ${pathLabel}`} onClick={onDelete}><Trash2 size={14} /><span>删除</span></button>}
   </>;
 
@@ -110,33 +119,35 @@ export function JsonValueField({
   return <fieldset ref={fieldRef} className="json-value-row" aria-label={groupLabel}>
     <legend className="sr-only">{pathLabel}</legend>
     {keyLabel && <div className="json-value-key">
-      <input aria-label={keyLabel} value={node.key ?? ""} readOnly={readOnly} data-json-node-focus={node.id}
+      <input aria-label={keyLabel} value={node.key ?? ""} readOnly={readOnly || disabled} data-json-node-focus={node.id}
         aria-invalid={keyIssue ? true : undefined} aria-errormessage={keyIssue ? keyErrorId : undefined} aria-describedby={keyIssue ? keyErrorId : undefined}
         onChange={event => onChange({ ...node, key: event.target.value })} />
       {keyIssue && <span id={keyErrorId} className="detail-error json-value-inline-error" role="alert">{keyIssue.message}</span>}
     </div>}
     <div className="json-value-type">
       {readOnly ? <span className="json-form-static" aria-label={`${pathLabel} 类型`}>{typeLabels[node.type]}</span> :
-        <select aria-label={`${pathLabel} 类型`} value={node.type} data-json-node-focus={keyLabel ? undefined : node.id}
+        <select aria-label={`${pathLabel} 类型`} value={node.type} disabled={disabled} data-json-node-focus={keyLabel ? undefined : node.id}
           onChange={event => onChange(changeNodeType(node, event.target.value as JsonNodeType))}>
           {Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>}
     </div>
     <div className="json-form-value">
-      {node.type === "string" && (node.raw.includes("\n") || node.raw.includes("\r")
-        ? <textarea className="json-form-multiline" aria-label={`${pathLabel} 文本值`} value={node.raw} readOnly={readOnly}
+      {node.type === "string" && (hasStandaloneCarriageReturn(node.raw)
+        ? <div className="json-form-carriage"><pre className="json-form-static" aria-label={`${pathLabel} 文本值`} tabIndex={0}>{node.raw}</pre><span>包含独立回车符；为避免浏览器改写，请使用代码编辑器修改。</span></div>
+        : node.raw.includes("\n")
+        ? <textarea className="json-form-multiline" aria-label={`${pathLabel} 文本值`} value={node.raw} readOnly={readOnly || disabled}
             onChange={event => onChange({ ...node, raw: event.target.value })} />
-        : <input aria-label={`${pathLabel} 文本值`} value={node.raw} readOnly={readOnly}
+        : <input aria-label={`${pathLabel} 文本值`} value={node.raw} readOnly={readOnly || disabled}
             onChange={event => onChange({ ...node, raw: event.target.value })} />)}
       {node.type === "number" && <>
-        <input aria-label={`${pathLabel} 数字值`} inputMode="decimal" value={node.raw} readOnly={readOnly}
+        <input aria-label={`${pathLabel} 数字值`} inputMode="decimal" value={node.raw} readOnly={readOnly || disabled}
           aria-invalid={valueIssue ? true : undefined} aria-errormessage={valueIssue ? valueErrorId : undefined} aria-describedby={valueIssue ? valueErrorId : undefined}
           onChange={event => onChange({ ...node, raw: event.target.value })} />
         {valueIssue && <span id={valueErrorId} className="detail-error json-value-inline-error" role="alert">{valueIssue.message}</span>}
       </>}
       {node.type === "boolean" && (readOnly
         ? <span className="json-form-static" tabIndex={0} aria-label={`${pathLabel} 布尔值`}>{node.raw}</span>
-        : <select aria-label={`${pathLabel} 布尔值`} value={node.raw} onChange={event => onChange({ ...node, raw: event.target.value })}>
+        : <select aria-label={`${pathLabel} 布尔值`} value={node.raw} disabled={disabled} onChange={event => onChange({ ...node, raw: event.target.value })}>
             <option value="true">true</option><option value="false">false</option>
           </select>)}
       {node.type === "null" && <code className="json-form-static" tabIndex={0} aria-label={`${pathLabel} 空值`}>null</code>}
@@ -151,12 +162,12 @@ export function JsonValueField({
       {depth >= 8 ? <p className="json-form-depth-note">请使用 JSON 编辑器处理更深层级。当前完整值仍会保留。</p> : <>
         {node.children.map((child, index) => {
           const label = childPath(pathLabel, child, index, isArray);
-          return <JsonValueField key={child.id} node={child} depth={depth + 1} pathLabel={label} readOnly={readOnly}
+          return <JsonValueField key={child.id} node={child} depth={depth + 1} pathLabel={label} readOnly={readOnly} disabled={disabled}
             issues={issues} keyLabel={isArray ? undefined : `${pathLabel} 字段 ${index + 1} 键`}
             onChange={next => updateChild(index, next)} onDelete={() => removeChild(index)}
             onMove={direction => moveChild(index, direction)} moveUpDisabled={index === 0} moveDownDisabled={index === count - 1} />;
         })}
-        <button ref={addButtonRef} type="button" className="secondary-button json-value-add" disabled={readOnly} onClick={addChild}
+        <button ref={addButtonRef} type="button" className="secondary-button json-value-add" disabled={disabled} onClick={addChild}
           aria-label={`添加 ${pathLabel} ${isArray ? "数组项" : "对象字段"}`}><Plus size={14} />{isArray ? "添加数组项" : "添加对象字段"}</button>
       </>}
     </div>}

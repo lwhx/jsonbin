@@ -30,9 +30,20 @@ test("prototype and whitespace keys round-trip as own properties", () => {
 test("strict JSON numbers reject lossy and non-JSON spellings", () => {
   assert.deepEqual(parseNumber("0"), { valid: true, value: 0 });
   assert.deepEqual(parseNumber("-1.25e+3"), { valid: true, value: -1250 });
-  for (const raw of ["", "01", "1.", "0x10", "NaN", "Infinity", "9007199254740993", "1e309", "1e-324"]) {
+  for (const raw of ["", "01", "1.", "0x10", "NaN", "Infinity", "9007199254740993", "9007199254740992.0", "9007199254740993.0", "9007199254740993e0", "1.0000000000000001", "-0", "-0.0", "1e309", "1e-324"]) {
     assert.equal(parseNumber(raw).valid, false, raw);
   }
+});
+
+test("large form models retain every entry within the supported structure budget", () => {
+  const value = Object.fromEntries(Array.from({ length: 2_000 }, (_, index) => [`field-${index}`, index]));
+  const nodes = nodesFromObject(value);
+  assert.equal(nodes.length, 2_000);
+  const changed = updateNode(nodes, nodes[1_999].id, node => ({ ...node, raw: "1998" }));
+  const result = objectFromNodes(changed);
+  assert.equal(result.valid, true);
+  assert.equal(Object.keys(result.value).length, 2_000);
+  assert.equal(result.value["field-1999"], 1998);
 });
 
 test("multiline strings and recursive mixed structures round-trip", () => {

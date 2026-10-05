@@ -70,18 +70,28 @@ export function changeNodeType(node: JsonNode, type: JsonNodeType): JsonNode {
 
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
+function decimalParts(raw: string) {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(raw);
+  if (!match) return null;
+  let digits = `${match[2]}${match[3] ?? ""}`.replace(/^0+/, "");
+  if (!digits) return { negative: false, digits: "0", exponent: 0 };
+  let exponent = Number(match[4] ?? 0) - (match[3]?.length ?? 0);
+  while (digits.endsWith("0")) { digits = digits.slice(0, -1); exponent += 1; }
+  return { negative: match[1] === "-", digits, exponent };
+}
+
 export function parseNumber(raw: string): { valid: true; value: number } | { valid: false; message: string } {
   if (!jsonNumberPattern.test(raw)) return { valid: false, message: "请输入有效的 JSON 数字。" };
   const value = Number(raw);
   if (!Number.isFinite(value)) return { valid: false, message: "数字必须是有限值。" };
-  if (!raw.includes(".") && !/[eE]/.test(raw) && !Number.isSafeInteger(value)) {
+  if (Object.is(value, -0)) return { valid: false, message: "负零无法无损保存，请改用文本。" };
+  if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
     return { valid: false, message: "整数超出安全范围，请改用文本。" };
   }
-  if (value !== 0 && Number(JSON.stringify(value)) !== value) {
+  const source = decimalParts(raw);
+  const serialized = decimalParts(JSON.stringify(value));
+  if (!source || !serialized || source.negative !== serialized.negative || source.digits !== serialized.digits || source.exponent !== serialized.exponent) {
     return { valid: false, message: "数字无法无损保存，请改用文本。" };
-  }
-  if (value === 0 && !Object.is(value, -0) && raw !== "0" && raw !== "0.0" && /^-?\d/.test(raw)) {
-    return { valid: false, message: "数字太小，无法无损保存，请改用文本。" };
   }
   return { valid: true, value };
 }

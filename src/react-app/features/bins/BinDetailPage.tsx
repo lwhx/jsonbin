@@ -36,7 +36,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
 }) {
   const client = useQueryClient();
   const confirm = useConfirm();
-  const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBin(id, undefined, signal), retry: false });
+  const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBin(id, undefined, signal), retry: false, refetchInterval: 15_000 });
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const mounted = useRef(false);
@@ -52,13 +52,15 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [formSession, setFormSession] = useState<JsonFormState | null>(null);
   const [formRevision, setFormRevision] = useState(0);
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
-  const dirty = Boolean(draft && (metadataDirty || formSession?.dirty || (!formSession && isDirty(draft))));
+  const dirty = Boolean(draft && (metadataDirty || formSession?.dirty || isDirty(draft)));
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   const parsed = useMemo(() => draft ? parseJson(draft.text) : null, [draft?.text]);
 
   useEffect(() => {
     if (!query.data) return;
     // An automatic refresh must never replace either JSON or metadata drafts.
-    setDraft(previous => previous && (isDirty(previous) || metadataDirty || formSession?.dirty) ? previous : previous ? receiveRecord(previous, query.data!) : createDraft(query.data!));
+    setDraft(previous => previous && (isDirty(previous) || dirtyRef.current) ? previous : previous ? receiveRecord(previous, query.data!) : createDraft(query.data!));
     if (!dirty) setMetadata(metadataOf(query.data));
   }, [query.data]);
   useEffect(() => { onDirtyChange(dirty || Boolean(busy)); }, [dirty, busy, onDirtyChange]);
@@ -260,7 +262,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
             <Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}
           </button>
         </div>
-        <JsonFormEditor key={formRevision} value={parsed.value} sourceText={draft.text} baselineText={draft.savedText} disabled={locked || Boolean(busy)}
+        <JsonFormEditor key={formRevision} value={parsed.value} sourceText={draft.text} baselineText={draft.savedText} readOnly={locked} busy={Boolean(busy)}
           onStateChange={setFormSession}
           onChange={text => { setDraft(previous => previous ? { ...previous, text } : previous); setNotice(""); }} />
       </> : <div className="json-form-invalid">

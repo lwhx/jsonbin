@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { JsonValueField } from "./JsonValueField";
 import {
@@ -28,13 +28,30 @@ type Props = {
   value: JsonObject;
   sourceText: string;
   baselineText: string;
-  disabled: boolean;
+  readOnly: boolean;
+  busy: boolean;
   onChange: (text: string) => void;
-  onValidityChange?: (valid: boolean) => void;
   onStateChange?: (state: JsonFormState) => void;
 };
 
-export function JsonFormEditor({ value, sourceText, baselineText, disabled, onChange, onValidityChange, onStateChange }: Props) {
+type BatchEntry = { key: string; raw: string };
+
+function batchEntries(text: string): BatchEntry[] {
+  const entries: BatchEntry[] = [];
+  for (const line of batchLines(text)) {
+    const tab = line.indexOf("\t");
+    const equals = line.indexOf("=");
+    const separator = tab >= 0 ? tab : equals;
+    if (separator >= 0) entries.push({ key: line.slice(0, separator), raw: line.slice(separator + 1) });
+  }
+  return entries;
+}
+
+function batchLines(text: string) {
+  return text.replaceAll(String.fromCharCode(13), "").split("\n").filter(item => item.trim());
+}
+
+export function JsonFormEditor({ value, sourceText, baselineText, readOnly, busy, onChange, onStateChange }: Props) {
   const [nodes, setNodes] = useState<JsonNode[]>(() => nodesFromObject(value));
   const baseline = useRef(canonicalText(baselineText));
   const lastEmitted = useRef<string | null>(null);
@@ -47,6 +64,8 @@ export function JsonFormEditor({ value, sourceText, baselineText, disabled, onCh
   const batchButtonRef = useRef<HTMLButtonElement>(null);
   const batchTextareaRef = useRef<HTMLTextAreaElement>(null);
   const restoreBatchFocus = useRef(false);
+  const disabled = readOnly || busy;
+  const batchPreview = useMemo(() => batchEntries(batchText), [batchText]);
 
   useLayoutEffect(() => {
     const nodeId = pendingFocusId.current;
@@ -74,22 +93,19 @@ export function JsonFormEditor({ value, sourceText, baselineText, disabled, onCh
     setNodes(nodesFromObject(value));
     setIssues([]);
     setBatchError("");
-    onValidityChange?.(true);
     onStateChange?.({ text: sourceText, dirty: canonicalText(sourceText) !== baseline.current, valid: true, issues: [] });
-  }, [sourceText, baselineText, value, onValidityChange, onStateChange]);
+  }, [sourceText, baselineText, value, onStateChange]);
 
   function commit(nextNodes: JsonNode[]) {
     setNodes(nextNodes);
     const parsed = objectFromNodes(nextNodes);
     if (!parsed.valid) {
       setIssues(parsed.issues);
-      onValidityChange?.(false);
       onStateChange?.({ text: null, dirty: true, valid: false, issues: parsed.issues });
       return false;
     }
     const text = JSON.stringify(parsed.value, null, 2);
     setIssues([]);
-    onValidityChange?.(true);
     onStateChange?.({ text, dirty: text !== baseline.current, valid: true, issues: [] });
     lastEmitted.current = text;
     onChange(text);
@@ -133,7 +149,7 @@ export function JsonFormEditor({ value, sourceText, baselineText, disabled, onCh
       batchTextareaRef.current?.focus();
       return;
     }
-    const lines = batchText.split(/\r?\n/).filter(line => line.trim());
+    const lines = batchLines(batchText);
     if (!lines.length) {
       setBatchError("请先粘贴要添加的键值数据。");
       batchTextareaRef.current?.focus();
@@ -166,13 +182,13 @@ export function JsonFormEditor({ value, sourceText, baselineText, disabled, onCh
     }
   }
 
-  return <div ref={editorRef} className={`json-form-editor${disabled ? " json-form-readonly" : ""}`}>
+  return <div ref={editorRef} className={`json-form-editor${readOnly ? " json-form-readonly" : ""}`}>
     <p className="json-form-description">直接填写键名、类型和值，系统会自动生成合法 JSON。对象和数组可在当前行展开编辑。</p>
-    {disabled && <p className="json-form-readonly-note" role="status">只读：数据仓已锁定</p>}
+    {readOnly && <p className="json-form-readonly-note" role="status">只读：数据仓已锁定</p>}
     <div className="json-form-rows">
       {nodes.map((node, index) => {
         const pathLabel = node.key ? node.key : `字段 ${index + 1}`;
-        return <JsonValueField key={node.id} node={node} depth={0} pathLabel={pathLabel} readOnly={disabled} issues={issues}
+        return <JsonValueField key={node.id} node={node} depth={0} pathLabel={pathLabel} readOnly={readOnly} disabled={disabled} issues={issues}
           keyLabel={`字段 ${index + 1} 键`} onChange={next => updateRoot(index, next)}
           onDelete={() => removeRoot(index)}
           onMove={direction => moveRoot(index, direction)} moveUpDisabled={index === 0} moveDownDisabled={index === nodes.length - 1} />;
@@ -188,6 +204,10 @@ export function JsonFormEditor({ value, sourceText, baselineText, disabled, onCh
         placeholder={"hello=666world\n地方=df\n或直接从 Excel / 表格复制两列"}
         onChange={event => setBatchText(event.target.value)} /></label>
       <p>每行使用 <code>key=value</code>，或直接粘贴两列表格数据。键和值会按原始文本保留。</p>
+      {batchPreview.length > 0 && <table className="json-form-batch-preview" aria-label="批量添加原始键值预览">
+        <thead><tr><th>原始键</th><th>原始值</th></tr></thead>
+        <tbody>{batchPreview.map((entry, index) => <tr key={index}><td><code>{entry.key}</code></td><td><code>{entry.raw}</code></td></tr>)}</tbody>
+      </table>}
       {batchError && <p className="detail-error" role="alert">{batchError}</p>}
       <div className="json-form-actions">
         <button type="button" className="primary-button" disabled={disabled} onClick={applyBatch}>添加到表单</button>
