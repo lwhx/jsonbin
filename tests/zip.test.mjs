@@ -2,7 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {s
 import {minimalBackup,richBackup} from './support/backup-fixtures.mjs';
 const api=await import('../src/shared/zip.ts').catch(e=>{if(e.code==='ERR_MODULE_NOT_FOUND')return {};throw e;});
 test('STORE ZIP roundtrips and Python independently verifies contents CRC and manifest SHA',async()=>{
- assert.equal(typeof api.encodeBackupZip,'function'); const p=richBackup(),bytes=await api.encodeBackupZip(p);assert.deepEqual(await api.decodeBackupZip(bytes),p);
+ assert.equal(typeof api.encodeBackupZip,'function'); const p=richBackup(),bytes=await api.encodeBackupZip(p);assert.deepEqual(await api.decodeBackupZip(bytes),{...p,templates:[]}); // v1 fixture normalizes to v2 with empty templates
  const python=spawnSync('python3',['-c',`import sys,io,zipfile,json,hashlib
 raw=sys.stdin.buffer.read()
 with zipfile.ZipFile(io.BytesIO(raw)) as z:
