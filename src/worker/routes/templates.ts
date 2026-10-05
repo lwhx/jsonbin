@@ -25,6 +25,7 @@ const createSchema = z
     tags: z.array(z.string().trim().min(1).max(32)).max(20).optional(),
     value: z.unknown(),
     schemaId: z.string().uuid().nullable().optional(),
+    schemaRevision: z.number().int().positive().nullable().optional(),
   })
   .strict();
 
@@ -124,6 +125,8 @@ app.post("/:id/create-bin", requireSession, async (c) => {
       tags: [...template.meta.tags],
       collectionId,
       schemaId: template.meta.schemaId,
+      // Bind the revision the template captured, not the schema's latest.
+      schemaRevision: template.meta.schemaRevision,
     });
     c.header("ETag", bin.etag);
     c.header("X-JSONBin-Version", String(bin.meta.currentVersion));

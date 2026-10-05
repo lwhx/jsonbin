@@ -1817,3 +1817,33 @@ test('audit: restoring into an occupied slug detaches the alias instead of overw
   assert.equal(slugBody.meta.id, second.meta.id);
   assert.equal((await request(`/bins/${first.meta.id}`)).status, 200);
 });
+
+test('audit: save-as-template and template instantiation pin the captured schema revision', async () => {
+  const schema = await (await request('/schemas', { method: 'POST', value: {
+    name: 'Pinning Schema', schema: { type: 'object', properties: { flag: { type: 'boolean' } }, required: ['flag'] },
+  } })).json();
+  assert.equal(schema.meta.currentRevision, 1);
+
+  const bin = await (await request('/bins', { method: 'POST', value: {
+    name: 'Pinned Bin', value: { flag: true }, schemaId: schema.meta.id,
+  } })).json();
+  assert.equal(bin.meta.schemaRevision, 1);
+
+  // Upgrade the schema to revision 2; existing bindings must not float.
+  const upgraded = await request(`/schemas/${schema.meta.id}`, { method: 'PUT', etag: schema.etag, value: {
+    name: 'Pinning Schema', schema: { type: 'object', properties: { flag: { type: 'boolean' }, note: { type: 'string' } }, required: ['flag'] },
+  } });
+  assert.equal(upgraded.status, 200);
+
+  const tplRes = await request(`/bins/${bin.meta.id}/save-as-template`, { method: 'POST', etag: bin.etag, value: { name: 'Pinned Template' } });
+  assert.equal(tplRes.status, 201);
+  const tpl = await tplRes.json();
+  assert.equal(tpl.meta.schemaId, schema.meta.id);
+  assert.equal(tpl.meta.schemaRevision, 1, 'template must capture the Bin pinned revision, not the latest');
+
+  const fromTpl = await request(`/templates/${tpl.meta.id}/create-bin`, { method: 'POST', value: { name: 'From Pinned' } });
+  assert.equal(fromTpl.status, 201);
+  const fromTplBin = await fromTpl.json();
+  assert.equal(fromTplBin.meta.schemaRevision, 1, 'instantiated Bin must bind the template captured revision');
+  assert.equal((await request(`/bins/${fromTplBin.meta.id}`, { method: 'PUT', etag: fromTplBin.etag, value: { value: { flag: false } } })).status, 200);
+});

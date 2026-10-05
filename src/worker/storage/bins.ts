@@ -215,6 +215,7 @@ export async function createBin(
     visibility?: "private" | "public";
     collectionId?: string | null;
     schemaId?: string | null;
+    schemaRevision?: number | null;
     schemaLocked?: boolean;
     expiresAt?: string | null;
   },
@@ -223,7 +224,14 @@ export async function createBin(
   const slug = validateSlug(input.slug);
   const tags = validateTags(input.tags);
   await assertCollectionAvailable(env, input.collectionId);
-  const binding = await resolveSchemaBinding(env, input.schemaId, input.value);
+  // An explicit revision pins the binding instead of floating to the latest.
+  let binding: { schemaId: string | null; schemaRevision: number | null };
+  if (input.schemaId && input.schemaRevision) {
+    await assertBoundSchema(env, { schemaId: input.schemaId, schemaRevision: input.schemaRevision }, input.value);
+    binding = { schemaId: input.schemaId, schemaRevision: input.schemaRevision };
+  } else {
+    binding = await resolveSchemaBinding(env, input.schemaId, input.value);
+  }
   if (input.schemaLocked && !binding.schemaId) throw new SchemaError("schema_required");
   const id = crypto.randomUUID();
   const lifecycleId = crypto.randomUUID();

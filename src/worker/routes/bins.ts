@@ -93,6 +93,7 @@ const createSchema = z.object({
   visibility: z.enum(["private", "public"]).optional(),
   collectionId: z.string().uuid().nullable().optional(),
   schemaId: z.string().uuid().nullable().optional(),
+  schemaRevision: z.number().int().positive().nullable().optional(),
   schemaLocked: z.boolean().optional(),
   expiresAt: expiresAtSchema,
   value: z.unknown(),
@@ -357,6 +358,8 @@ app.post("/:id/save-as-template", requireAccess(["bin:read"]), checkBinMutationA
       tags: Array.isArray(current.meta.tags) ? [...current.meta.tags] : [],
       value: current.value,
       schemaId: current.meta.schemaId,
+      // Inherit the source Bin's pinned revision, never the schema's latest.
+      schemaRevision: current.meta.schemaRevision,
     });
     c.header("ETag", template.etag);
     await auditRequest(c, "template.created", template.meta.id);
