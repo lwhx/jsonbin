@@ -2,7 +2,7 @@ import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../middleware/auth";
-import { API_SCOPES, createKey, listKeys, purgeKey, revealKey, revokeKey } from "../storage/keys";
+import { API_SCOPES, createKey, listKeys, purgeKey, revealKey, revokeKey, updateKey } from "../storage/keys";
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
@@ -26,9 +26,17 @@ const input = z.object({
   expiresAt: z.iso.datetime({ offset: true }).nullable().optional().refine(value => !value || Date.parse(value) > Date.now()),
   resourceAccess: resourceAccessSchema.optional(),
 }).strict();
+const updateInput = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  scopes: z.array(z.enum(API_SCOPES)).min(1).max(API_SCOPES.length).refine(scopes => new Set(scopes).size === scopes.length).optional(),
+  expiresAt: z.iso.datetime({ offset: true }).nullable().optional().refine(value => value === undefined || value === null || Date.parse(value) > Date.now()),
+  resourceAccess: resourceAccessSchema.optional(),
+}).strict().refine(value => Object.keys(value).length > 0);
+
 app.onError((error, c) => {
   if (error.message === "token_pepper_invalid" || error.message === "token_encryption_unavailable") return c.json({ error: "key_service_unavailable" }, 503);
   if (error.message === "key_update_conflict") return c.json({ error: "key_update_conflict" }, 409);
+  if (error.message === "key_revoked") return c.json({ error: "key_revoked" }, 409);
   throw error;
 });
 app.get("/", async c => { const items = await listKeys(c.env); return c.json({ items, total: items.length }); });
@@ -52,6 +60,20 @@ app.delete("/:id/purge", async c => {
   if (!await purgeKey(c.env, id)) return c.json({ error: "not_found" }, 404);
   await auditRequest(c, "key.deleted", id);
   return c.json({ ok: true, id });
+});
+app.patch("/:id", async c => {
+  if (!z.string().uuid().safeParse(c.req.param("id")).success) return c.json({ error: "not_found" }, 404);
+  const parsed = updateInput.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
+  try {
+    const updated = await updateKey(c.env, c.req.param("id"), parsed.data);
+    if (!updated) return c.json({ error: "not_found" }, 404);
+    await auditRequest(c, "key.updated", updated.id);
+    return c.json({ key: updated });
+  } catch (error) {
+    if (error instanceof Error && error.message === "key_revoked") return c.json({ error: "key_revoked" }, 409);
+    throw error;
+  }
 });
 app.delete("/:id", async c => {
   if (!z.string().uuid().safeParse(c.req.param("id")).success) return c.json({ error: "not_found" }, 404);

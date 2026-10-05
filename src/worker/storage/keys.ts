@@ -148,6 +148,40 @@ export async function revokeKey(env: Env, id: string) {
   }
   throw new Error("key_update_conflict");
 }
+
+export type KeyUpdateInput = {
+  name?: string;
+  scopes?: ApiScope[];
+  expiresAt?: string | null;
+  resourceAccess?: ResourceAccess;
+};
+
+/** Edits scopes / resource scope / name / expiry on a live key. Revocation stays terminal. */
+export async function updateKey(env: Env, id: string, input: KeyUpdateInput) {
+  const bucket = requireDataBucket(env);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const stored = await getJson<StoredKey>(bucket, keyPath(id));
+    if (!stored) return null;
+    if (stored.value.revokedAt) throw new Error("key_revoked");
+    const next: StoredKey = { ...stored.value };
+    if (input.name !== undefined) next.name = input.name;
+    if (input.scopes !== undefined) next.scopes = [...input.scopes];
+    if (input.resourceAccess !== undefined) {
+      next.resourceAccess = input.resourceAccess.mode === "restricted"
+        ? {
+            mode: "restricted",
+            binIds: Array.from(new Set(input.resourceAccess.binIds || [])),
+            collectionIds: Array.from(new Set(input.resourceAccess.collectionIds || [])),
+          }
+        : { mode: "all" };
+    }
+    if (input.expiresAt !== undefined) {
+      next.expiresAt = input.expiresAt ? new Date(input.expiresAt).toISOString() : null;
+    }
+    if (await putJson(bucket, keyPath(id), next, { onlyIf: { etagMatches: normalize(stored.etag) } })) return publicKey(next);
+  }
+  throw new Error("key_update_conflict");
+}
 export async function readApiKey(env: Env, token: string) {
   const id = tokenId(token); if (!id) return null;
   const stored = await getJson<StoredKey>(requireDataBucket(env), keyPath(id));

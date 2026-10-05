@@ -281,3 +281,63 @@ test('audit: usage counters skip resource denials, scope misses and invalid toke
     assert.equal(await usage(), 3);
   });
 });
+
+test('audit: key scopes and resource scope can be edited after creation and apply to later requests', async () => {
+  await withWorker(undefined, async (request, bucket) => {
+    const colA = await (await request('/collections', { method: 'POST', value: { name: 'Editable Col' } })).json();
+    const binA = await (await request('/bins', { method: 'POST', value: { name: 'In Editable', collectionId: colA.meta.id, value: { a: 1 } } })).json();
+    const binB = await (await request('/bins', { method: 'POST', value: { name: 'Loose', value: { b: 2 } } })).json();
+
+    const created = await (await request('/keys', { method: 'POST', value: {
+      name: 'editable-key', scopes: ['bin:read'],
+      resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [colA.meta.id] },
+    } })).json();
+
+    const usage = async () => (await (await request('/keys')).json()).items.find(k => k.id === created.key.id).usageTotal;
+    assert.equal((await request('/bins/' + binA.meta.id, { token: created.token })).status, 200);
+    assert.equal((await request('/bins/' + binB.meta.id, { token: created.token })).status, 403);
+    const usageBefore = await usage();
+    assert.equal(usageBefore, 1);
+
+    // Session PATCH widens scopes and relaxes the resource scope.
+    const widen = await request('/keys/' + created.key.id, { method: 'PATCH', value: { scopes: ['bin:read', 'bin:delete'], resourceAccess: { mode: 'all' } } });
+    assert.equal(widen.status, 200);
+    assert.deepEqual((await widen.json()).key.scopes, ['bin:read', 'bin:delete']);
+    assert.equal((await request('/bins/' + binB.meta.id, { token: created.token })).status, 200);
+    assert.equal((await request('/bins/' + binB.meta.id, { method: 'DELETE', token: created.token })).status, 200);
+    assert.equal(await usage(), usageBefore + 2, 'usage counters survive edits');
+
+    // Narrowing again immediately revokes the capability.
+    const narrow = await request('/keys/' + created.key.id, { method: 'PATCH', value: { scopes: ['bin:read'] } });
+    assert.equal(narrow.status, 200);
+    assert.equal((await request('/bins', { method: 'POST', token: created.token, value: { name: 'No Create', value: null } })).status, 403);
+    assert.equal((await (await request('/keys')).json()).items.find(k => k.id === created.key.id).name, 'editable-key');
+
+    // Name and expiry are editable too; clearing expiry keeps the key alive.
+    const renamed = await request('/keys/' + created.key.id, { method: 'PATCH', value: { name: 'renamed-key', expiresAt: null } });
+    assert.equal(renamed.status, 200);
+    assert.equal((await renamed.json()).key.name, 'renamed-key');
+
+    // Validation: empty patch, empty scopes, bad UUID, unknown field, past expiry.
+    for (const body of [{}, { scopes: [] }, { scopes: ['bin:read', 'bin:read'] },
+      { resourceAccess: { mode: 'restricted', binIds: ['not-a-uuid'], collectionIds: [] } },
+      { resourceAccess: { mode: 'sometimes' } }, { unknown: true }, { expiresAt: '2000-01-01T00:00:00.000Z' }]) {
+      assert.equal((await request('/keys/' + created.key.id, { method: 'PATCH', value: body })).status, 422, JSON.stringify(body));
+    }
+    assert.equal((await request('/keys/11111111-1111-4111-8111-111111111111', { method: 'PATCH', value: { name: 'x' } })).status, 404);
+    assert.equal((await request('/keys/' + created.key.id, { method: 'PATCH', token: created.token, value: { name: 'x' } })).status, 401);
+
+    // Revocation stays terminal.
+    await request('/keys/' + created.key.id, { method: 'DELETE' });
+    assert.equal((await request('/keys/' + created.key.id, { method: 'PATCH', value: { scopes: ['bin:read', 'bin:create'] } })).status, 409);
+
+    // An expired key can be revived by extending its expiry.
+    const revival = await (await request('/keys', { method: 'POST', value: { name: 'revive-key', scopes: ['bin:read'] } })).json();
+    const stored = await (await bucket.get(`keys/${revival.key.id}/meta.json`)).json();
+    await bucket.put(`keys/${revival.key.id}/meta.json`, JSON.stringify({ ...stored, expiresAt: '2000-01-01T00:00:00.000Z' }));
+    assert.equal((await request('/bins', { token: revival.token })).status, 401);
+    const extend = await request('/keys/' + revival.key.id, { method: 'PATCH', value: { expiresAt: new Date(Date.now() + 86400000).toISOString() } });
+    assert.equal(extend.status, 200);
+    assert.equal((await request('/bins', { token: revival.token })).status, 200);
+  });
+});

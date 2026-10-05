@@ -225,6 +225,21 @@ export function generateOpenApiSpec(): Record<string, unknown> {
       },
       "/keys/{id}": {
         delete: op("撤销密钥（保留记录）", { security: SESSION_ONLY, parameters: [idParameter], responses: ok() }),
+        patch: op("更新密钥名称、权限、资源范围与过期时间（撤销后不可改）", {
+          security: SESSION_ONLY,
+          description: "修改立即对后续请求生效；撤销密钥返回 409 key_revoked",
+          parameters: [idParameter],
+          requestBody: jsonBody({
+            type: "object", description: "至少一个字段；expiresAt 传 null 清除过期",
+            properties: {
+              name: { type: "string" },
+              scopes: { type: "array", items: { type: "string", enum: ["bin:read", "bin:create", "bin:update", "bin:delete", "collection:read", "collection:write", "schema:read", "schema:write", "history:read"] } },
+              expiresAt: { type: "string", format: "date-time", nullable: true },
+              resourceAccess: { type: "object", description: "{mode:'all'} 或 {mode:'restricted',binIds,collectionIds}" },
+            },
+          }),
+          responses: { ...ok(), "404": { description: "未找到" }, "409": { description: "key_revoked / key_update_conflict" }, "422": { description: "校验失败" } },
+        }),
       },
       "/bins": {
         get: op("列出数据仓", {

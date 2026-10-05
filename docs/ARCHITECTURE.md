@@ -169,6 +169,7 @@ POST   /api/v1/schemas
 
 GET    /api/v1/keys
 POST   /api/v1/keys
+PATCH  /api/v1/keys/:id
 DELETE /api/v1/keys/:id
 ```
 

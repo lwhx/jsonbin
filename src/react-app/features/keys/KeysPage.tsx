@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createKey, KeyApiError, listKeys, purgeKey, revealKeyToken, revokeKey, scopes, scopeLabels } from "./api";
+import { createKey, KeyApiError, listKeys, purgeKey, revealKeyToken, revokeKey, scopes, scopeLabels, updateKey } from "./api";
 import type { ApiKey, ApiScope } from "./api";
 import { useConfirm } from "../../components/ConfirmDialog";
 const defaultScopes: ApiScope[] = ["bin:read"];
 const displayTime = (value: string | null, fallback: string) => value ? new Date(value).toLocaleString("zh-CN") : fallback;
+const toLocalInput = (iso: string) => { const d = new Date(iso); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+type EditState = { id: string; name: string; scopes: ApiScope[]; resourceMode: "all" | "restricted"; binIdsText: string; collectionIdsText: string; expiration: string };
 export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
   const client = useQueryClient(), mounted = useRef(false);
   const confirm = useConfirm();
@@ -15,9 +17,10 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
   const [binIdsText, setBinIdsText] = useState("");
   const [collectionIdsText, setCollectionIdsText] = useState("");
   const [disclosure, setDisclosure] = useState<{ key: ApiKey; token: string } | null>(null);
+  const [editing, setEditing] = useState<EditState | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState<Error | null>(null), [notice, setNotice] = useState("");
-  const dirty = Boolean(name || expiration || resourceMode !== "all" || binIdsText || collectionIdsText || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
+  const dirty = Boolean(editing) || Boolean(name || expiration || resourceMode !== "all" || binIdsText || collectionIdsText || JSON.stringify(selected) !== JSON.stringify(defaultScopes));
   useEffect(() => { onDirtyChange(dirty || busy); }, [dirty, busy, onDirtyChange]);
   useEffect(() => {
     if (!dirty && !busy) return;
@@ -86,6 +89,51 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     } catch (caught) {
       if (caught instanceof KeyApiError) report(caught);
       else if (mounted.current) setError(new Error("无法访问剪贴板，请显示密钥后手动复制。"));
+    } finally { if (mounted.current) setBusy(false); }
+  }
+  function startEdit(key: ApiKey) {
+    setEditing({
+      id: key.id,
+      name: key.name,
+      scopes: [...key.scopes],
+      resourceMode: key.resourceAccess?.mode === "restricted" ? "restricted" : "all",
+      binIdsText: key.resourceAccess?.mode === "restricted" ? key.resourceAccess.binIds.join("\n") : "",
+      collectionIdsText: key.resourceAccess?.mode === "restricted" ? key.resourceAccess.collectionIds.join("\n") : "",
+      expiration: key.expiresAt ? toLocalInput(key.expiresAt) : "",
+    });
+    setError(null); setNotice("");
+  }
+  async function saveEdit() {
+    if (busy || !editing) return;
+    const original = query.data?.items.find(item => item.id === editing.id);
+    if (!original) return;
+    // expiresAt 只有被明确修改时才提交：undefined 表示不变，null 表示清除。
+    let expiresAt: string | null | undefined;
+    const originalLocal = original.expiresAt ? toLocalInput(original.expiresAt) : "";
+    if (editing.expiration !== originalLocal) {
+      if (!editing.expiration) expiresAt = null;
+      else {
+        const date = new Date(editing.expiration);
+        if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) { setError(new Error("过期时间必须在未来。")); return; }
+        expiresAt = date.toISOString();
+      }
+    }
+    const binIds = editing.binIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
+    const collectionIds = editing.collectionIdsText.split(/[,，\s]+/).map(v => v.trim()).filter(Boolean);
+    setBusy(true); setError(null); setNotice("");
+    try {
+      await updateKey(editing.id, {
+        name: editing.name,
+        scopes: editing.scopes,
+        expiresAt,
+        resourceAccess: editing.resourceMode === "all" ? { mode: "all" } : { mode: "restricted", binIds, collectionIds },
+      });
+      if (!mounted.current) return;
+      setEditing(null); setNotice(`密钥“${original.name}”已更新，新的权限立即对后续请求生效。`);
+      await client.invalidateQueries({ queryKey: ["keys"] });
+    } catch (caught) {
+      if (caught instanceof KeyApiError && caught.status === 409 && mounted.current) setError(caught);
+      else report(caught);
     } finally { if (mounted.current) setBusy(false); }
   }
   async function revoke(key: ApiKey) {
@@ -188,11 +236,46 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
           {revealed[key.id] && <label className="key-revealed">完整密钥<input aria-label={`API 密钥 ${key.name}`} readOnly type="text" spellCheck={false} autoComplete="off" value={revealed[key.id]} onFocus={event => event.target.select()} /></label>}
           {!key.revealable && <p className="key-unavailable">此密钥创建于旧版本，完整明文当时没有保存；它仍可继续用于 API，若需要查看完整值请新建替代密钥。</p>}
         </div>
+          {editing?.id === key.id && <form className="detail-form key-edit-form" style={{ borderTop: "1px solid var(--border)", marginTop: "12px", paddingTop: "12px" }}
+            onSubmit={event => { event.preventDefault(); saveEdit(); }}>
+            <label>密钥名称<input aria-label={`编辑名称 ${key.name}`} required maxLength={160} disabled={busy} value={editing.name}
+              onChange={event => setEditing({ ...editing, name: event.target.value })} /></label>
+            <fieldset className="key-scopes" disabled={busy}><legend>权限 Scope</legend>
+              {scopes.map(scope => <label className="schema-checkbox" key={scope}><input type="checkbox" aria-label={`编辑 ${scope} ${key.name}`}
+                checked={editing.scopes.includes(scope)}
+                onChange={event => setEditing({ ...editing, scopes: scopes.filter(item => item === scope ? event.target.checked : editing.scopes.includes(item)) })} />
+                <span>{scopeLabels[scope]} <code>{scope}</code></span></label>)}
+            </fieldset>
+            <fieldset className="key-scopes" disabled={busy}>
+              <legend>资源范围</legend>
+              <label className="schema-checkbox">
+                <input type="radio" name={`resource-mode-${key.id}`} value="all" checked={editing.resourceMode === "all"} onChange={() => setEditing({ ...editing, resourceMode: "all" })} />
+                <span>所有资源</span>
+              </label>
+              <label className="schema-checkbox">
+                <input type="radio" name={`resource-mode-${key.id}`} value="restricted" checked={editing.resourceMode === "restricted"} onChange={() => setEditing({ ...editing, resourceMode: "restricted" })} />
+                <span>限制资源</span>
+              </label>
+              {editing.resourceMode === "restricted" && <div style={{ marginTop: "12px" }}>
+                <label>允许的 Bin ID<textarea aria-label={`编辑允许的 Bin ID ${key.name}`} value={editing.binIdsText} onChange={e => setEditing({ ...editing, binIdsText: e.target.value })} placeholder="每行或用逗号分隔 UUID" /></label>
+                <label>允许的 Collection ID<textarea aria-label={`编辑允许的 Collection ID ${key.name}`} value={editing.collectionIdsText} onChange={e => setEditing({ ...editing, collectionIdsText: e.target.value })} placeholder="每行或用逗号分隔 UUID" /></label>
+              </div>}
+            </fieldset>
+            <label>过期时间<input aria-label={`编辑过期时间 ${key.name}`} type="datetime-local" disabled={busy} value={editing.expiration}
+              onChange={event => setEditing({ ...editing, expiration: event.target.value })} /></label>
+            <p>修改立即对后续请求生效，使用统计与已保存的密钥值保持不变；清空过期时间表示永不过期。</p>
+            <div className="detail-actions">
+              <button className="primary-button" type="submit" disabled={busy || !editing.name.trim() || !editing.scopes.length}>{busy ? "正在保存…" : "保存修改"}</button>
+              <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditing(null)}>取消</button>
+            </div>
+          </form>}
           <div className="key-card-actions">
             {key.revealable && <button className="secondary-button" type="button" disabled={busy} onClick={() => toggleReveal(key)}
               aria-label={`${revealed[key.id] ? "隐藏密钥" : "显示密钥"} ${key.name}`}>{revealed[key.id] ? "隐藏密钥" : "显示密钥"}</button>}
             {key.revealable && <button className="secondary-button" type="button" disabled={busy} onClick={() => copyStored(key)}
               aria-label={`复制密钥 ${key.name}`}>复制密钥</button>}
+            {!key.revokedAt && <button className="secondary-button" type="button" disabled={busy} onClick={() => editing?.id === key.id ? setEditing(null) : startEdit(key)}
+              aria-label={`编辑权限 ${key.name}`}>{editing?.id === key.id ? "取消编辑" : "编辑权限"}</button>}
             <button className="danger-button" disabled={busy || Boolean(key.revokedAt)} onClick={() => revoke(key)} aria-label={`撤销密钥 ${key.name}`}>撤销密钥</button>
             <button className="danger-button" disabled={busy} onClick={() => remove(key)} aria-label={`删除密钥 ${key.name}`}>删除密钥</button>
           </div></li>)}</ul>

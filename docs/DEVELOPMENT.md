@@ -652,6 +652,7 @@ keys/
 ~~~text
 GET    /api/v1/keys
 POST   /api/v1/keys
+PATCH  /api/v1/keys/:id
 DELETE /api/v1/keys/:id
 ~~~
 
@@ -663,6 +664,7 @@ DELETE /api/v1/keys/:id
 
 - name trim 后 1–160 字符。scopes 至少一项，只允许下表九种权限，不允许重复。expiresAt 可以省略、设为 null，或指定未来的带时区 ISO 时间；未知字段拒绝，输入错误返回 422。
 - 创建返回 201 `{key, token}`；新建 Token 的完整值同时以 AES-GCM 加密形式保存在 R2，GET `/keys/:id/token` 仅允许管理 Session 解密返回。列表仅返回 `revealable` 状态，不返回完整 Token。
+- `PATCH /keys/:id` 允许管理 Session 修改名称、scopes、resourceAccess 与 expiresAt（传 null 清除过期），修改立即对后续请求生效且使用统计保留；已撤销密钥返回 409 `key_revoked`。
 - 列表返回 `{items, total}`，包括有效、已过期和已撤销记录。撤销返回 `{key}`；所有公开 key 对象均剔除 digest、digestAlgorithm、加密正文和明文，仅暴露 `revealable`，响应均为 `Cache-Control: no-store`。
 - DELETE 为幂等的软撤销，保留首次 revokedAt；不存在的 UUID 返回 404。管理接口收到任何 Authorization 头时返回 401 `session_required`，即使同时提供 Cookie，也不会把 Bearer 权限升级为密钥管理权限。
 - 最后使用时间记录通过 Scope 检查的认证请求（包括后续业务校验失败/404 的请求）；格式错误、Scope 不足、过期或撤销的请求不更新它。认证和撤销均以 R2 条件写入保护，冲突重读时再次验证摘要、权限及失效状态，无法覆盖撤销记录；争用重试耗尽分别返回认证服务 503 或管理操作 409。

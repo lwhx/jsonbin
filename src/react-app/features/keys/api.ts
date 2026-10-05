@@ -10,7 +10,7 @@ const messages: Record<number, string> = { 0: "无法连接 Worker API，请重�
   409: "该密钥的完整明文不可用；旧版本创建的密钥需要新建替代密钥。", 422: "请检查名称、权限、资源范围 UUID 格式和未来的过期时间。", 503: "密钥服务配置有误，请检查系统配置。" };
 export class KeyApiError extends Error {
   status: number;
-  constructor(status: number) { super(messages[status] ?? "密钥操作失败，请重试。"); this.status = status; }
+  constructor(status: number, message?: string) { super(message ?? messages[status] ?? "密钥操作失败，请重试。"); this.status = status; }
 }
 async function request(path: string, init: RequestInit = {}) {
   let response: Response;
@@ -27,5 +27,20 @@ export async function revealKeyToken(id: string): Promise<{ token: string }> {
   return (await request(`/${encodeURIComponent(id)}/token`)).json();
 }
 export async function revokeKey(id: string): Promise<{ key: ApiKey }> { return (await request(`/${encodeURIComponent(id)}`, { method: "DELETE" })).json(); }
+
+export type KeyUpdateInput = { name?: string; scopes?: ApiScope[]; expiresAt?: string | null; resourceAccess?: ResourceAccess };
+export async function updateKey(id: string, input: KeyUpdateInput): Promise<{ key: ApiKey }> {
+  let response: Response;
+  try { response = await fetch(`/api/v1/keys/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), credentials: "include", cache: "no-store" }); }
+  catch { throw new KeyApiError(0); }
+  if (!response.ok) {
+    if (response.status === 409) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      throw new KeyApiError(409, body?.error === "key_revoked" ? "该密钥已撤销，权限不能再修改。" : "密钥正被并发修改，请刷新列表后重试。");
+    }
+    throw new KeyApiError(response.status);
+  }
+  return response.json();
+}
 
 export async function purgeKey(id: string): Promise<{ ok: true; id: string }> { return (await request(`/${encodeURIComponent(id)}/purge`, { method: "DELETE" })).json(); }

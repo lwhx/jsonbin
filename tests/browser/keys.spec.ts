@@ -154,3 +154,34 @@ test('创建受限资源 API 密钥，界面正确展示资源范围标签与输
   const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: '只读受限密钥', exact: true }) });
   await expect(card).toContainText('资源范围：2 个 Bin · 1 个 Collection');
 });
+
+test('密钥创建后可编辑名称、权限与资源范围，保存立即生效', async ({ page }) => {
+  const response = await page.request.post('/api/v1/keys', { data: { name: '待编辑密钥', scopes: ['bin:read'], resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [] } } });
+  expect(response.status()).toBe(201);
+  const { key, token } = await response.json();
+  await page.goto('/#/keys');
+  const card = page.getByRole('listitem').filter({ hasText: '待编辑密钥' });
+
+  await page.getByRole('button', { name: '编辑权限 待编辑密钥', exact: true }).click();
+  await expect(card.getByLabel(`编辑名称 ${key.name}`)).toHaveValue('待编辑密钥');
+  await expect(card.getByLabel(`编辑 bin:read ${key.name}`)).toBeChecked();
+  await expect(card.getByRole('radio', { name: '限制资源', exact: true })).toBeChecked();
+
+  await card.getByLabel(`编辑名称 ${key.name}`).fill('已编辑密钥');
+  await card.getByLabel(`编辑 bin:create ${key.name}`).check();
+  await card.getByLabel(`编辑 bin:delete ${key.name}`).check();
+  await card.getByRole('radio', { name: '所有资源', exact: true }).check();
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+
+  await expect(page.getByRole('listitem').filter({ hasText: '已编辑密钥' })).toContainText('所有资源');
+  const keys = await (await page.request.get('/api/v1/keys')).json();
+  const edited = keys.items.find((item: { id: string }) => item.id === key.id);
+  expect(edited.name).toBe('已编辑密钥');
+  expect(edited.scopes).toEqual(['bin:read', 'bin:create', 'bin:delete']);
+  expect(edited.resourceAccess.mode).toBe('all');
+  // Token 值不变，权限按新配置即时生效。
+  expect((await page.request.get('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` } })).status()).toBe(200);
+  expect((await page.request.post('/api/v1/bins', { headers: { Authorization: `Bearer ${token}` }, data: { name: '新权限创建', value: null } })).status()).toBe(201);
+
+  await page.request.delete(`/api/v1/keys/${key.id}/purge`);
+});
