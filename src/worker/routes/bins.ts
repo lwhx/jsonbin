@@ -614,7 +614,9 @@ app.patch("/:id/meta", requireAccess("bin:update"), checkBinMutationAccess, asyn
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }
-  if ((parsed.data.locked !== undefined || parsed.data.expiresAt !== undefined) && !c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
+  // Every metadata change is preconditioned: a stale UI must never re-apply an
+  // old intent (slug/collection/schema/visibility) against a newer snapshot.
+  if (!c.req.header("If-Match")?.trim()) return c.json({ error: "precondition_required" }, 428);
 
   const key = c.get("apiKey");
   if (key && key.resourceAccess?.mode === "restricted" && parsed.data.collectionId) {

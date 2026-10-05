@@ -140,9 +140,14 @@ test('metadata validation rejects empty, oversized, unknown and invalid fields',
     assert.equal((await request(path, { method: 'PATCH', value })).status, 422, JSON.stringify(value));
   }
   assert.equal((await request(path, { method: 'PATCH', authenticated: false, value: { name: 'x' } })).status, 401);
-  assert.equal((await request('/bins/missing/meta', { method: 'PATCH', value: { name: 'x' } })).status, 404);
+  // Metadata is uniformly preconditioned: no If-Match -> 428, regardless of fields.
+  for (const field of [{ name: 'x' }, { slug: 'unprotected-slug' }, { tags: ['t'] }, { favorite: true }, { pinned: true },
+    { visibility: 'public' }, { collectionId: null }, { schemaId: null }, { contentSearchMode: 'all' }, { locked: true }, { expiresAt: null }]) {
+    assert.equal((await request(path, { method: 'PATCH', value: field })).status, 428, JSON.stringify(field));
+  }
+  assert.equal((await request('/bins/missing/meta', { method: 'PATCH', etag: '"x"', value: { name: 'x' } })).status, 404);
   await bucket.put(`bins/${bin.meta.id}/meta.json`, JSON.stringify({ ...bin.meta, locked: true }));
-  assert.equal((await request(path, { method: 'PATCH', value: { name: 'x' } })).status, 423);
+  assert.equal((await request(path, { method: 'PATCH', etag: bin.etag, value: { name: 'x' } })).status, 423);
 });
 
 test('P13: custom slug, alias endpoints, tags, favorite and pinned filtering', async () => {
@@ -663,7 +668,8 @@ test('collection deletion detaches locked and unlocked Bins while retaining immu
   }
   assert.equal((await collectionRequest('/' + collection.meta.id)).status, 404);
   assert.equal((await collectionRequest('/' + collection.meta.id + '/bins')).status, 404);
-  assert.equal((await request('/bins/' + bins[0].meta.id + '/meta', { method: 'PATCH', value: { collectionId: collection.meta.id } })).status, 409);
+  const detachedEtag = (await (await request('/bins/' + bins[0].meta.id)).json()).etag;
+  assert.equal((await request('/bins/' + bins[0].meta.id + '/meta', { method: 'PATCH', etag: detachedEtag, value: { collectionId: collection.meta.id } })).status, 409);
 });
 
 test('deleting marker blocks new members, remains visible, and deletion cleanup can resume', async () => {
