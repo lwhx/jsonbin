@@ -72,6 +72,10 @@ type AuthConfig = {
 type BinMeta = {
   id: string;
   name: string;
+  slug?: string | null;
+  tags?: string[];
+  favorite?: boolean;
+  pinned?: boolean;
   description: string;
   visibility: "private" | "public";
   collectionId: string | null;
@@ -819,12 +823,23 @@ function BinsPage({
   onOpen: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [filterTab, setFilterTab] = useState<"all" | "pinned" | "favorite">("all");
+  const [selectedTag, setSelectedTag] = useState<string>("");
+
+  const allTags = Array.from(new Set(bins.flatMap(b => b.tags ?? []))).sort();
+
   const filtered = bins.filter((bin) => {
+    if (filterTab === "pinned" && !bin.pinned) return false;
+    if (filterTab === "favorite" && !bin.favorite) return false;
+    if (selectedTag && !(bin.tags ?? []).includes(selectedTag)) return false;
+
     const query = search.trim().toLowerCase();
     if (!query) return true;
     return (
       bin.name.toLowerCase().includes(query) ||
+      (bin.slug && bin.slug.toLowerCase().includes(query)) ||
       bin.description.toLowerCase().includes(query) ||
+      (bin.tags ?? []).some(t => t.toLowerCase().includes(query)) ||
       bin.id.toLowerCase().includes(query)
     );
   });
@@ -843,16 +858,56 @@ function BinsPage({
         </button>
       </section>
 
-      <div className="bins-toolbar">
-        <div className="bins-search">
+      <div className="bins-toolbar" style={{ flexWrap: "wrap", gap: "10px" }}>
+        <div style={{ display: "flex", gap: "6px" }}>
+          <button
+            type="button"
+            className={`secondary-button ${filterTab === "all" ? "active" : ""}`}
+            style={filterTab === "all" ? { borderColor: "var(--accent)", color: "var(--accent-text)" } : {}}
+            onClick={() => setFilterTab("all")}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            className={`secondary-button ${filterTab === "pinned" ? "active" : ""}`}
+            style={filterTab === "pinned" ? { borderColor: "var(--accent)", color: "var(--accent-text)" } : {}}
+            onClick={() => setFilterTab("pinned")}
+          >
+            📌 置顶
+          </button>
+          <button
+            type="button"
+            className={`secondary-button ${filterTab === "favorite" ? "active" : ""}`}
+            style={filterTab === "favorite" ? { borderColor: "var(--accent)", color: "var(--accent-text)" } : {}}
+            onClick={() => setFilterTab("favorite")}
+          >
+            ⭐ 收藏
+          </button>
+        </div>
+
+        {allTags.length > 0 && (
+          <select
+            value={selectedTag}
+            onChange={e => setSelectedTag(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "inherit", fontSize: "12px" }}
+          >
+            <option value="">全部标签</option>
+            {allTags.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+
+        <div className="bins-search" style={{ marginLeft: "auto" }}>
           <Search size={16} />
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索数据仓…"
+            placeholder="搜索名称、Slug、标签或 ID…"
           />
         </div>
-        <span>共 {bins.length} 个</span>
+        <span>共 {filtered.length} 个</span>
       </div>
 
       {error ? (
@@ -876,14 +931,29 @@ function BinsPage({
                 <div className="file-icon large">
                   <FileJson2 size={19} />
                 </div>
-                <span className={`visibility-pill ${bin.visibility}`}>
-                  {bin.visibility === "private" && <LockKeyhole size={11} />}
-                  {bin.visibility === "private" ? "私有" : "公开"}
-                </span>
+                <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  {bin.pinned && <span title="已置顶">📌</span>}
+                  {bin.favorite && <span title="已收藏">⭐</span>}
+                  <span className={`visibility-pill ${bin.visibility}`}>
+                    {bin.visibility === "private" && <LockKeyhole size={11} />}
+                    {bin.visibility === "private" ? "私有" : "公开"}
+                  </span>
+                </div>
               </div>
 
               <h3>{bin.name}</h3>
+              {bin.slug && <code style={{ fontSize: "11px", color: "var(--accent-text)", marginBottom: "4px", display: "inline-block" }}>/b/{bin.slug}</code>}
               <p>{bin.description || "暂无描述"}</p>
+
+              {bin.tags && bin.tags.length > 0 && (
+                <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", margin: "6px 0" }}>
+                  {bin.tags.map(t => (
+                    <span key={t} style={{ fontSize: "10px", padding: "1px 6px", borderRadius: "4px", background: "var(--border)", color: "var(--muted)" }}>
+                      #{t}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <div className="bin-meta-row">
                 <span>v{bin.currentVersion}</span>
@@ -899,14 +969,14 @@ function BinsPage({
       ) : (
         <div className="panel">
           <EmptyState
-            title={search ? "没有匹配的数据仓" : "还没有数据仓"}
+            title={search || filterTab !== "all" || selectedTag ? "没有匹配的数据仓" : "还没有数据仓"}
             description={
-              search
-                ? "换一个关键词试试。"
+              search || filterTab !== "all" || selectedTag
+                ? "换一个筛选条件试试。"
                 : "创建你的第一个版本化 JSON 文档。"
             }
-            action={search ? undefined : "新建数据仓"}
-            onAction={search ? undefined : onCreate}
+            action={search || filterTab !== "all" || selectedTag ? undefined : "新建数据仓"}
+            onAction={search || filterTab !== "all" || selectedTag ? undefined : onCreate}
           />
         </div>
       )}
@@ -922,6 +992,10 @@ function CreateBinDialog({
   onCreated: (id: string) => void;
 }) {
   const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+  const [favorite, setFavorite] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<"default" | "private" | "public">("default");
   const defaults = useQuery({ queryKey: ["system-settings"], queryFn: ({ signal }) => systemApi.getSettings(signal), retry: false });
@@ -966,6 +1040,7 @@ function CreateBinDialog({
     }
 
     setSaving(true);
+    const tags = tagsInput.split(/[,，\s]+/).map(t => t.trim()).filter(Boolean);
     try {
       const response = await fetch("/api/v1/bins", {
         method: "POST",
@@ -973,6 +1048,10 @@ function CreateBinDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
+          slug: slug.trim() || undefined,
+          tags: tags.length ? tags : undefined,
+          favorite,
+          pinned,
           description,
           ...(visibility === "default" ? {} : { visibility }),
           collectionId: collectionId || null,
@@ -985,7 +1064,7 @@ function CreateBinDialog({
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string; issues?: SchemaIssue[] };
-        setError(body.error === "schema_validation_failed" ? "JSON 不符合所选模型，请检查字段错误。" : body.error === "schema_unavailable" ? "模型已删除，请重新选择。" : "无法创建数据仓，请检查输入后重试。");
+        setError(body.error === "slug_conflict" ? "该自定义别名已存在，请换一个。" : body.error === "invalid_slug" ? "别名格式不正确：需 3~64 位小写字母、数字、-、_，且首尾为字母或数字。" : body.error === "schema_validation_failed" ? "JSON 不符合所选模型，请检查字段错误。" : body.error === "schema_unavailable" ? "模型已删除，请重新选择。" : "无法创建数据仓，请检查输入后重试。");
         setIssues(body.issues?.filter(issue => typeof issue.path === "string") ?? []);
         return;
       }
@@ -1028,6 +1107,19 @@ function CreateBinDialog({
             </label>
 
             <label>
+              自定义别名 (Slug)
+              <input
+                value={slug}
+                onChange={(event) => setSlug(event.target.value.toLowerCase())}
+                placeholder="可选：如 my-app-config"
+                pattern="^[a-z0-9][a-z0-9-_]{1,62}[a-z0-9]$"
+                title="需 3~64 位小写英文字母、数字、-、_，首尾必须为字母或数字"
+              />
+            </label>
+          </div>
+
+          <div className="form-grid">
+            <label>
               可见性
               <select
                 value={visibility}
@@ -1040,7 +1132,26 @@ function CreateBinDialog({
                 <option value="public">公开</option>
               </select>
             </label>
-            {(visibility === "public" || visibility === "default" && defaults.data?.settings.defaultVisibility === "public") && <p>公开后，任何持有 API 地址的人都能匿名读取当前 JSON 和元数据；历史版本及写入仍需认证。</p>}
+
+            <label>
+              标签 (Tags)
+              <input
+                value={tagsInput}
+                onChange={(event) => setTagsInput(event.target.value)}
+                placeholder="可选：用逗号或空格隔开，如 prod, vps"
+              />
+            </label>
+          </div>
+
+          <div className="schema-checkbox-group" style={{ display: "flex", gap: "20px", marginBottom: "12px" }}>
+            <label className="schema-checkbox">
+              <input type="checkbox" checked={pinned} onChange={e => setPinned(e.target.checked)} />
+              置顶展示
+            </label>
+            <label className="schema-checkbox">
+              <input type="checkbox" checked={favorite} onChange={e => setFavorite(e.target.checked)} />
+              加入收藏
+            </label>
           </div>
           <label>到期策略<select aria-label="到期策略" value={expiryMode} disabled={saving} onChange={event => setExpiryMode(event.target.value as typeof expiryMode)}><option value="default">使用系统默认（以创建时设置为准）</option><option value="never">永不过期</option><option value="custom">自定义时间</option></select></label>
           <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={expiryInput} disabled={saving || expiryMode === "never"} onChange={event => { setExpiryInput(event.target.value); setExpiryMode(event.target.value ? "custom" : "default"); }} /></label>

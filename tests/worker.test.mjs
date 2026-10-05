@@ -144,6 +144,75 @@ test('metadata validation rejects empty, oversized, unknown and invalid fields',
   assert.equal((await request(path, { method: 'PATCH', value: { name: 'x' } })).status, 423);
 });
 
+test('P13: custom slug, alias endpoints, tags, favorite and pinned filtering', async () => {
+  const slug = 'my-test-slug';
+  const createdRes = await request('/bins', {
+    method: 'POST',
+    value: {
+      name: 'Slug Bin',
+      slug,
+      tags: ['cloudflare', 'config'],
+      favorite: true,
+      pinned: true,
+      value: { hello: 'slug-world' },
+    },
+  });
+  assert.equal(createdRes.status, 201);
+  const created = await createdRes.json();
+  assert.equal(created.meta.slug, slug);
+  assert.deepEqual(created.meta.tags, ['cloudflare', 'config']);
+  assert.equal(created.meta.favorite, true);
+  assert.equal(created.meta.pinned, true);
+
+  const conflictRes = await request('/bins', {
+    method: 'POST',
+    value: {
+      name: 'Conflict Bin',
+      slug,
+      value: { foo: 'bar' },
+    },
+  });
+  assert.equal(conflictRes.status, 409);
+  assert.equal((await conflictRes.json()).error, 'slug_conflict');
+
+  const readBySlug = await request('/b/' + slug);
+  assert.equal(readBySlug.status, 200);
+  const readData = await readBySlug.json();
+  assert.equal(readData.meta.id, created.meta.id);
+  assert.deepEqual(readData.value, { hello: 'slug-world' });
+
+  const readValueBySlug = await request(`/b/${slug}/value/hello`);
+  assert.equal(readValueBySlug.status, 200);
+  const valueData = await readValueBySlug.json();
+  assert.equal(valueData.value, 'slug-world');
+
+  const newSlug = 'my-updated-slug';
+  const metaUpdateRes = await request('/bins/' + created.meta.id + '/meta', {
+    method: 'PATCH',
+    etag: created.etag,
+    value: { slug: newSlug, favorite: false },
+  });
+  assert.equal(metaUpdateRes.status, 200);
+  const updatedMeta = await metaUpdateRes.json();
+  assert.equal(updatedMeta.meta.slug, newSlug);
+  assert.equal(updatedMeta.meta.favorite, false);
+
+  assert.equal((await request('/b/' + slug)).status, 404);
+  assert.equal((await request('/b/' + newSlug)).status, 200);
+
+  await create();
+  const listAll = await (await request('/bins')).json();
+  assert.equal(listAll.items[0].id, created.meta.id);
+  assert.equal(listAll.items[0].pinned, true);
+
+  const tagFilter = await (await request('/bins?tag=cloudflare')).json();
+  assert.equal(tagFilter.items.length, 1);
+  assert.equal(tagFilter.items[0].id, created.meta.id);
+
+  const favFilter = await (await request('/bins?favorite=true')).json();
+  assert.equal(favFilter.items.some(i => i.id === created.meta.id), false);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

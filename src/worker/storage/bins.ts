@@ -12,6 +12,10 @@ export { normalizeEtag } from "./bin-state";
 export type BinMeta = {
   id: string;
   name: string;
+  slug?: string | null;
+  tags?: string[];
+  favorite?: boolean;
+  pinned?: boolean;
   description: string;
   visibility: "private" | "public";
   collectionId: string | null;
@@ -31,11 +35,47 @@ export type BinMeta = {
   lifecycleId?: string;
 };
 
+export type BinAliasRecord = {
+  slug: string;
+  binId: string;
+  lifecycleId?: string;
+  createdAt: string;
+};
+
+export const binAliasKey = (slug: string) => `aliases/bins/${slug}.json`;
+
 export type BinRecord = {
   meta: BinMeta;
   value: unknown;
   etag: string;
 };
+
+export function validateSlug(slug: string | null | undefined): string | null {
+  if (slug === null || slug === undefined || slug === "") return null;
+  const normalized = slug.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-_]{1,62}[a-z0-9]$/.test(normalized)) {
+    throw new Error("invalid_slug");
+  }
+  return normalized;
+}
+
+export function validateTags(tags: string[] | undefined): string[] {
+  if (!tags) return [];
+  if (!Array.isArray(tags)) throw new Error("invalid_tags");
+  if (tags.length > 20) throw new Error("tags_limit_reached");
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    if (typeof raw !== "string") throw new Error("invalid_tags");
+    const tag = raw.trim();
+    if (!tag || tag.length > 32) throw new Error("invalid_tags");
+    if (!seen.has(tag)) {
+      seen.add(tag);
+      result.push(tag);
+    }
+  }
+  return result;
+}
 
 export type BinVersionSummary = {
   version: number;
@@ -85,15 +125,29 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
   throw new Error("etag_conflict");
 }
 
-export async function listBins(env: Env): Promise<BinMeta[]> {
+export async function listBins(env: Env, options?: { tag?: string; favorite?: boolean; pinned?: boolean }): Promise<BinMeta[]> {
   const items = await listJsonObjects<StoredBinMeta>(requireDataBucket(env), "bins/");
-  return items.filter(item => isActiveBin(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return (items.filter(item => isActiveBin(item, Date.now())) as BinMeta[]).filter(item => {
+    if (options?.favorite !== undefined && (item.favorite ?? false) !== options.favorite) return false;
+    if (options?.pinned !== undefined && (item.pinned ?? false) !== options.pinned) return false;
+    if (options?.tag && !(item.tags ?? []).includes(options.tag)) return false;
+    return true;
+  }).sort((a, b) => {
+    const pinA = a.pinned ? 1 : 0;
+    const pinB = b.pinned ? 1 : 0;
+    if (pinA !== pinB) return pinB - pinA;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
 }
 
 export async function createBin(
   env: Env,
   input: {
     name: string;
+    slug?: string | null;
+    tags?: string[];
+    favorite?: boolean;
+    pinned?: boolean;
     description?: string;
     value: unknown;
     visibility?: "private" | "public";
@@ -104,17 +158,32 @@ export async function createBin(
   },
 ): Promise<BinRecord> {
   const bucket = requireDataBucket(env);
+  const slug = validateSlug(input.slug);
+  const tags = validateTags(input.tags);
   await assertCollectionAvailable(env, input.collectionId);
   const binding = await resolveSchemaBinding(env, input.schemaId, input.value);
   if (input.schemaLocked && !binding.schemaId) throw new SchemaError("schema_required");
   const id = crypto.randomUUID();
+  const lifecycleId = crypto.randomUUID();
   const now = new Date().toISOString();
   const defaults = await resolveCreateDefaults(env, input, Date.parse(now));
   const json = JSON.stringify(input.value);
 
+  if (slug) {
+    const aliasRecord: BinAliasRecord = { slug, binId: id, lifecycleId, createdAt: now };
+    const claimed = await putJson(bucket, binAliasKey(slug), aliasRecord, {
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (!claimed) throw new Error("slug_conflict");
+  }
+
   const meta: BinMeta = {
     id,
     name: input.name,
+    slug: slug ?? null,
+    tags,
+    favorite: input.favorite ?? false,
+    pinned: input.pinned ?? false,
     description: input.description ?? "",
     visibility: defaults.visibility,
     collectionId: input.collectionId ?? null,
@@ -126,23 +195,31 @@ export async function createBin(
     createdAt: now,
     updatedAt: now,
     expiresAt: defaults.expiresAt,
+    lifecycleId,
   };
 
-  await putJson(bucket, versionKey(id, 1), input.value);
-  const metaObject = await putJson(bucket, metaKey(id), meta);
-  await syncSearchResource(env, 'bin', id);
+  try {
+    await putJson(bucket, versionKey(id, 1), input.value);
+    const metaObject = await putJson(bucket, metaKey(id), meta);
+    await syncSearchResource(env, 'bin', id);
 
-  if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
-    await detachBinFromCollection(env, id, input.collectionId);
-    const latest = await getBin(env, id);
-    if (latest) return latest;
+    if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
+      await detachBinFromCollection(env, id, input.collectionId);
+      const latest = await getBin(env, id);
+      if (latest) return latest;
+    }
+
+    return {
+      meta,
+      value: input.value,
+      etag: metaObject.httpEtag,
+    };
+  } catch (error) {
+    if (slug) {
+      await bucket.delete(binAliasKey(slug)).catch(() => {});
+    }
+    throw error;
   }
-
-  return {
-    meta,
-    value: input.value,
-    etag: metaObject.httpEtag,
-  };
 }
 
 export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
@@ -281,6 +358,10 @@ export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
 
 export type BinMetadataInput = {
   name?: string;
+  slug?: string | null;
+  tags?: string[];
+  favorite?: boolean;
+  pinned?: boolean;
   description?: string;
   visibility?: "private" | "public";
   collectionId?: string | null;
@@ -300,6 +381,12 @@ export async function updateBinMetadata(
   const unlockOnly = input.locked === false && Object.keys(input).length === 1;
   assertWritable(unlockOnly ? { ...current.meta, locked: false } : current.meta, current.etag, expectedEtag);
   await assertCollectionAvailable(env, input.collectionId);
+
+  const changedSlug = input.slug !== undefined && input.slug !== current.meta.slug;
+  const newSlug = changedSlug ? validateSlug(input.slug) : current.meta.slug;
+  const oldSlug = current.meta.slug;
+  const tags = input.tags !== undefined ? validateTags(input.tags) : current.meta.tags;
+
   const { refreshSchema, ...fields } = input;
   const changedBinding = (input.schemaId !== undefined && input.schemaId !== current.meta.schemaId) || refreshSchema === true;
   if (current.meta.schemaLocked && changedBinding) throw new SchemaError("schema_locked");
@@ -307,16 +394,77 @@ export async function updateBinMetadata(
   if (refreshSchema && !requestedSchemaId) throw new SchemaError("schema_required");
   const binding = changedBinding ? await resolveSchemaBinding(env, requestedSchemaId, current.value)
     : { schemaId: current.meta.schemaId, schemaRevision: current.meta.schemaRevision ?? null };
-  const meta = { ...current.meta, ...fields, ...binding, updatedAt: new Date().toISOString() };
-  if (meta.schemaLocked && !meta.schemaId) throw new SchemaError("schema_required");
-  const written = await putJson(bucket, metaKey(id), meta, {
-    onlyIf: { etagMatches: normalizeEtag(current.etag) },
-  });
-  if (!written) throw new Error("etag_conflict");
+
+  const lifecycleId = current.meta.lifecycleId ?? crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  // Atomically claim new slug if changed
+  if (changedSlug && newSlug) {
+    const aliasRecord: BinAliasRecord = { slug: newSlug, binId: id, lifecycleId, createdAt: now };
+    const claimed = await putJson(bucket, binAliasKey(newSlug), aliasRecord, {
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (!claimed) throw new Error("slug_conflict");
+  }
+
+  const meta: BinMeta = {
+    ...current.meta,
+    ...fields,
+    ...(input.tags !== undefined ? { tags } : {}),
+    ...(changedSlug ? { slug: newSlug } : {}),
+    lifecycleId,
+    ...binding,
+    updatedAt: now,
+  };
+  if (meta.schemaLocked && !meta.schemaId) {
+    if (changedSlug && newSlug) await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+    throw new SchemaError("schema_required");
+  }
+
+  let written: { httpEtag: string } | null = null;
+  try {
+    written = await putJson(bucket, metaKey(id), meta, {
+      onlyIf: { etagMatches: normalizeEtag(current.etag) },
+    });
+    if (!written) {
+      if (changedSlug && newSlug) await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+      throw new Error("etag_conflict");
+    }
+    // Delete old slug alias after CAS success
+    if (changedSlug && oldSlug) {
+      await bucket.delete(binAliasKey(oldSlug)).catch(() => {});
+    }
+  } catch (error) {
+    if (changedSlug && newSlug && !written) {
+      await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+    }
+    throw error;
+  }
+
   if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
     await detachBinFromCollection(env, id, input.collectionId);
     return getBin(env, id);
   }
   await syncSearchResource(env, 'bin', id);
   return { meta, value: current.value, etag: written.httpEtag };
+}
+
+export async function getBinBySlug(env: Env, slug: string): Promise<BinRecord | null> {
+  const bucket = requireDataBucket(env);
+  const normalized = validateSlug(slug);
+  if (!normalized) return null;
+
+  const alias = await getJson<BinAliasRecord>(bucket, binAliasKey(normalized));
+  if (!alias) return null;
+
+  const binRecord = await getBin(env, alias.value.binId);
+  if (!binRecord) return null;
+
+  // Verify full ownership and lifecycle consistency
+  if (binRecord.meta.slug !== normalized) return null;
+  if (alias.value.lifecycleId && binRecord.meta.lifecycleId && alias.value.lifecycleId !== binRecord.meta.lifecycleId) {
+    return null;
+  }
+
+  return binRecord;
 }

@@ -2,7 +2,7 @@ import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 import { binMetaKey, legacyTrashKey, isExpired, normalizeEtag, type StoredBinMeta } from "./bin-state";
-import { getBin, type BinMeta } from "./bins";
+import { getBin, binAliasKey, type BinMeta } from "./bins";
 import { assertBoundSchema } from "./schemas";
 import { detachBinFromCollection, getCollection } from "./collections";
 
@@ -98,6 +98,9 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
     etag = claimed.httpEtag;
   }
   // Only the permanent purging state permits physical deletion. Restore cannot win after this CAS.
+  if (current.meta.slug) {
+    await bucket.delete(binAliasKey(current.meta.slug)).catch(() => {});
+  }
   await syncSearchResource(env, 'bin', id);
   await removeContents(bucket, id);
   const written = await putJson(bucket, binMetaKey(id), { id, deletedAt: current.meta.deletedAt, purgeState: "purged" },

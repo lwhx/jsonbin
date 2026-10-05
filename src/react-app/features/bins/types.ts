@@ -1,6 +1,10 @@
 export type BinMeta = {
   id: string;
   name: string;
+  slug?: string | null;
+  tags?: string[];
+  favorite?: boolean;
+  pinned?: boolean;
   description: string;
   visibility: "private" | "public";
   collectionId: string | null;
@@ -15,7 +19,7 @@ export type BinMeta = {
   expiresAt: string | null;
 };
 export type BinRecord = { meta: BinMeta; value: unknown; etag: string };
-export type MetadataInput = Pick<BinMeta, "name" | "description" | "visibility" | "collectionId" | "schemaId" | "schemaLocked" | "expiresAt"> & { refreshSchema?: boolean };
+export type MetadataInput = Pick<BinMeta, "name" | "slug" | "tags" | "favorite" | "pinned" | "description" | "visibility" | "collectionId" | "schemaId" | "schemaLocked" | "expiresAt"> & { refreshSchema?: boolean };
 export type BinVersionSummary = { version: number; createdAt: string; size: number };
 export type BinVersionRecord = BinVersionSummary & { id: string; value: unknown; etag: string };
 export type BinVersionList = { items: BinVersionSummary[]; currentVersion: number; total: number };

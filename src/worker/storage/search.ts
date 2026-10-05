@@ -4,6 +4,7 @@ import { isImportMarker } from '../../shared/backup.ts';
 import { isActiveBin, type StoredBinMeta } from './bin-state';
 import type { CollectionMeta } from './collections';
 import type { SchemaMeta } from './schemas';
+import type { BinMeta } from './bins';
 import { getJson, putJson, requireDataBucket } from './r2';
 
 // KV is disposable. R2 object ETags detect missed mutations, and a trusted R2
@@ -49,7 +50,7 @@ async function readRow(env: Env, type: SearchKind, id: string): Promise<IndexRow
   if (type === 'bin') {
     if (!isActiveBin(meta as StoredBinMeta)) return null;
     const bin = meta as Extract<StoredBinMeta, { name: string }>;
-    return { type, id, name: bin.name, description: bin.description, updatedAt: bin.updatedAt, collectionId: bin.collectionId, expiresAt: bin.expiresAt };
+    return { type, id, name: bin.name, description: bin.description, updatedAt: bin.updatedAt, collectionId: bin.collectionId, expiresAt: bin.expiresAt, ...(bin.slug ? { slug: bin.slug } : {}) };
   }
   if ((meta as CollectionMeta | SchemaMeta).status !== 'active') return null;
   return { type, id, name: (meta as CollectionMeta).name, description: (meta as CollectionMeta).description,
@@ -61,9 +62,8 @@ export async function syncSearchResource(env: Env, type: SearchKind, id: string)
     const row = await readRow(env, type, id);
     if (row) await env.CACHE.put(indexKey(type, id), JSON.stringify(row));
     else await env.CACHE.delete(indexKey(type, id));
-    if (type === 'collection') {
-      // Collection slugs are stable; archived collections retain the slug.
-      const meta = row ? null : await getJson<CollectionMeta>(requireDataBucket(env), metaKey(type, id));
+    if (type === 'collection' || type === 'bin') {
+      const meta = row ? null : await getJson<CollectionMeta | BinMeta>(requireDataBucket(env), metaKey(type, id));
       const slug = row?.slug ?? (meta && !isImportMarker(meta.value) ? meta.value.slug : undefined);
       if (slug) { if (row) await env.CACHE.put(`idx:slug:${slug}`, id); else await env.CACHE.delete(`idx:slug:${slug}`); }
     }

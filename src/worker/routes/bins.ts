@@ -6,6 +6,7 @@ import {
   createBin,
   deleteBin,
   getBin,
+  getBinBySlug,
   listBins,
   updateBin,
   updateBinMetadata,
@@ -46,8 +47,15 @@ const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
   return requireAccess("bin:read")(c, next);
 };
 
+const slugSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9-_]{1,62}[a-z0-9]$/i, "invalid_slug").transform(s => s.toLowerCase()).nullable().optional();
+const tagsSchema = z.array(z.string().trim().min(1).max(32)).max(20).optional();
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(160),
+  slug: slugSchema,
+  tags: tagsSchema,
+  favorite: z.boolean().optional(),
+  pinned: z.boolean().optional(),
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
   collectionId: z.string().uuid().nullable().optional(),
@@ -63,6 +71,10 @@ const updateSchema = z.object({
 
 const metadataSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
+  slug: slugSchema,
+  tags: tagsSchema,
+  favorite: z.boolean().optional(),
+  pinned: z.boolean().optional(),
   description: z.string().max(1000).optional(),
   visibility: z.enum(["private", "public"]).optional(),
   collectionId: z.string().uuid().nullable().optional(),
@@ -74,6 +86,9 @@ const metadataSchema = z.object({
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
+  if (error.message === "slug_conflict") return c.json({ error: "slug_conflict" }, 409);
+  if (error.message === "invalid_slug") return c.json({ error: "invalid_slug" }, 422);
+  if (error.message === "invalid_tags" || error.message === "tags_limit_reached") return c.json({ error: error.message }, 422);
   if (error.message === "version_limit_reached") return c.json({ error: "version_limit_reached" }, 409);
   if (error.message === "settings_unavailable") return c.json({ error: "settings_unavailable" }, 503);
   if (error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
@@ -131,7 +146,14 @@ app.post("/:id/versions/:version/restore", requireAccess(["bin:update", "history
 });
 
 app.get("/", requireAccess("bin:read"), async (c) => {
-  const items = await listBins(c.env);
+  const tag = c.req.query("tag")?.trim();
+  const favoriteParam = c.req.query("favorite");
+  const pinnedParam = c.req.query("pinned");
+
+  const favorite = favoriteParam === "true" ? true : favoriteParam === "false" ? false : undefined;
+  const pinned = pinnedParam === "true" ? true : pinnedParam === "false" ? false : undefined;
+
+  const items = await listBins(c.env, { tag: tag || undefined, favorite, pinned });
   return c.json({
     items,
     total: items.length,
@@ -262,6 +284,35 @@ app.patch("/:id/meta", requireAccess("bin:update"), async (c) => {
     if (error instanceof Error && error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
     throw error;
   }
+});
+
+const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
+  const load = async () => { c.set("bin", await getBinBySlug(c.env, c.req.param("slug")!)); await next(); };
+  if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
+  const record = await getBinBySlug(c.env, c.req.param("slug")!);
+  c.set("bin", record);
+  if (record?.meta.visibility === "public") return next();
+  return requireAccess("bin:read")(c, next);
+};
+
+export const slugApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+slugApp.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+slugApp.get("/:slug", readCurrentBySlug, async (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  return c.json(record);
+});
+
+slugApp.on("GET", ["/:slug/value", "/:slug/value/*"], readCurrentBySlug, (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  const path = valuePath(c.req.url);
+  const value = readValue(record.value, path);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  return c.json({ id: record.meta.id, slug: record.meta.slug, path, value, etag: record.etag, version: record.meta.currentVersion });
 });
 
 export default app;

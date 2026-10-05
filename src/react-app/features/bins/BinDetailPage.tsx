@@ -26,8 +26,8 @@ function isJsonObject(value: unknown): value is Record<string, import("./json-fo
 }
 
 function metadataOf(record: BinRecord): MetadataInput {
-  const { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt } = record.meta;
-  return { name, description, visibility, collectionId, schemaId, schemaLocked, expiresAt, refreshSchema: false };
+  const { name, slug, tags, favorite, pinned, description, visibility, collectionId, schemaId, schemaLocked, expiresAt } = record.meta;
+  return { name, slug: slug ?? null, tags: tags ?? [], favorite: favorite ?? false, pinned: pinned ?? false, description, visibility, collectionId, schemaId, schemaLocked, expiresAt, refreshSchema: false };
 }
 
 export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
@@ -340,6 +340,12 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
           onChange={event => setMetadata({ ...metadata, expiresAt: expiryFromInput(event.target.value) })} /></label>
         <p>使用本地时区，留空表示永不过期。到期后停止正常读写，可在回收站恢复；数据锁不会延长已设置的期限。</p>
         <label>名称<input required maxLength={160} value={metadata.name} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, name: event.target.value })} /></label>
+        <label>自定义别名 (Slug)<input placeholder="如 my-app-config，留空表示移除" value={metadata.slug ?? ""} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, slug: event.target.value.toLowerCase().trim() || null })} /></label>
+        <label>标签 (Tags)<input placeholder="用逗号或空格分隔，如 prod, vps" value={metadata.tags?.join(", ") ?? ""} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, tags: event.target.value.split(/[,，\s]+/).map(t => t.trim()).filter(Boolean) })} /></label>
+        <div style={{ display: "flex", gap: "20px" }}>
+          <label className="schema-checkbox"><input type="checkbox" checked={metadata.pinned ?? false} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, pinned: event.target.checked })} />置顶展示</label>
+          <label className="schema-checkbox"><input type="checkbox" checked={metadata.favorite ?? false} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, favorite: event.target.checked })} />加入收藏</label>
+        </div>
         <label>描述<textarea maxLength={1000} value={metadata.description} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, description: event.target.value })} /></label>
         <label>可见性<select aria-label="可见性" value={metadata.visibility} disabled={Boolean(busy) || locked} onChange={event => setMetadata({ ...metadata, visibility: event.target.value as "private" | "public" })}><option value="private">私有</option><option value="public">公开</option></select></label>
         <label>集合<select aria-label="集合" value={metadata.collectionId ?? ""} disabled={Boolean(busy) || locked || collections.isPending || collections.isError}

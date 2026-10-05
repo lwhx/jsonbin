@@ -19,7 +19,7 @@ export function mergePatch(target: unknown, patch: unknown, depth = 0): unknown 
 
 // Decode each URL segment exactly once, then JSON Pointer's ~1 and ~0 escapes.
 export function valuePath(url: string): string[] {
-  const suffix = new URL(url).pathname.match(/\/bins\/[^/]+\/value(\/.*)?$/)?.[1];
+  const suffix = new URL(url).pathname.match(/(?:\/bins\/[^/]+|\/b\/[^/]+)\/value(\/.*)?$/)?.[1];
   if (!suffix) return [];
   const segments = suffix.slice(1).split("/");
   if (segments.length > 128) throw new Error("invalid_path");

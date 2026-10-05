@@ -1165,6 +1165,10 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 
 依据 [v3.1 加固设计](superpowers/specs/2026-10-05-v3-1-hardening-design.md) 与三个实施子计划推进：
 
+- [x] **P13：Bin 自定义 Slug + 标签 / 收藏 / 置顶**：
+  - 支持可选自定义别名（`slug`），通过 `aliases/bins/<slug>.json` 实现 R2 权威原子抢占，提供 `/api/v1/b/:slug` 及深层路径访问。
+  - 支持标签（`tags`）、收藏（`favorite`）、置顶（`pinned`）字段与筛选，列表默认按 `pinned DESC, updatedAt DESC` 排序。
+  - 前端支持别名输入、标签胶囊展示与过滤、置顶/收藏状态切换。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。
