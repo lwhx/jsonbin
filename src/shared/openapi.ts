@@ -475,6 +475,35 @@ export function generateOpenApiSpec(): Record<string, unknown> {
         patch: op("更新模板（产生不可变新版本）", { security: SESSION_ONLY, parameters: [idParameter, etagParameter], responses: { ...ok(), "412": { description: "ETag 冲突" } } }),
         delete: op("删除模板（CAS tombstone 后清理）", { security: SESSION_ONLY, parameters: [idParameter, etagParameter] }),
       },
+      "/webhooks": {
+        get: op("列出 Webhook 订阅", { security: SESSION_ONLY, responses: ok("含可选事件模式与动作清单") }),
+        post: op("创建 Webhook", {
+          security: SESSION_ONLY,
+          description: "资源生命周期事件回调；投递带 HMAC 签名，失败由 Cron 按退避重试",
+          requestBody: jsonBody({
+            type: "object", required: ["name", "url", "secret", "events"],
+            properties: {
+              name: { type: "string" },
+              url: { type: "string", format: "uri", description: "http(s) 接收端地址" },
+              secret: { type: "string", minLength: 16, description: "用于验证 X-JSONBin-Signature" },
+              events: { type: "array", items: { type: "string" }, description: "组通配（bin.*）或精确动作（bin.updated）" },
+              active: { type: "boolean" },
+            },
+          }),
+          responses: created(),
+        }),
+      },
+      "/webhooks/{id}": {
+        get: op("读取 Webhook", { security: SESSION_ONLY, parameters: [idParameter], responses: { ...ok(), ...notFound } }),
+        patch: op("更新 Webhook", { security: SESSION_ONLY, parameters: [idParameter, etagParameter], responses: { ...ok(), "412": { description: "ETag 冲突" }, "428": { description: "缺少 If-Match" } } }),
+        delete: op("删除 Webhook 及其投递记录", { security: SESSION_ONLY, parameters: [idParameter, etagParameter] }),
+      },
+      "/webhooks/{id}/deliveries": {
+        get: op("最近投递记录", { security: SESSION_ONLY, parameters: [idParameter], responses: ok("status/attempts/lastError") }),
+      },
+      "/webhooks/{id}/test": {
+        post: op("发送测试投递（不要求 active）", { security: SESSION_ONLY, parameters: [idParameter], responses: ok("返回最新投递状态") }),
+      },
       "/templates/{id}/create-bin": {
         post: op("基于模板新建数据仓", {
           security: SESSION_ONLY,

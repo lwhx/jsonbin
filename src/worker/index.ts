@@ -13,8 +13,10 @@ import schemaRoutes from "./routes/schemas";
 import collectionRoutes from "./routes/collections";
 import trashRoutes from "./routes/trash";
 import templateRoutes from "./routes/templates";
+import webhookRoutes from "./routes/webhooks";
 import { generateOpenApiSpec } from "../shared/openapi";
 import { sweepBins } from "./storage/trash";
+import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
 
@@ -62,6 +64,7 @@ app.route("/api/v1/collections", collectionRoutes);
 app.route("/api/v1/schemas", schemaRoutes);
 app.route("/api/v1/trash", trashRoutes);
 app.route("/api/v1/templates", templateRoutes);
+app.route("/api/v1/webhooks", webhookRoutes);
 
 app.get("/api/v1/openapi.json", (c) => {
   return c.json(generateOpenApiSpec());
@@ -104,13 +107,16 @@ export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Env) {
     const requestId = crypto.randomUUID();
-    const [sweep] = await Promise.allSettled([sweepBins(env, Date.now(), ({ action, id }) => recordActivity(env, {
-      action, resourceId: id, requestId, identity: { actor: { type: "system", id: null }, provider: "system" },
-    }))]);
+    const [sweep] = await Promise.allSettled([sweepBins(env, Date.now(), async ({ action, id }) => {
+      await Promise.allSettled([
+        recordActivity(env, { action, resourceId: id, requestId, identity: { actor: { type: "system", id: null }, provider: "system" } }),
+        dispatchWebhooks(env, { action, resourceId: id, actor: { type: "system", id: null }, requestId }),
+      ]);
+    })]);
     // Prune after system events settle, even when Bin maintenance failed.
-    const [prune] = await Promise.allSettled([pruneActivity(env)]);
-    if (sweep.status === "rejected" || prune.status === "rejected") {
-      console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status });
+    const [prune, webhookSweep] = await Promise.allSettled([pruneActivity(env), sweepWebhookDeliveries(env)]);
+    if (sweep.status === "rejected" || prune.status === "rejected" || webhookSweep.status === "rejected") {
+      console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status, webhooks: webhookSweep.status });
       throw new Error("scheduled_maintenance_failed");
     }
   },

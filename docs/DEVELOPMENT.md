@@ -265,6 +265,15 @@ If-Match: "xxxx"
 
 所有设置 `ETag` 响应头的 GET 读路径（Bin 详情/值/发布版、`/b/:slug` 系列、Collection/Schema/Template 详情、历史版本）支持 RFC 9110 条件请求：携带与当前 ETag 匹配的 `If-None-Match`（支持裸值、引号、`W/` 弱比较、逗号列表与 `*`）时返回空 body 的 `304 Not Modified`，并保留 `ETag` 与 `Cache-Control: no-store` 头。内容或元数据任何变化都会推进 ETag，轮询方因此只在真实变更时传输数据。认证语义不变：私有资源仍先通过鉴权。
 
+### Webhook 事件推送
+
+- `GET/POST /api/v1/webhooks`、`GET/PATCH/DELETE /api/v1/webhooks/:id`（Session-only，全部条件写要求 `If-Match`）、`GET /api/v1/webhooks/:id/deliveries`、`POST /api/v1/webhooks/:id/test`。
+- 订阅事件为组通配（`bin.*`、`collection.*`、`schema.*`、`template.*`、`system.*`）或精确动作（如 `bin.updated`）；auth.* 与 key.* 管理事件不可订阅。
+- 事件来源复用 activity 审计链路：请求路径经 `auditRequest` 触发（`waitUntil` 后台投递，不阻塞响应），Cron 生命周期转换（bin.expired/bin.purged）在 scheduled 中同步派发。
+- 投递契约：`POST <url>`，Header `X-JSONBin-Event` / `X-JSONBin-Delivery` / `X-JSONBin-Timestamp` / `X-JSONBin-Signature: sha256=<hex>`，签名为 `HMAC-SHA256(secret, "<timestamp>.<body>")`（GitHub 风格）；body 为 `{event, resourceId, actor, requestId, dispatchedAt, deliveryId, attempts, webhook:{id,name}}`，不包含业务 JSON 值。
+- 可靠性：投递记录先落 R2（`webhooks/<id>/deliveries/`）再尝试发送；非 2xx/超时（5s）按 10s/1m/10m/1h/6h 退避重试，共 6 次后标记 failed；Cron 每次扫描到期重试并清理 24h 前的已完成记录。`POST /:id/test` 发送 `webhook.test` 合成事件（不要求 active）。
+- 接收端校验示例（Node）：`crypto.createHmac("sha256", secret).update(`${timestamp}.${rawBody}`).digest("hex") === signature.slice("sha256=".length)`，并拒绝时间戳偏移过大的请求。
+
 ## 6. Web UI 固定信息架构
 
 左侧导航固定为：

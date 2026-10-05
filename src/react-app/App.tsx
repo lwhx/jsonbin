@@ -13,6 +13,7 @@ import {
   Database,
   FileJson2,
   KeyRound,
+  Webhook,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
@@ -41,6 +42,7 @@ import { SchemaIssues } from "./features/schemas/SchemaIssues";
 import type { SchemaIssue } from "./features/schemas/api";
 
 import { KeysPage } from "./features/keys/KeysPage";
+import { WebhooksPage } from "./features/webhooks/WebhooksPage";
 import { DocsPage } from "./features/docs/DocsPage";
 import { ActivityPage } from "./features/activity/ActivityPage";
 import { TrashPage } from "./features/trash/TrashPage";
@@ -94,7 +96,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Trash" | "Activity" | "Docs" | "Settings" | "Search";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Webhooks" | "Trash" | "Activity" | "Docs" | "Settings" | "Search";
 
 type NavLink = {
   label: string;
@@ -121,6 +123,7 @@ const nav: NavItem[] = [
   { label: "数据模型", icon: Braces, section: "Schemas" },
   { divider: true, label: "开发者" },
   { label: "API 密钥", icon: KeyRound, section: "Keys" },
+  { label: "Webhook", icon: Webhook, section: "Webhooks" },
   { label: "活动记录", icon: Activity, section: "Activity" },
   { label: "API 文档", icon: TerminalSquare, section: "Docs" },
   { divider: true, label: "系统" },
@@ -405,11 +408,11 @@ function AuthenticatedApp({
   const confirm = useConfirm();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
+  const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/webhooks" ? "Webhooks" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Webhooks" ? "/webhooks" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -621,7 +624,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Trash" ?
+          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Trash" ?
             <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
