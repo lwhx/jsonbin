@@ -20,6 +20,11 @@ const MAX_READ_BYTES = 20 * 1024 * 1024; // 20 MiB
 const MAX_DEPTH = 64;
 const MAX_NODES_PER_BIN = 10000;
 
+/** RFC 6901: "~" and "/" inside a token must be escaped as "~0" and "~1". */
+function escapeJsonPointerToken(value: string) {
+  return value.replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
 export async function searchJsonContent(
   env: Env,
   query: string,
@@ -52,7 +57,8 @@ export async function searchJsonContent(
     const records = await Promise.all(chunk.map((b) => getBin(env, b.id)));
 
     for (const record of records) {
-      if (!record || !record.value) continue;
+      // Truthy checks would skip legal scalar roots like false / 0 / "".
+      if (!record) continue;
 
       totalBytes += record.meta.size;
       if (totalBytes > MAX_READ_BYTES) {
@@ -80,7 +86,7 @@ export async function searchJsonContent(
             }
           } else {
             for (const [k, v] of Object.entries(val)) {
-              const nextPath = `${currentPath}/${k}`;
+              const nextPath = `${currentPath}/${escapeJsonPointerToken(k)}`;
               // Check object key
               if (k.toLowerCase().includes(q)) {
                 matches.push({

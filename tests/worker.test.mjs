@@ -1870,3 +1870,42 @@ test('audit: save-as-template is Session-only and a bin:read Bearer key cannot c
   });
   assert.equal(sessionRes.status, 201);
 });
+
+test('audit: content search covers falsy scalar roots and escapes JSON Pointer tokens', async () => {
+  const falsy = await create(false);
+  await request(`/bins/${falsy.meta.id}/meta`, { method: 'PATCH', etag: falsy.etag, value: { contentSearchMode: 'all' } });
+  const zero = await create(0);
+  await request(`/bins/${zero.meta.id}/meta`, { method: 'PATCH', etag: zero.etag, value: { contentSearchMode: 'all' } });
+  const empty = await create('');
+  await request(`/bins/${empty.meta.id}/meta`, { method: 'PATCH', etag: empty.etag, value: { contentSearchMode: 'all' } });
+  const text = await create('needle-in-root');
+  await request(`/bins/${text.meta.id}/meta`, { method: 'PATCH', etag: text.etag, value: { contentSearchMode: 'all' } });
+  const escaped = await create({ 'a/b': { 'x~y': 'pointer-needle' } });
+  await request(`/bins/${escaped.meta.id}/meta`, { method: 'PATCH', etag: escaped.etag, value: { contentSearchMode: 'all' } });
+
+  for (const [id, q] of [[falsy.meta.id, 'false'], [zero.meta.id, '0'], [empty.meta.id, ''], [text.meta.id, 'needle-in-root']]) {
+    if (!q) continue;
+    const res = await request(`/search/content?q=${encodeURIComponent(q)}`);
+    assert.equal(res.status, 200);
+    const hit = (await res.json()).items.find(i => i.binId === id);
+    if (q === 'needle-in-root') {
+      assert.ok(hit, 'root scalar string must be searchable');
+      assert.equal(hit.path, '');
+    } else {
+      assert.ok(hit, `falsy root ${JSON.stringify(q)} must be searchable`);
+      assert.equal(hit.matchType, 'value');
+      assert.equal(hit.path, '');
+    }
+  }
+
+  const pointerRes = await request('/search/content?q=pointer-needle');
+  assert.equal(pointerRes.status, 200);
+  const pointerHit = (await pointerRes.json()).items.find(i => i.binId === escaped.meta.id);
+  assert.ok(pointerHit);
+  assert.equal(pointerHit.path, '/a~1b/x~0y', 'JSON Pointer must escape "/" as ~1 and "~" as ~0');
+
+  const keyHitRes = await request('/search/content?q=a%2Fb');
+  const keyHit = (await keyHitRes.json()).items.find(i => i.binId === escaped.meta.id && i.matchType === 'key');
+  assert.ok(keyHit);
+  assert.equal(keyHit.path, '/a~1b');
+});
