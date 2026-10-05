@@ -5,7 +5,9 @@ import { requireAccess } from "../middleware/auth";
 import { createSchema, getSchema, listSchemas, updateSchema, deleteSchema } from "../storage/schemas";
 import { SchemaError, validateSchemaValue, type JsonSchema } from "../validation/schema";
 
+import { conditionalGet } from "../middleware/conditional";
 const app = new Hono<{ Bindings: Env }>();
+app.use("*", conditionalGet);
 const input = z.object({ name: z.string().trim().min(1).max(160), description: z.string().max(1000).optional(),
   schema: z.union([z.boolean(), z.record(z.string(), z.unknown())]) }).strict();
 app.onError((error, c) => {

@@ -1909,3 +1909,47 @@ test('audit: content search covers falsy scalar roots and escapes JSON Pointer t
   assert.ok(keyHit);
   assert.equal(keyHit.path, '/a~1b');
 });
+
+test('audit: If-None-Match turns unchanged reads into empty 304 responses', async () => {
+  const bin = await create({ stable: true });
+  const path = `/bins/${bin.meta.id}`;
+  const etag = bin.etag.replace(/"/g, '');
+
+  // Exact, quoted, weak and list forms all match.
+  for (const candidate of [etag, `"${etag}"`, `W/"${etag}"`, `"other", "${etag}"`]) {
+    const res = await request(path, { headers: { 'If-None-Match': candidate } });
+    assert.equal(res.status, 304, candidate);
+    assert.equal(await res.text(), '');
+    assert.equal(res.headers.get('etag').replace(/"/g, ''), etag);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+  }
+  // Mismatched and absent headers return full payloads.
+  assert.equal((await request(path, { headers: { 'If-None-Match': '"stale"' } })).status, 200);
+  assert.equal((await request(path)).status, 200);
+
+  // Value, published and slug reads behave the same.
+  assert.equal((await request(`${path}/value/stable`, { headers: { 'If-None-Match': `"${etag}"` } })).status, 304);
+  const published = await (await request(`${path}/publish`, { method: 'POST', etag: bin.etag })).json();
+  const publishedEtag = published.etag.replace(/"/g, '');
+  assert.equal((await request(`${path}/published`, { headers: { 'If-None-Match': `"${publishedEtag}"` } })).status, 304);
+  const slugged = await (await request('/bins', { method: 'POST', value: { name: '304 Slug', slug: 'not-modified-slug', value: 1 } })).json();
+  const slugEtag = slugged.etag.replace(/"/g, '');
+  assert.equal((await request('/b/not-modified-slug', { headers: { 'If-None-Match': `"${slugEtag}"` } })).status, 304);
+  assert.equal((await request('/b/not-modified-slug', { headers: { 'If-None-Match': '"stale"' } })).status, 200);
+
+  // Any change (metadata bump) invalidates the cached ETag.
+  const updated = await (await request(`${path}/meta`, { method: 'PATCH', etag: publishedEtag, value: { name: 'renamed-304' } })).json();
+  const updatedEtag = updated.etag.replace(/"/g, '');
+  assert.equal((await request(path, { headers: { 'If-None-Match': `"${etag}"` } })).status, 200);
+  assert.equal((await request(path, { headers: { 'If-None-Match': `"${updatedEtag}"` } })).status, 304);
+
+  // Anonymous conditional access keeps authentication semantics.
+  assert.equal((await request(path, { authenticated: false, headers: { 'If-None-Match': `"${updatedEtag}"` } })).status, 401);
+  // The wildcard form matches any current representation.
+  assert.equal((await request(path, { headers: { 'If-None-Match': '*' } })).status, 304);
+  // Collections, schemas and templates support conditional reads too.
+  const collection = await (await request('/collections', { method: 'POST', value: { name: '304 Collection' } })).json();
+  assert.equal((await request('/collections/' + collection.meta.id, { headers: { 'If-None-Match': `"${collection.etag.replace(/"/g, '')}"` } })).status, 304);
+  const schema = await (await request('/schemas', { method: 'POST', value: { name: '304 Schema', schema: { type: 'object' } } })).json();
+  assert.equal((await request('/schemas/' + schema.meta.id, { headers: { 'If-None-Match': `"${schema.etag.replace(/"/g, '')}"` } })).status, 304);
+});

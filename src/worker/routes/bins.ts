@@ -3,6 +3,7 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
 import { managementSession } from "../lib/system-http";
+import { conditionalGet } from "../middleware/conditional";
 import {
   cloneBin,
   createBin,
@@ -55,6 +56,8 @@ const expiresAtSchema = z.iso.datetime({ offset: true }).refine(value => Date.pa
 
 // Visibility can change; do not retain an anonymous response in browser/CDN caches.
 app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+// Conditional reads: If-None-Match turns unchanged GETs into empty 304s.
+app.use("*", conditionalGet);
 
 const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
   const load = async (): Promise<void> => {
@@ -650,6 +653,7 @@ const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables
 
 export const slugApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 slugApp.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
+slugApp.use("*", conditionalGet);
 slugApp.get("/:slug/published", readCurrentBySlug, async (c) => {
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);

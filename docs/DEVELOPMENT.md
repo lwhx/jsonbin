@@ -261,6 +261,10 @@ If-Match: "xxxx"
 
 前端不得静默覆盖，必须提示用户重新加载或查看冲突。
 
+### 条件读取（If-None-Match / 304）
+
+所有设置 `ETag` 响应头的 GET 读路径（Bin 详情/值/发布版、`/b/:slug` 系列、Collection/Schema/Template 详情、历史版本）支持 RFC 9110 条件请求：携带与当前 ETag 匹配的 `If-None-Match`（支持裸值、引号、`W/` 弱比较、逗号列表与 `*`）时返回空 body 的 `304 Not Modified`，并保留 `ETag` 与 `Cache-Control: no-store` 头。内容或元数据任何变化都会推进 ETag，轮询方因此只在真实变更时传输数据。认证语义不变：私有资源仍先通过鉴权。
+
 ## 6. Web UI 固定信息架构
 
 左侧导航固定为：

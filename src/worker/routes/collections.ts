@@ -9,7 +9,9 @@ type Variables = {
   apiKey?: ApiKey;
 };
 
+import { conditionalGet } from "../middleware/conditional";
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+app.use("*", conditionalGet);
 const createSchema = z.object({ name: z.string().trim().min(1).max(160), description: z.string().max(1000).optional() }).strict();
 const updateSchema = createSchema.partial().refine(input => Object.keys(input).length > 0);
 app.onError((error, c) => {

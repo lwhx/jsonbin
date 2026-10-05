@@ -55,7 +55,7 @@ export function generateOpenApiSpec(): Record<string, unknown> {
     info: {
       title: "JSONBin API",
       version,
-      description: "Cloudflare Workers + R2 + KV 原生架构的生产级企业 JSON 存储与管理服务平台",
+      description: "Cloudflare Workers + R2 + KV 原生架构的生产级企业 JSON 存储与管理服务平台。所有带 ETag 的 GET 端点支持 If-None-Match 条件读取（未变化返回空 304）。",
     },
     servers: [
       {

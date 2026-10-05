@@ -12,7 +12,9 @@ import {
 import { createBin, getBin } from "../storage/bins";
 import { SchemaError } from "../validation/schema";
 
+import { conditionalGet } from "../middleware/conditional";
 const app = new Hono<{ Bindings: Env }>();
+app.use("*", conditionalGet);
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
   await next();
