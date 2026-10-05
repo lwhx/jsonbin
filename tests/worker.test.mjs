@@ -1847,3 +1847,20 @@ test('audit: save-as-template and template instantiation pin the captured schema
   assert.equal(fromTplBin.meta.schemaRevision, 1, 'instantiated Bin must bind the template captured revision');
   assert.equal((await request(`/bins/${fromTplBin.meta.id}`, { method: 'PUT', etag: fromTplBin.etag, value: { value: { flag: false } } })).status, 200);
 });
+
+test('audit: save-as-template is Session-only and a bin:read Bearer key cannot create templates', async () => {
+  const bin = await create({ tpl: true });
+  const key = await (await request('/keys', { method: 'POST', value: { name: 'tpl-key', scopes: ['bin:read'] } })).json();
+
+  const bearerRes = await request(`/bins/${bin.meta.id}/save-as-template`, {
+    method: 'POST', etag: bin.etag, value: { name: 'Via Bearer' }, authorization: `Bearer ${key.token}`,
+  });
+  assert.equal(bearerRes.status, 401);
+  const list = await (await request('/templates')).json();
+  assert.equal(list.items.some(t => t.name === 'Via Bearer'), false);
+
+  const sessionRes = await request(`/bins/${bin.meta.id}/save-as-template`, {
+    method: 'POST', etag: bin.etag, value: { name: 'Via Session' },
+  });
+  assert.equal(sessionRes.status, 201);
+});

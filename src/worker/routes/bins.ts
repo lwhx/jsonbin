@@ -2,6 +2,7 @@ import { auditRequest } from "../activity";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
+import { managementSession } from "../lib/system-http";
 import {
   cloneBin,
   createBin,
@@ -333,7 +334,9 @@ app.post("/batch", async (c) => {
   return c.json({ results });
 });
 
-app.post("/:id/save-as-template", requireAccess(["bin:read"]), checkBinMutationAccess, async (c) => {
+// Template management is Session-only (P15); bin:read must not imply template
+// writes. An explicit Authorization header never falls back to the cookie.
+app.post("/:id/save-as-template", managementSession, checkBinMutationAccess, async (c) => {
   const ifMatch = c.req.header("If-Match");
   if (!ifMatch?.trim()) {
     return c.json({ error: "precondition_required" }, 428);
