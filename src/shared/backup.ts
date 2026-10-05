@@ -10,6 +10,13 @@ const defaults = z.object({ defaultVisibility: z.enum(['private', 'public']), de
 export const collectionMetaShape = z.object({ ...common, slug: z.string().min(1).max(240), status: z.enum(['active', 'deleted']) }).strict();
 export const schemaMetaShape = z.object({ ...common, currentRevision: positive, status: z.enum(['active', 'deleted']) }).strict();
 export const binMetaShape = z.object({ ...common, visibility: z.enum(['private', 'public']), collectionId: uuid.nullable(), schemaId: uuid.nullable(), schemaRevision: positive.nullable(), currentVersion: positive,
+  slug: z.string().nullable().optional(),
+  tags: z.array(z.string()).optional(),
+  favorite: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+  contentSearchMode: z.enum(['off', 'keys', 'all']).optional(),
+  publishedVersion: positive.nullable().optional(),
+  publishedAt: date.nullable().optional(),
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), locked: z.boolean(), schemaLocked: z.boolean(), expiresAt: date.nullable(), deletedAt: date.optional(), deletionReason: z.enum(['manual', 'expired']).optional() }).strict();
 const collection = z.object({ meta: collectionMetaShape }).strict();
 const schema = z.object({ meta: schemaMetaShape, revisions: z.array(z.object({ revision: positive, uploadedAt: date, schema: z.unknown() }).strict()) }).strict();

@@ -1202,6 +1202,9 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 发布控制端点：`POST /api/v1/bins/:id/publish`（支持发布最新或指定历史版本，强校验 Schema）与 `POST /api/v1/bins/:id/rollback`（仅移动指针，不破坏历史不可变性，不追加新版本）。
   - 生产稳定读取端点：`GET /api/v1/bins/:id/published`、`/published/value/*` 及 `/api/v1/b/:slug/published`。
   - 前端版本历史面板：清晰标注当前已发布版本标识，支持一键「发布/回滚到 vX」并带安全二次确认。
+- [x] **P21 (Backup / Restore 完整扩展)**：
+  - 备份契约扩充：将 `slug`、`tags`、`favorite`、`pinned`、`contentSearchMode`、`publishedVersion`、`publishedAt` 全面纳入系统快照导出。
+  - 灾难恢复防冲突 (15.1)：在恢复目标存在同名 Slug 冲突时，优雅降级（主数据优先恢复，冲突别名解绑为 `slug: null` 并记录），杜绝恢复时被意外同名抢占导致全包失败。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

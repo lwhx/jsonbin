@@ -2,7 +2,7 @@ import { syncSearchResource } from './search';
 import { readBackupJson } from './backup-json';
 import { SystemError } from '../../shared/system.ts';
 import { canonicalJson, fingerprintResource, isImportMarker, validateImportMarker, validateRestoreRequest } from '../../shared/backup.ts';
-import type { BackupCollection, BackupSchema, RestoreRequest, RestoreResource, RestoreResult } from '../../shared/backup-types.ts';
+import type { BackupBinMeta, BackupCollection, BackupSchema, RestoreRequest, RestoreResource, RestoreResult } from '../../shared/backup-types.ts';
 import { assertSchemaDefinition, assertSchemaValue, type JsonSchema } from '../../shared/schema-validation.ts';
 import { historyKey } from './backup-export';
 import { putJson, requireDataBucket } from './r2';
@@ -106,8 +106,26 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
     }
     await checkFiles(true); await checkDependencies(bucket, input);
     record = await read(bucket, key); if (!record) throw conflict(); const completed = await existing(); if (completed) return completed;
-    const meta = resource.kind === 'purged' ? { ...resource.data, purgeState: 'purged' }
+    const rawMeta = resource.kind === 'purged' ? { ...resource.data, purgeState: 'purged' }
       : resource.kind === 'bin' ? { ...resource.data.meta, size: new TextEncoder().encode(JSON.stringify(resource.data.versions.find(v => v.version === resource.data.meta.currentVersion)!.value)).length, lifecycleId: crypto.randomUUID() } : resource.data.meta;
+
+    // Handle slug restoration with collision fallback (15.1)
+    let meta = rawMeta;
+    if (resource.kind === 'bin') {
+      const binMeta = rawMeta as BackupBinMeta & { lifecycleId: string };
+      if (binMeta.slug) {
+        const slug = binMeta.slug;
+        const aliasKey = `aliases/bins/${slug}.json`;
+        const claimed = await putJson(bucket, aliasKey, { slug, binId: id, createdAt: new Date().toISOString() }, {
+          onlyIf: { etagDoesNotMatch: '*' },
+        });
+        if (!claimed) {
+          // Detach slug to preserve primary bin recovery without collision overwrite
+          meta = { ...binMeta, slug: null };
+        }
+      }
+    }
+
     const published = await putJson(bucket, key, meta, { onlyIf: { etagMatches: normalizeEtag(record.object.httpEtag) }, customMetadata: { restoreFingerprint: fingerprint } });
     if (published) {
       await syncSearchResource(env, resource.kind === 'purged' ? 'bin' : resource.kind, id);
