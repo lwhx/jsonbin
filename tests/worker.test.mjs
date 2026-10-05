@@ -1765,3 +1765,55 @@ test('audit: restricted key clone authorizes the target collection before any R2
   assert.equal(cloned.meta.collectionId, allowed.meta.id);
   assert.equal(await binCount(), before + 1);
 });
+
+test('audit: trash restore rebuilds the slug alias so /b/:slug keeps resolving', async () => {
+  const bin = await (await request('/bins', { method: 'POST', value: { name: 'Slugged', slug: 'restore-slug-x', value: { keep: true } } })).json();
+  assert.equal((await request('/b/restore-slug-x')).status, 200);
+  assert.equal((await request(`/bins/${bin.meta.id}`, { method: 'DELETE' })).status, 200);
+  const trash = await (await request('/trash/bins')).json();
+  const record = trash.items.find(i => i.meta.id === bin.meta.id);
+  const restored = await request(`/trash/bins/${bin.meta.id}/restore`, { method: 'POST', etag: record.etag });
+  assert.equal(restored.status, 200);
+  const restoredBody = await restored.json();
+  assert.notEqual(restoredBody.meta.lifecycleId, bin.meta.lifecycleId);
+  // The alias must point at the NEW lifecycle, otherwise slug resolution dies.
+  const alias = await (await bucket.get(`aliases/bins/restore-slug-x.json`)).json();
+  assert.equal(alias.lifecycleId, restoredBody.meta.lifecycleId);
+  assert.equal(alias.binId, bin.meta.id);
+  assert.equal((await request('/b/restore-slug-x')).status, 200);
+});
+
+test('audit: trash restore clears the published pointer and republishing starts fresh', async () => {
+  const bin = await create({ pub: 'v1' });
+  const path = `/bins/${bin.meta.id}`;
+  assert.equal((await request(`${path}/publish`, { method: 'POST', etag: bin.etag })).status, 200);
+  assert.equal((await request(`${path}/published`)).status, 200);
+  assert.equal((await request(path, { method: 'DELETE' })).status, 200);
+  const record = (await (await request('/trash/bins')).json()).items.find(i => i.meta.id === bin.meta.id);
+  const restored = await (await request(`/trash/bins/${bin.meta.id}/restore`, { method: 'POST', etag: record.etag })).json();
+  assert.equal(restored.meta.publishedVersion ?? null, null);
+  assert.equal(restored.meta.publishedAt ?? null, null);
+  assert.equal(restored.meta.visibility, 'private');
+  assert.equal((await request(`${path}/published`)).status, 404);
+});
+
+test('audit: restoring into an occupied slug detaches the alias instead of overwriting the owner', async () => {
+  const first = await (await request('/bins', { method: 'POST', value: { name: 'First Owner', slug: 'contested-slug', value: { who: 'first' } } })).json();
+  assert.equal((await request(`/bins/${first.meta.id}`, { method: 'DELETE' })).status, 200);
+  // While the first Bin is trashed its alias still pins the slug, so another
+  // owner can only exist through out-of-band state; simulate it directly.
+  const second = await (await request('/bins', { method: 'POST', value: { name: 'Second Owner', value: { who: 'second' } } })).json();
+  await bucket.put('aliases/bins/contested-slug.json', JSON.stringify({ slug: 'contested-slug', binId: second.meta.id, lifecycleId: second.meta.lifecycleId, createdAt: new Date().toISOString() }));
+  await bucket.put(`bins/${second.meta.id}/meta.json`, JSON.stringify({ ...second.meta, slug: 'contested-slug' }));
+
+  const record = (await (await request('/trash/bins')).json()).items.find(i => i.meta.id === first.meta.id);
+  const restored = await (await request(`/trash/bins/${first.meta.id}/restore`, { method: 'POST', etag: record.etag }));
+  assert.equal(restored.status, 200);
+  const restoredBody = await restored.json();
+  // Primary data always wins; only the conflicting alias is given up.
+  assert.equal(restoredBody.meta.slug ?? null, null);
+  assert.deepEqual(restoredBody.warnings, ['slug_conflict_detached']);
+  const slugBody = await (await request('/b/contested-slug')).json();
+  assert.equal(slugBody.meta.id, second.meta.id);
+  assert.equal((await request(`/bins/${first.meta.id}`)).status, 200);
+});

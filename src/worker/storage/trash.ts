@@ -2,7 +2,7 @@ import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 import { binMetaKey, legacyTrashKey, isExpired, normalizeEtag, type StoredBinMeta } from "./bin-state";
-import { getBin, binAliasKey, type BinMeta } from "./bins";
+import { getBin, binAliasKey, type BinAliasRecord, type BinMeta } from "./bins";
 import { assertBoundSchema } from "./schemas";
 import { detachBinFromCollection, getCollection } from "./collections";
 
@@ -57,17 +57,46 @@ export async function restoreTrashBin(env: Env, id: string, expectedEtag: string
   await assertBoundSchema(env, current.meta, version.value);
   const { deletedAt: _deletedAt, deletionReason: _reason, purgeState: _state, purgeEtag: _purgeEtag, ...fields } = current.meta;
   const collectionId = fields.collectionId && (await getCollection(env, fields.collectionId))?.meta.status === "active" ? fields.collectionId : null;
+  const lifecycleId = crypto.randomUUID();
   const meta: BinMeta = { ...fields, collectionId, visibility: "private", expiresAt: null,
-    updatedAt: new Date().toISOString(), lifecycleId: crypto.randomUUID() };
+    publishedVersion: null, publishedAt: null,
+    updatedAt: new Date().toISOString(), lifecycleId };
+
+  // Rebuild the slug alias so /b/:slug resolves against the new lifecycle.
+  // A slug now owned by another live Bin is never overwritten; the restored
+  // Bin keeps its data and loses only the conflicting alias.
+  let slugWarning: string | undefined;
+  const slug = meta.slug ?? null;
+  if (slug) {
+    const alias = await getJson<BinAliasRecord>(bucket, binAliasKey(slug));
+    const owned = alias && alias.value.binId === id;
+    const owner = alias && !owned ? await getBin(env, alias.value.binId) : null;
+    const contested = Boolean(owner && owner.meta.slug === slug);
+    if (!contested) {
+      const record: BinAliasRecord = { slug, binId: id, lifecycleId, createdAt: new Date().toISOString() };
+      const claimed = alias
+        ? await putJson(bucket, binAliasKey(slug), record, { onlyIf: { etagMatches: normalizeEtag(alias.etag) } })
+        : await putJson(bucket, binAliasKey(slug), record, { onlyIf: { etagDoesNotMatch: "*" } });
+      if (!claimed) {
+        meta.slug = null;
+        slugWarning = "slug_conflict_detached";
+      }
+    } else {
+      meta.slug = null;
+      slugWarning = "slug_conflict_detached";
+    }
+  }
+
   const written = await putJson(bucket, binMetaKey(id), meta, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
   if (!written) throw new Error("etag_conflict");
   await syncSearchResource(env, 'bin', id);
   await bucket.delete(legacyTrashKey(id));
   if (collectionId && (await getCollection(env, collectionId))?.meta.status !== "active") {
     await detachBinFromCollection(env, id, collectionId);
-    return getBin(env, id);
+    const detached = await getBin(env, id);
+    return detached ? { ...detached, ...(slugWarning ? { warnings: [slugWarning] } : {}) } : null;
   }
-  return { meta, value: version.value, etag: written.httpEtag };
+  return { meta, value: version.value, etag: written.httpEtag, ...(slugWarning ? { warnings: [slugWarning] } : {}) };
 }
 
 async function removeContents(bucket: R2Bucket, id: string) {
