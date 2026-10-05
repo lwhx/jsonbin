@@ -1655,3 +1655,33 @@ test('activity skips an invalid key at an R2 page boundary without hiding older 
   assert.equal(page.items.length, 1); assert.equal(page.items[0].action, 'key.created'); assert.equal(page.nextCursor, null);
   await clearActivities();
 });
+
+test('audit: concurrent publish and update have one winner and never silently overwrite metadata', async () => {
+  const bin = await create({ stage: 'init' });
+  const path = `/bins/${bin.meta.id}`;
+  const [updateRes, publishRes] = await Promise.all([
+    request(path, { method: 'PUT', etag: bin.etag, value: { value: { stage: 'updated' } } }),
+    request(`${path}/publish`, { method: 'POST', etag: bin.etag }),
+  ]);
+  assert.deepEqual([updateRes.status, publishRes.status].sort(), [200, 412]);
+  const current = await (await request(path)).json();
+  if (updateRes.status === 200) {
+    assert.equal(current.meta.currentVersion, 2);
+    assert.deepEqual(current.value, { stage: 'updated' });
+    assert.equal(current.meta.publishedVersion ?? null, null);
+  } else {
+    assert.equal(current.meta.currentVersion, 1);
+    assert.equal(current.meta.publishedVersion, 1);
+  }
+});
+
+test('audit: two concurrent publishes with the same ETag leave a single winner', async () => {
+  const bin = await create({ stage: 'init' });
+  const path = `/bins/${bin.meta.id}`;
+  const [first, second] = await Promise.all([
+    request(`${path}/publish`, { method: 'POST', etag: bin.etag, value: { version: 1 } }),
+    request(`${path}/publish`, { method: 'POST', etag: bin.etag }),
+  ]);
+  assert.deepEqual([first.status, second.status].sort(), [200, 412]);
+  assert.equal((await (await request(path)).json()).meta.publishedVersion, 1);
+});

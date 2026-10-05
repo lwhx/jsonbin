@@ -468,11 +468,16 @@ export async function publishBinVersion(
     updatedAt: now,
   };
 
-  const metaObject = await putJson(bucket, metaKey(id), meta);
+  // The If-Match check above and this final write must commit against the same
+  // snapshot, or a concurrent update could be silently overwritten here.
+  const written = await putJson(bucket, metaKey(id), meta, {
+    onlyIf: { etagMatches: normalizeEtag(current.etag) },
+  });
+  if (!written) throw new Error("etag_conflict");
   return {
     meta,
     value: current.value,
-    etag: metaObject.etag,
+    etag: written.httpEtag,
   };
 }
 
