@@ -1,5 +1,5 @@
 import "../activity";
-import { readApiKey, useApiKey, type ApiKey, type ApiScope } from "../storage/keys";
+import { authorizeApiKey, readApiKey, useApiKey, type ApiKey, type ApiScope } from "../storage/keys";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
 import { allowedRequestOrigin } from "../auth/origin";
@@ -7,6 +7,7 @@ import { allowedRequestOrigin } from "../auth/origin";
 type Variables = {
   user?: SessionUser;
   apiKey?: ApiKey;
+  apiKeyUsage?: { token: string; initial: NonNullable<Awaited<ReturnType<typeof readApiKey>>> };
 };
 
 export const requireSession: MiddlewareHandler<{
@@ -37,18 +38,27 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
       c.header("WWW-Authenticate", 'Bearer realm="JSONBin", error="invalid_token"');
       return c.json({ error: "unauthorized" }, 401);
     }
-    const used = await useApiKey(c.env, token, current, required);
-    if (used === "insufficient_scope") {
+    // Usage is not counted here: resource-level rejections (403) happen inside
+    // the route, and P18 keeps them out of the counters. Commit after the fact.
+    const verdict = authorizeApiKey(current, required);
+    if (verdict === "insufficient_scope") {
       c.header("WWW-Authenticate", `Bearer error="insufficient_scope", scope="${required.join(" ")}"`);
       return c.json({ error: "insufficient_scope", requiredScopes: required }, 403);
     }
-    if (used === "busy") return c.json({ error: "key_service_unavailable" }, 503);
-    if (used !== "ok") {
+    if (verdict !== "ok") {
       c.header("WWW-Authenticate", 'Bearer realm="JSONBin", error="invalid_token"');
       return c.json({ error: "unauthorized" }, 401);
     }
     c.set("apiKey", current.key);
     c.set("activityIdentity", { actor: { type: "api_key", id: current.key.id }, provider: "api_key" });
+    c.set("apiKeyUsage", { token, initial: current });
     await next();
+
+    const usage = c.get("apiKeyUsage");
+    if (usage && c.res.status !== 401 && c.res.status !== 403) {
+      // The commit is CAS-guarded and swallows failures: a usage bookkeeping
+      // error must never turn a completed response into a 500.
+      await useApiKey(c.env, usage.token, usage.initial, required).catch(() => {});
+    }
   };
 }

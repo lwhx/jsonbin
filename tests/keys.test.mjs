@@ -12,8 +12,8 @@ async function withWorker(pepper, fn) {
   try {
     const login = await mf.dispatchFetch('http://localhost/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'test', password }) });
     assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0];
-    const request = (path, { method = 'GET', value, token } = {}) => mf.dispatchFetch('http://localhost/api/v1' + path, {
-      method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : { Cookie: cookie }) },
+    const request = (path, { method = 'GET', value, token, etag } = {}) => mf.dispatchFetch('http://localhost/api/v1' + path, {
+      method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : { Cookie: cookie }), ...(etag ? { 'If-Match': etag } : {}) },
       ...(value === undefined ? {} : { body: JSON.stringify(value) }),
     });
     await fn(request, await mf.getR2Bucket('DATA', 'pepper-tests'));
@@ -164,6 +164,7 @@ test('P14 resource policies restrict Bin and Collection access dynamically', asy
     // 6. Dynamic move: Move binA from collectionA to collectionB -> access immediately lost
     const moveRes = await request('/bins/' + binA.meta.id + '/meta', {
       method: 'PATCH',
+      etag: binA.etag,
       value: { collectionId: collectionB.meta.id },
     });
     assert.equal(moveRes.status, 200);
@@ -242,5 +243,41 @@ test('revoked API keys can still be permanently deleted, while Bearer auth canno
 
     assert.equal((await request(`/keys/${created.key.id}/purge`, { method: 'DELETE' })).status, 200);
     assert.equal(await bucket.get(path), null);
+  });
+});
+
+test('audit: usage counters skip resource denials, scope misses and invalid tokens', async () => {
+  await withWorker(undefined, async (request) => {
+    const allowedCol = await (await request('/collections', { method: 'POST', value: { name: 'Usage Allowed' } })).json();
+    const deniedBin = await (await request('/bins', { method: 'POST', value: { name: 'Usage Denied', value: { x: 1 } } })).json();
+    const key = await (await request('/keys', { method: 'POST', value: {
+      name: 'usage-policy', scopes: ['bin:read', 'bin:create'],
+      resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [allowedCol.meta.id] },
+    } })).json();
+
+    const usage = async () => (await (await request('/keys')).json()).items.find(k => k.id === key.key.id).usageTotal;
+
+    // 401 invalid token -> not counted
+    await request('/bins', { token: 'jb_live_' + '0'.repeat(32) + '_' + 'A'.repeat(43) });
+    assert.equal(await usage(), 0, 'invalid token must not be counted');
+
+    // 403 insufficient scope -> not counted
+    await request('/keys', { token: key.token });
+    assert.equal(await usage(), 0, 'scope miss must not be counted');
+
+    // 403 resource denial -> not counted
+    const deniedRes = await request('/bins/' + deniedBin.meta.id, { token: key.token });
+    assert.equal(deniedRes.status, 403);
+    assert.equal(await usage(), 0, 'resource denial must not be counted');
+
+    // Allowed access -> counted exactly once
+    const allowedBin = await (await request('/bins', { method: 'POST', token: key.token, value: { name: 'Usage OK', collectionId: allowedCol.meta.id, value: { ok: true } } })).json();
+    assert.equal(allowedBin.status ?? 201, 201);
+    assert.equal((await request('/bins/' + allowedBin.meta.id, { token: key.token })).status, 200);
+    assert.equal(await usage(), 2, 'allowed create + read are counted');
+
+    // 404 on a permitted-but-missing resource is still authorized usage
+    await request('/bins/11111111-1111-4111-8111-111111111111', { token: key.token });
+    assert.equal(await usage(), 3);
   });
 });

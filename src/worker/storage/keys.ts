@@ -177,12 +177,20 @@ export function checkResourceAccess(
   return false;
 }
 
+/** Credential + scope verdict only; usage is counted later so denied requests stay uncounted. */
+export function authorizeApiKey(initial: NonNullable<Awaited<ReturnType<typeof readApiKey>>>, required: ApiScope[]): "ok" | "unauthorized" | "insufficient_scope" {
+  const key = initial.key;
+  if (key.revokedAt || (key.expiresAt && Date.parse(key.expiresAt) <= Date.now())) return "unauthorized";
+  if (required.some(scope => !key.scopes.includes(scope))) return "insufficient_scope";
+  return "ok";
+}
+
+/** Commits one authorized usage atomically; best-effort and never throws into a finalized response. */
 export async function useApiKey(env: Env, token: string, initial: NonNullable<Awaited<ReturnType<typeof readApiKey>>>, required: ApiScope[]) {
   const bucket = requireDataBucket(env);
   let current: typeof initial | null = initial;
   for (let attempt = 0; attempt < 8; attempt++) {
     if (!current || current.key.revokedAt || (current.key.expiresAt && Date.parse(current.key.expiresAt) <= Date.now())) return "unauthorized";
-    if (required.some(scope => !current!.key.scopes.includes(scope))) return "insufficient_scope";
 
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
@@ -204,7 +212,7 @@ export async function useApiKey(env: Env, token: string, initial: NonNullable<Aw
       lastUsedAt: now.toISOString(),
     };
 
-    // CAS prevents touching an outdated or revoked record. A retry rechecks all credentials and scopes.
+    // CAS prevents touching an outdated or revoked record; a lost race retries against the latest.
     if (await putJson(bucket, keyPath(current.key.id), next, { onlyIf: { etagMatches: normalize(current.etag) } })) return "ok";
     current = await readApiKey(env, token);
   }
