@@ -13,6 +13,8 @@ export type ApiKey = {
   prefix: string;
   scopes: ApiScope[];
   resourceAccess?: ResourceAccess;
+  usageTotal?: number;
+  usageDaily?: Record<string, number>;
   createdAt: string;
   expiresAt: string | null;
   revokedAt: string | null;
@@ -42,6 +44,8 @@ function publicKey(stored: StoredKey): ApiKey {
   return {
     ...key,
     resourceAccess: stored.resourceAccess ?? { mode: "all" },
+    usageTotal: stored.usageTotal ?? 0,
+    usageDaily: stored.usageDaily ?? {},
     revealable: Boolean(stored.tokenEncryption === "aes-gcm-v1" && stored.tokenIv && stored.tokenCiphertext)
   };
 }
@@ -111,6 +115,8 @@ export async function createKey(env: Env, input: KeyInput) {
 
   const key: StoredKey = { id, name: input.name, prefix: `jb_live_${selector.slice(0, 8)}…`, scopes: [...input.scopes],
     resourceAccess,
+    usageTotal: 0,
+    usageDaily: {},
     createdAt: new Date().toISOString(), expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
     revokedAt: null, lastUsedAt: null, digest, digestAlgorithm, ...encrypted };
   const created = await putJson(requireDataBucket(env), keyPath(id), key, { onlyIf: { etagDoesNotMatch: "*" } });
@@ -177,7 +183,27 @@ export async function useApiKey(env: Env, token: string, initial: NonNullable<Aw
   for (let attempt = 0; attempt < 8; attempt++) {
     if (!current || current.key.revokedAt || (current.key.expiresAt && Date.parse(current.key.expiresAt) <= Date.now())) return "unauthorized";
     if (required.some(scope => !current!.key.scopes.includes(scope))) return "insufficient_scope";
-    const next = { ...current.stored, lastUsedAt: new Date().toISOString() };
+
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const prevDaily = current.stored.usageDaily || {};
+
+    // Keep only last 31 days
+    const dailyKeys = Object.keys(prevDaily).sort();
+    const cutoff = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
+    const usageDaily: Record<string, number> = {};
+    for (const d of dailyKeys) {
+      if (d >= cutoff) usageDaily[d] = prevDaily[d];
+    }
+    usageDaily[today] = (usageDaily[today] || 0) + 1;
+
+    const next: StoredKey = {
+      ...current.stored,
+      usageTotal: (current.stored.usageTotal || 0) + 1,
+      usageDaily,
+      lastUsedAt: now.toISOString(),
+    };
+
     // CAS prevents touching an outdated or revoked record. A retry rechecks all credentials and scopes.
     if (await putJson(bucket, keyPath(current.key.id), next, { onlyIf: { etagMatches: normalize(current.etag) } })) return "ok";
     current = await readApiKey(env, token);

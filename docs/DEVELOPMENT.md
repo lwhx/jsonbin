@@ -1188,6 +1188,10 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 新增 `GET /api/v1/openapi.json`，遵循 OpenAPI 3.1.0 标准，声明 `CookieAuth` 与 `BearerAuth`，完整覆盖核心路由、参数与状态码，且绝不泄露敏感环境凭据。
   - 前端 API 文档页升级为三标签页切换（`[接口文档]`、`[在线调试]`、`[OpenAPI 3.1]`）。
   - 内置交互式 API 调试器：支持切换预设请求、HTTP Method、路径参数、自定义 Request Body、内存级 Bearer Token 与条件写入 If-Match，支持毫秒级响应耗时统计与格式化查看。
+- [x] **P18：API 使用统计与趋势**：
+  - 数据模型扩充：`StoredKey` 记录 `usageTotal` 与 `usageDaily`（UTC 最近 31 天滑动窗口）。
+  - 零额外写开销：统计逻辑完全合并进已有 `useApiKey()` CAS 操作中，严格只统计认证通过的已授权请求。
+  - 前端控制台直观呈现：密钥卡片即时展示已授权总请求与今日已授权请求统计。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。

@@ -176,6 +176,33 @@ test('P14 resource policies restrict Bin and Collection access dynamically', asy
   });
 });
 
+test('P18: API Key records authorized usage counters atomically in useApiKey CAS', async () => {
+  await withWorker(undefined, async (request) => {
+    const createKeyRes = await request('/keys', {
+      method: 'POST',
+      value: { name: 'Usage Counter Key', scopes: ['bin:read'] },
+    });
+    assert.equal(createKeyRes.status, 201);
+    const { key, token } = await createKeyRes.json();
+    assert.equal(key.usageTotal, 0);
+
+    // Authenticate 3 valid read requests
+    await request('/bins', { token });
+    await request('/bins', { token });
+    await request('/bins', { token });
+
+    // Read keys list to verify counters
+    const listRes = await request('/keys');
+    assert.equal(listRes.status, 200);
+    const list = await listRes.json();
+    const updatedKey = list.items.find(k => k.id === key.id);
+
+    assert.equal(updatedKey.usageTotal, 3);
+    const today = new Date().toISOString().slice(0, 10);
+    assert.equal(updatedKey.usageDaily[today], 3);
+  });
+});
+
 test('API keys can be permanently deleted from R2 and immediately stop authenticating', async () => {
   await withWorker(undefined, async (request, bucket) => {
     const createdResponse = await request('/keys', { method: 'POST', value: { name: '永久删除测试', scopes: ['bin:read'] } });
