@@ -342,6 +342,20 @@ test('P16: batch operations execute independent CAS and report per-item status',
   assert.equal(duplicateBatch.status, 422);
 });
 
+test('P17: GET /api/v1/openapi.json serves valid OpenAPI 3.1 schema covering routes and security', async () => {
+  const res = await request('/openapi.json');
+  assert.equal(res.status, 200);
+  const spec = await res.json();
+  assert.equal(spec.openapi, '3.1.0');
+  assert.equal(spec.info.title, 'JSONBin API');
+  assert.equal(Boolean(spec.paths['/bins']), true);
+  assert.equal(Boolean(spec.paths['/bins/batch']), true);
+  assert.equal(Boolean(spec.paths['/bins/{id}/clone']), true);
+  assert.equal(Boolean(spec.paths['/templates']), true);
+  assert.equal(Boolean(spec.components.securitySchemes.CookieAuth), true);
+  assert.equal(Boolean(spec.components.securitySchemes.BearerAuth), true);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;
