@@ -1,59 +1,70 @@
 # JSONBin MCP Server
 
-JSONBin 提供标准 Model Context Protocol (MCP) Server，让 AI Agent（Hermes、Claude Desktop、Cursor、Codex 等）能够安全地读取与修改 JSON 配置。
+JSONBin 提供标准 Model Context Protocol (MCP) Server，让 AI Agent（Hermes、Claude Desktop、Cursor、Windsurf、Codex 等）能够安全地读取与修改 JSON 配置。
 
-**MCP Server 只通过官方 SDK 调用 JSONBin HTTP API**，绝不直连 R2，也不调用 Worker 内部函数。因此权限完全由 JSONBin 的 API Key 权威控制。
+JSONBin 支持两种接入模式：
+1. **云端 Remote MCP（推荐，零本地依赖）**：通过部署在 Cloudflare Worker 上的原生 SSE / Streamable HTTP 端点直连，本地无需安装 Node.js 或克隆代码库；
+2. **本地 stdio 模式**：本地运行 `mcp/server.ts` 编译产物，适合本地隔离开发。
 
-```text
-AI Agent
-   ↓  stdio (JSON-RPC 2.0)
-JSONBin MCP Server  (mcp/server.js)
-   ↓  @jsonbin/client
-JSONBin HTTP API
-   ↓  Authentication → Scope → Resource Access → Rate Limit → ETag → Lock → Schema → Immutable Version
-R2
+无论哪种模式，所有操作均受 JSONBin API Key 统一权限控制（Scope、Resource Access、ETag 条件写入与不可变版本模型）。
+
+---
+
+## 1. 云端连接配置（Remote MCP，推荐）
+
+直接连接已部署的线上环境（如 `https://js.gnn.im`），**无需任何本地路径或安装**。
+
+### Cursor / Windsurf (`.cursor/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "jsonbin": {
+      "url": "https://js.gnn.im/api/v1/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer jb_live_xxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+或者使用单端点 Streamable HTTP：
+```json
+{
+  "mcpServers": {
+    "jsonbin": {
+      "url": "https://js.gnn.im/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer jb_live_xxxxxxxx"
+      }
+    }
+  }
+}
 ```
 
 ---
 
-## 1. 构建
+## 2. 本地 stdio 模式构建与配置
 
-`mcp/server.js` 是 `mcp/server.ts` 的编译产物，**不纳入版本控制**（与 `dist/` 一致），必须先生成：
-
-```bash
-npm run build:mcp        # 在仓库根目录，等价于 tsc -p mcp/tsconfig.json
-```
-
-`npm test` 会自动先跑 `build:sdk` 与 `build:mcp`，所以 CI 不会漏编译。
-
-MCP Server 依赖 TypeScript SDK 的编译产物，同一条管线也会生成：
+若客户端仅支持本地进程 stdio 通信：
 
 ```bash
 npm run build:sdk        # 输出 sdk/typescript/dist/
+npm run build:mcp        # 输出 mcp/server.js
 ```
 
----
-
-## 2. 配置
-
-只需两个环境变量，**不需要** R2 Access Key、KV Token 或 Cloudflare API Token：
-
-```bash
-JSONBIN_URL=https://js.example.com
-JSONBIN_TOKEN=jb_live_xxxxxxxx_yyyyyyyy
-```
-
-### Claude Desktop / Cursor (`mcp.json`)
+### 本地 `mcp.json`：
 
 ```json
 {
   "mcpServers": {
     "jsonbin": {
       "command": "node",
-      "args": ["/absolute/path/to/jsonbin/mcp/server.js"],
+      "args": ["/path/to/jsonbin/mcp/server.js"],
       "env": {
-        "JSONBIN_URL": "https://js.example.com",
-        "JSONBIN_TOKEN": "jb_live_xxx"
+        "JSONBIN_URL": "https://js.gnn.im",
+        "JSONBIN_TOKEN": "jb_live_xxxxxxxx"
       }
     }
   }

@@ -94,6 +94,9 @@ export function normalizeRoute(pathname: string): string {
     /^\/webhooks\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
     "/webhooks/:id",
   );
+  // MCP routes
+  route = route.replace(/^\/mcp\/message.*/, "/mcp/message");
+  route = route.replace(/^\/mcp\/sse.*/, "/mcp/sse");
 
   return `/api/v1${route}`;
 }

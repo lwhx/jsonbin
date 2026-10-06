@@ -180,6 +180,21 @@ export function generateOpenApiSpec(): Record<string, unknown> {
           ],
         }),
       },
+      "/mcp": {
+        post: op("Remote MCP Streamable HTTP POST 端点", {
+          security: SESSION_OR_BEARER,
+        }),
+      },
+      "/mcp/sse": {
+        get: op("Remote MCP SSE 长连接端点", {
+          security: SESSION_OR_BEARER,
+        }),
+      },
+      "/mcp/message": {
+        post: op("Remote MCP SSE 消息下发回执端点", {
+          security: SESSION_OR_BEARER,
+        }),
+      },
       "/auth/config": {
         get: op("认证方式配置", { security: PUBLIC }),
       },

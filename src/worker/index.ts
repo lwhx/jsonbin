@@ -15,6 +15,7 @@ import trashRoutes from "./routes/trash";
 import templateRoutes from "./routes/templates";
 import webhookRoutes from "./routes/webhooks";
 import analyticsRoutes from "./routes/analytics";
+import mcpRoutes from "./routes/mcp";
 import { generateOpenApiSpec } from "../shared/openapi";
 import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
@@ -107,6 +108,7 @@ app.route("/api/v1/trash", trashRoutes);
 app.route("/api/v1/templates", templateRoutes);
 app.route("/api/v1/webhooks", webhookRoutes);
 app.route("/api/v1/analytics", analyticsRoutes);
+app.route("/api/v1/mcp", mcpRoutes);
 
 app.get("/api/v1/openapi.json", (c) => {
   return c.json(generateOpenApiSpec());
