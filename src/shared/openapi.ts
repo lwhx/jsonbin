@@ -172,6 +172,14 @@ export function generateOpenApiSpec(): Record<string, unknown> {
           ],
         }),
       },
+      "/analytics/overview": {
+        get: op("获取 API 请求性能与调用分析概览", {
+          security: SESSION_ONLY,
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["1h", "24h", "7d", "30d"] } },
+          ],
+        }),
+      },
       "/auth/config": {
         get: op("认证方式配置", { security: PUBLIC }),
       },
@@ -296,10 +304,33 @@ export function generateOpenApiSpec(): Record<string, unknown> {
           requestBody: jsonBody({ type: "object", required: ["value"], properties: { value: {} } }),
           responses: { ...ok("生成不可变新版本"), "412": { description: "ETag 冲突" }, "423": { description: "已锁定" } },
         }),
-        patch: op("RFC 7396 Merge Patch 增量修改数据仓", {
+        patch: op("RFC 7396 Merge Patch 或 RFC 6902 JSON Patch 修改数据仓", {
           scopes: "bin:update",
           parameters: [idParameter, etagParameter],
-          responses: { ...ok(), "412": { description: "ETag 冲突" } },
+          description: "Content-Type 为 application/json-patch+json 时按 RFC 6902 执行（add, remove, replace, move, copy, test）；为 application/merge-patch+json 或 application/json 时按 RFC 7396 合并",
+          requestBody: {
+            required: true,
+            content: {
+              "application/merge-patch+json": { schema: { type: "object", description: "RFC 7396 增量合并对象" } },
+              "application/json-patch+json": {
+                schema: {
+                  type: "array",
+                  description: "RFC 6902 操作列表",
+                  items: {
+                    type: "object",
+                    required: ["op", "path"],
+                    properties: {
+                      op: { type: "string", enum: ["add", "remove", "replace", "move", "copy", "test"] },
+                      path: { type: "string", description: "RFC 6901 JSON Pointer 路径" },
+                      from: { type: "string", description: "源路径（move / copy 操作必需）" },
+                      value: { description: "操作值（add / replace / test 必需）" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: { ...ok(), "409": { description: "test 操作不匹配或数据冲突" }, "412": { description: "ETag 冲突" }, "422": { description: "Patch 校验失败" }, "423": { description: "数据仓已锁定" } },
         }),
         delete: op("移入回收站（软删除）", {
           scopes: "bin:delete",

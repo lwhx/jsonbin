@@ -14,9 +14,11 @@ import collectionRoutes from "./routes/collections";
 import trashRoutes from "./routes/trash";
 import templateRoutes from "./routes/templates";
 import webhookRoutes from "./routes/webhooks";
+import analyticsRoutes from "./routes/analytics";
 import { generateOpenApiSpec } from "../shared/openapi";
 import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
+import { recordAnalytics, normalizeRoute } from "./storage/analytics";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
 
@@ -32,7 +34,44 @@ app.use("/api/*", async (c, next) => {
   c.set("requestId", requestId);
   c.header("X-Request-ID", requestId);
   c.header("Cache-Control", "no-store");
+  const start = performance.now();
+
   await next();
+
+  const durationMs = Math.round(performance.now() - start);
+  const url = new URL(c.req.url);
+  const route = normalizeRoute(url.pathname);
+  const hasAuth = c.req.header("Authorization");
+  const hasCookie = c.req.header("Cookie")?.includes("jb_session");
+  const authType = hasAuth ? "api_key" : hasCookie ? "session" : "anonymous";
+  const status = c.res.status;
+
+  // Best-effort metrics: never block the response, never fail the request.
+  const record = recordAnalytics(c.env, {
+    timestamp: new Date().toISOString(),
+    method: c.req.method,
+    route,
+    status,
+    durationMs,
+    authType,
+  }).catch(() => {});
+
+  let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+  try {
+    const ctx = c.executionCtx;
+    waitUntil = (promise) => ctx.waitUntil(promise);
+  } catch {
+    waitUntil = undefined;
+  }
+
+  if (waitUntil) {
+    // Production: hand the write to the runtime so it outlives the response.
+    waitUntil(record);
+  } else {
+    // No execution context available (e.g. direct worker.fetch invocations):
+    // settle the write so metrics stay observable without surfacing errors.
+    await record;
+  }
 });
 app.use("/api/*", secureHeaders({
   xFrameOptions: 'DENY',
@@ -65,6 +104,7 @@ app.route("/api/v1/schemas", schemaRoutes);
 app.route("/api/v1/trash", trashRoutes);
 app.route("/api/v1/templates", templateRoutes);
 app.route("/api/v1/webhooks", webhookRoutes);
+app.route("/api/v1/analytics", analyticsRoutes);
 
 app.get("/api/v1/openapi.json", (c) => {
   return c.json(generateOpenApiSpec());
