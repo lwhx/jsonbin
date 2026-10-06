@@ -7,6 +7,7 @@ import {
   Archive,
   Boxes,
   Braces,
+  Bot,
   ChevronRight,
   CircleCheck,
   Code2,
@@ -46,6 +47,7 @@ import { KeysPage } from "./features/keys/KeysPage";
 import { WebhooksPage } from "./features/webhooks/WebhooksPage";
 import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
 import { DocsPage } from "./features/docs/DocsPage";
+import { McpPage } from "./features/mcp/McpPage";
 import { ActivityPage } from "./features/activity/ActivityPage";
 import { TrashPage } from "./features/trash/TrashPage";
 import { Dialog } from "./components/Dialog";
@@ -98,7 +100,7 @@ type BinList = {
   total: number;
 };
 
-type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Webhooks" | "Analytics" | "Trash" | "Activity" | "Docs" | "Settings" | "Search";
+type Section = "Overview" | "Bins" | "Collections" | "Schemas" | "Keys" | "Webhooks" | "Analytics" | "Trash" | "Activity" | "Docs" | "Mcp" | "Settings" | "Search";
 
 type NavLink = {
   label: string;
@@ -129,6 +131,7 @@ const nav: NavItem[] = [
   { label: "API 分析", icon: BarChart3, section: "Analytics" },
   { label: "活动记录", icon: Activity, section: "Activity" },
   { label: "API 文档", icon: TerminalSquare, section: "Docs" },
+  { label: "MCP 接入", icon: Bot, section: "Mcp" },
   { divider: true, label: "系统" },
   { label: "回收站", icon: Archive, section: "Trash" },
   { label: "设置", icon: Settings, section: "Settings" },
@@ -411,11 +414,11 @@ function AuthenticatedApp({
   const confirm = useConfirm();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
-  const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/webhooks" ? "Webhooks" : route === "#/analytics" ? "Analytics" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/settings" ? "Settings" : "Overview";
+  const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/webhooks" ? "Webhooks" : route === "#/analytics" ? "Analytics" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/mcp" ? "Mcp" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
   const schemaId = schemaIdFromHash(route);
-  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Webhooks" ? "/webhooks" : section === "Analytics" ? "/analytics" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Settings" ? "/settings" : "/"; };
+  const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Webhooks" ? "/webhooks" : section === "Analytics" ? "/analytics" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Mcp" ? "/mcp" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -627,7 +630,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
+          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Mcp" ? <McpPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
             <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
