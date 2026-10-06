@@ -14,7 +14,9 @@
     "preview": "npm run build && vite preview",
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -b",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "build:sdk": "tsc -p sdk/typescript/tsconfig.json",
+    "build:mcp": "tsc -p mcp/tsconfig.json",
+    "test": "npm run build && npm run build:sdk && npm run build:mcp && node --test tests/*.test.mjs",
     "test:browser": "playwright test",
     "cf:types": "wrangler types"
   },

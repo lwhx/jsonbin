@@ -18,9 +18,18 @@ R2
 
 ## 1. 构建
 
+`mcp/server.js` 是 `mcp/server.ts` 的编译产物，**不纳入版本控制**（与 `dist/` 一致），必须先生成：
+
 ```bash
-cd mcp
-npx tsc        # 输出 mcp/server.js
+npm run build:mcp        # 在仓库根目录，等价于 tsc -p mcp/tsconfig.json
+```
+
+`npm test` 会自动先跑 `build:sdk` 与 `build:mcp`，所以 CI 不会漏编译。
+
+MCP Server 依赖 TypeScript SDK 的编译产物，同一条管线也会生成：
+
+```bash
+npm run build:sdk        # 输出 sdk/typescript/dist/
 ```
 
 ---

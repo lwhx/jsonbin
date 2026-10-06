@@ -23,10 +23,17 @@ SDK 与前端 Dashboard 的内部 API Client 完全解耦，可独立发布。
 ### 2.1 构建
 
 ```bash
-cd sdk/typescript
-npm install        # 无运行时依赖
-npm run build      # 产物输出到 dist/
+npm run build:sdk   # 仓库根目录，输出 sdk/typescript/dist/
 ```
+
+或在包目录内构建：
+
+```bash
+cd sdk/typescript
+npm run build       # 等价于 tsc -p tsconfig.json
+```
+
+SDK 零运行时依赖，`dist/` 与其他构建产物一样不纳入版本控制；`npm test` 会先自动执行 `build:sdk`。
 
 ### 2.2 初始化
 
