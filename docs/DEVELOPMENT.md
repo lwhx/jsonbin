@@ -1260,8 +1260,10 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
   - 完整保留服务器 ETag 原始格式；304 返回 `{ modified: false }` 且不对空响应体做 JSON 解析；写请求不做隐式自动重试；Token 仅进入 `Authorization` 头。
 - [x] **v3.2 / P24：JSONBin MCP Server**：
   - `mcp/server.js` 提供 stdio JSON-RPC 服务，仅需 `JSONBIN_URL` 与 `JSONBIN_TOKEN`。
-  - 提供 `list_bins`、`get_bin`、`get_published_bin`、`search_bins`、`search_json`、`update_bin`、`merge_patch_bin`、`json_patch_bin`、`publish_bin`、`rollback_bin`、`clone_bin`。
+  - 提供 `create_bin`、`list_bins`、`get_bin`、`get_published_bin`、`search_bins`、`search_json`、`update_bin`、`merge_patch_bin`、`json_patch_bin`、`publish_bin`、`rollback_bin`、`clone_bin`。
   - 全程通过官方 SDK 调用 HTTP API，不直连 R2；权限完全由 JSONBIN_TOKEN 的 Scope 与 Resource Access 决定。
+  - 协议合规强化：Remote MCP 在 initialize/SSE/回传时真实校验 Bearer 令牌（无效/撤销/过期返回 401）；SSE 会话 ID 由 SESSION_SECRET 签名、1 小时过期，回传端点强制校验；JSON-RPC 通知（无 id）静默返回 204；未知方法返回 -32601；`ping` 与协议版本协商（2024-11-05 / 2025-03-26 / 2025-06-18）；Streamable HTTP 声明为无状态服务器（GET/DELETE 固定 405 并登记 OpenAPI）。
+  - 错误统一映射为稳定错误码（`etag_conflict`、`bin_locked`、`authentication_failed`、`permission_denied`、`rate_limited` 等，见 docs/MCP.md）；`serverInfo.version` 与 package.json 同源。
 - [x] **v3.2 / P25：API 请求分析**：
   - 请求生命周期埋点采集 method、规范化 route、status、duration、authType，KV 小时分桶保留 35 天；写入使用 `ctx.waitUntil()`，统计失败绝不影响业务响应。
   - 强隐私底线：不采集 Authorization、Token、Cookie、密码、请求/响应体、用户 JSON 与搜索关键词；route 规范化避免高基数。

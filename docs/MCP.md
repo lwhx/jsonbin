@@ -3,7 +3,7 @@
 JSONBin 提供标准 Model Context Protocol (MCP) Server，让 AI Agent（Hermes、Claude Desktop、Cursor、Windsurf、Codex 等）能够安全地读取与修改 JSON 配置。
 
 JSONBin 支持两种接入模式：
-1. **云端 Remote MCP（推荐，零本地依赖）**：通过部署在 Cloudflare Worker 上的原生 SSE / Streamable HTTP 端点直连，本地无需安装 Node.js 或克隆代码库；
+1. **云端 Remote MCP（推荐，零本地依赖）**：通过部署在 Cloudflare Worker 上的 Streamable HTTP 端点直连，本地无需安装 Node.js 或克隆代码库；
 2. **本地 stdio 模式**：本地运行 `mcp/server.ts` 编译产物，适合本地隔离开发。
 
 无论哪种模式，所有操作均受 JSONBin API Key 统一权限控制（Scope、Resource Access、ETag 条件写入与不可变版本模型）。
@@ -14,7 +14,22 @@ JSONBin 支持两种接入模式：
 
 直接连接已部署的线上环境（如 `https://js.gnn.im`），**无需任何本地路径或安装**。
 
-### Cursor / Windsurf (`.cursor/mcp.json`)
+### Cursor / Windsurf (`.cursor/mcp.json`)，单端点 Streamable HTTP：
+
+```json
+{
+  "mcpServers": {
+    "jsonbin": {
+      "url": "https://js.gnn.im/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer jb_live_xxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+### 兼容 SSE 模式（`GET /api/v1/mcp/sse` + 回传端点）：
 
 ```json
 {
@@ -29,19 +44,19 @@ JSONBin 支持两种接入模式：
 }
 ```
 
-或者使用单端点 Streamable HTTP：
-```json
-{
-  "mcpServers": {
-    "jsonbin": {
-      "url": "https://js.gnn.im/api/v1/mcp",
-      "headers": {
-        "Authorization": "Bearer jb_live_xxxxxxxx"
-      }
-    }
-  }
-}
-```
+SSE 模式的会话语义：
+
+- `GET /sse` 通过后返回 `endpoint` 事件，其中携带用 `SESSION_SECRET` 签名、1 小时过期的会话 ID；
+- 后续请求必须回传到 `/api/v1/mcp/message?sessionId=<id>`，缺失、伪造或过期的会话 ID 返回 `404`；
+- 会话无服务端状态（无 Durable Object），仅做签名与过期校验；回传端点直接在 HTTP 响应中返回 JSON-RPC 结果（Cursor / Windsurf 兼容），不通过 SSE 通道回推，如客户端严格要求 202 + SSE 推送，请改用 Streamable HTTP 端点。
+
+### Remote MCP 传输语义
+
+- **Streamable HTTP（`POST /api/v1/mcp`）为无状态服务**：不下发 `Mcp-Session-Id`，`GET` / `DELETE /api/v1/mcp` 返回 `405`；
+- 支持 JSON-RPC 批量请求；只含通知（无 `id`）的请求返回 `204` 无响应体，符合 JSON-RPC 2.0 规范；
+- `initialize` 支持协议版本协商：`2025-06-18` / `2025-03-26` / `2024-11-05`，未识别的版本回落到 `2024-11-05`；
+- 支持 `ping`；未知方法（带 `id`）返回 `-32601 Method not found`；
+- `serverInfo.version` 与 `package.json` 版本号同源，不再手工维护。
 
 ---
 
@@ -71,11 +86,15 @@ npm run build:mcp        # 输出 mcp/server.js
 }
 ```
 
+stdio 模式与 Remote MCP 保持相同的协议行为：`ping`、通知静默、未知方法 `-32601` 与协议版本协商。
+
 ---
 
 ## 3. 权限模型
 
 **不要为 MCP 重新设计 ACL**。MCP 的权限上限就是 `JSONBIN_TOKEN` 本身拥有的权限。
+
+Remote MCP 在 `initialize`、SSE 建连与消息回传时即校验 Bearer 令牌（无效、已撤销或已过期返回 `401`）；每个 Tool 调用再按各自 Scope 由内部 API 精确鉴权。
 
 例如创建一个专用密钥：
 
@@ -98,15 +117,18 @@ npm run build:mcp        # 输出 mcp/server.js
 
 ## 4. Tool 列表
 
-### 只读工具
+### 创建与只读工具
 
 | Tool | 说明 |
 | :--- | :--- |
+| `create_bin` | 新建 Bin 并写入初始 JSON（版本 1），需 `bin:create` |
 | `list_bins` | 列出可访问数据仓（支持 `tag` / `favorite` / `pinned` 过滤），只返回元数据，不返回完整 JSON |
 | `get_bin` | 按 ID 或 Slug 获取元数据、当前 JSON 与 ETag |
 | `get_published_bin` | 获取生产已发布版本 |
 | `search_bins` | 搜索名称、描述与元数据 |
 | `search_json` | 搜索已开启内容索引的 JSON 键或标量值（`mode`: `keys` / `all`） |
+| `list_bin_versions` | 列出不可变历史版本 |
+| `get_bin_version` | 读取指定历史版本 |
 
 ### 写入工具（需 ETag）
 
@@ -143,14 +165,31 @@ json_patch_bin(
 )
 ```
 
-`test` 操作保证只有在当前值与预期一致时才执行修改；若 ETag 已过期，服务器返回 `412`，MCP 会以 `etag_conflict` 错误返回，AI 需重新读取后再试。
+`test` 操作保证只有在当前值与预期一致时才执行修改；若 ETag 已过期，服务器返回 `412`，MCP 以 `etag_conflict` 错误返回，AI 需重新读取后再试。
 
 ---
 
 ## 6. 返回与安全
 
 - Tool 返回遵循 bounded response 原则，避免一次返回超大 JSON 淹没上下文；
-- 错误统一映射为 `authentication_failed`、`permission_denied`、`resource_forbidden`、`etag_conflict`、`schema_validation_failed`、`bin_locked`、`rate_limited`、`not_found`；
+- 错误统一映射为稳定错误码（`statusCode` 保留原始 HTTP 状态，`issues` / `requiredScopes` 等细节按需附带）：
+
+| 错误码 | 来源 |
+| :--- | :--- |
+| `authentication_failed` | 401（含无效/撤销/过期令牌） |
+| `permission_denied` | 403 Scope 不足 |
+| `resource_forbidden` | 403 资源不在 Key 的 Resource Access 范围内 |
+| `not_found` | 404 |
+| `conflict` | 409（Slug 冲突、版本数上限等） |
+| `etag_conflict` | 412 ETag 过期 |
+| `precondition_required` | 428 缺少 If-Match |
+| `validation_failed` | 422 请求校验失败 |
+| `schema_validation_failed` | 422 违反绑定的 JSON Schema |
+| `bin_locked` | 423 数据锁 |
+| `rate_limited` | 429 限流 |
+| `server_error` | 5xx |
+| `unknown_tool` | 调用了不存在的 Tool |
+
 - 错误信息**绝不**包含 Token、Cookie、内部 R2 Key、Secret 或堆栈跟踪。
 
 ---
@@ -158,7 +197,7 @@ json_patch_bin(
 ## 7. 测试
 
 ```bash
-node --test tests/mcp.test.mjs
+node --test tests/mcp.test.mjs tests/mcp-remote.test.mjs
 ```
 
-测试使用真实 Worker 与真实 SDK（不 Mock SDK），覆盖 `list_bins`、`get_bin`、`json_patch_bin`、`publish_bin`、`get_published_bin` 全链路。
+测试使用真实 Worker 与真实 SDK（不 Mock SDK），覆盖 `create_bin`、`list_bins`、`get_bin`、`json_patch_bin`、`publish_bin`、`get_published_bin` 全链路，以及 Remote 端的 401 令牌校验、协议版本协商、通知静默（204）、签名会话校验与 ETag 冲突错误映射。

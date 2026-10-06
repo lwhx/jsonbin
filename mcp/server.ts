@@ -8,6 +8,13 @@
 declare const process: any;
 
 import { JsonBinClient, JsonBinError } from "../sdk/typescript/dist/index.js";
+import pkg from "../package.json" with { type: "json" };
+
+const SERVER_NAME = "jsonbin-mcp";
+const SERVER_VERSION = pkg.version;
+/** Protocol revisions this server understands; initialize echoes a supported request. */
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 
 function getClient() {
   const url = process.env.JSONBIN_URL || "http://localhost:8787";
@@ -16,6 +23,42 @@ function getClient() {
     baseUrl: url,
     token,
   });
+}
+
+/**
+ * Project a JsonBinError onto the stable MCP error vocabulary shared with the
+ * remote MCP transport. Known API codes pass through; auth/limit codes are
+ * normalized; the rest map by status.
+ */
+export function normalizeErrorPayload(err: unknown): Record<string, unknown> {
+  if (!(err instanceof JsonBinError)) {
+    return { error: "operation_failed", message: (err as any)?.message || "Unknown error" };
+  }
+  const codeAliases: Record<string, string> = {
+    unauthorized: "authentication_failed",
+    insufficient_scope: "permission_denied",
+    rate_limit_exceeded: "rate_limited",
+  };
+  const statusCodes: Record<number, string> = {
+    400: "validation_failed",
+    401: "authentication_failed",
+    403: "permission_denied",
+    404: "not_found",
+    409: "conflict",
+    412: "etag_conflict",
+    422: "validation_failed",
+    423: "bin_locked",
+    428: "precondition_required",
+    429: "rate_limited",
+  };
+  const body = err.data && typeof err.data === "object" ? (err.data as Record<string, unknown>) : {};
+  const raw = typeof body.error === "string" ? body.error : "";
+  const code = codeAliases[raw] || raw || statusCodes[err.statusCode] || "server_error";
+
+  const payload: Record<string, unknown> = { error: code, statusCode: err.statusCode };
+  if (Array.isArray(body.issues)) payload.issues = body.issues;
+  if (Array.isArray(body.requiredScopes)) payload.requiredScopes = body.requiredScopes;
+  return payload;
 }
 
 type ToolHandler = (args: any) => Promise<any>;
@@ -28,6 +71,29 @@ const tools: Record<
     handler: ToolHandler;
   }
 > = {
+  create_bin: {
+    description: "Create a new bin with an initial JSON value (version 1).",
+    parameters: {
+      type: "object",
+      required: ["name", "value"],
+      properties: {
+        name: { type: "string", description: "Bin name (1-160 chars)" },
+        value: { description: "Initial JSON value" },
+        slug: { type: "string", description: "Optional custom slug alias" },
+        description: { type: "string", description: "Optional description" },
+        tags: { type: "array", items: { type: "string" }, description: "Optional tags" },
+        visibility: { type: "string", enum: ["private", "public"], description: "Optional visibility (default private)" },
+      },
+    },
+    handler: async (args) => {
+      const input: Record<string, unknown> = { name: args.name, value: args.value };
+      for (const field of ["slug", "description", "tags", "visibility"] as const) {
+        if (args[field] !== undefined) input[field] = args[field];
+      }
+      return await getClient().bins.create(input as any);
+    },
+  },
+
   list_bins: {
     description: "List accessible bins with optional filtering by tag, favorite, or pinned status.",
     parameters: {
@@ -260,6 +326,98 @@ const tools: Record<
   },
 };
 
+export type JsonRpcMessage = { jsonrpc: "2.0"; id: any; result?: unknown; error?: unknown } | null;
+
+/**
+ * Handle one JSON-RPC 2.0 message. Notifications (no id) return null and must
+ * not receive a response, per the JSON-RPC 2.0 and MCP specifications.
+ */
+export async function dispatchMessage(msg: any): Promise<JsonRpcMessage> {
+  if (!msg || typeof msg !== "object" || msg.id === undefined) return null;
+  const id = msg.id;
+
+  if (typeof msg.method !== "string" || !msg.method) {
+    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
+  }
+
+  if (msg.method === "initialize") {
+    const requested = msg.params?.protocolVersion;
+    const protocolVersion =
+      typeof requested === "string" && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+        ? requested
+        : DEFAULT_PROTOCOL_VERSION;
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion,
+        capabilities: { tools: {} },
+        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+      },
+    };
+  }
+
+  if (msg.method === "tools/list") {
+    const toolList = Object.entries(tools).map(([name, def]) => ({
+      name,
+      description: def.description,
+      inputSchema: def.parameters,
+    }));
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: { tools: toolList },
+    };
+  }
+
+  if (msg.method === "tools/call") {
+    const toolName = msg.params?.name;
+    const toolArgs = msg.params?.arguments || {};
+    const tool = tools[toolName];
+
+    if (!tool) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ error: "unknown_tool", tool: toolName }) }],
+          isError: true,
+        },
+      };
+    }
+
+    try {
+      const output = await tool.handler(toolArgs);
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+        },
+      };
+    } catch (err: any) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [{ type: "text", text: JSON.stringify(normalizeErrorPayload(err)) }],
+          isError: true,
+        },
+      };
+    }
+  }
+
+  if (msg.method === "ping") {
+    return { jsonrpc: "2.0", id, result: {} };
+  }
+
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32601, message: "Method not found" },
+  };
+}
+
 /**
  * Standard JSON-RPC 2.0 stdio loop for MCP Server.
  */
@@ -267,7 +425,7 @@ async function runStdioServer() {
   let buffer = "";
 
   process.stdin.setEncoding("utf-8");
-  process.stdin.on("data", async (chunk) => {
+  process.stdin.on("data", async (chunk: string) => {
     buffer += chunk;
     const lines = buffer.split("\n");
     buffer = lines.pop() || "";
@@ -283,71 +441,9 @@ async function runStdioServer() {
         continue;
       }
 
-      const id = msg.id;
-
-      if (msg.method === "initialize") {
-        sendResponse({
-          jsonrpc: "2.0",
-          id,
-          result: {
-            protocolVersion: "2024-11-05",
-            capabilities: { tools: {} },
-            serverInfo: { name: "jsonbin-mcp", version: "3.2.0" },
-          },
-        });
-      } else if (msg.method === "tools/list") {
-        const toolList = Object.entries(tools).map(([name, def]) => ({
-          name,
-          description: def.description,
-          inputSchema: def.parameters,
-        }));
-        sendResponse({
-          jsonrpc: "2.0",
-          id,
-          result: { tools: toolList },
-        });
-      } else if (msg.method === "tools/call") {
-        const toolName = msg.params?.name;
-        const toolArgs = msg.params?.arguments || {};
-        const tool = tools[toolName];
-
-        if (!tool) {
-          sendResponse({
-            jsonrpc: "2.0",
-            id,
-            result: {
-              content: [{ type: "text", text: JSON.stringify({ error: "unknown_tool", tool: toolName }) }],
-              isError: true,
-            },
-          });
-          continue;
-        }
-
-        try {
-          const output = await tool.handler(toolArgs);
-          sendResponse({
-            jsonrpc: "2.0",
-            id,
-            result: {
-              content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-            },
-          });
-        } catch (err: any) {
-          const errorMsg =
-            err instanceof JsonBinError
-              ? JSON.stringify({ error: err.name, statusCode: err.statusCode, details: err.data })
-              : JSON.stringify({ error: "operation_failed", message: err.message || "Unknown error" });
-
-          sendResponse({
-            jsonrpc: "2.0",
-            id,
-            result: {
-              content: [{ type: "text", text: errorMsg }],
-              isError: true,
-            },
-          });
-        }
-      }
+      // Notifications produce no response at all.
+      const response = await dispatchMessage(msg);
+      if (response) sendResponse(response);
     }
   });
 }

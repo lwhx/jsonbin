@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSystemHarness } from './support/system-harness.mjs';
-import { tools } from '../mcp/server.js';
+import { tools, dispatchMessage, normalizeErrorPayload } from '../mcp/server.js';
+import { JsonBinError, EtagConflictError, AuthenticationError } from '../sdk/typescript/dist/index.js';
+import pkg from '../package.json' with { type: 'json' };
 
-test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permission boundary', async (t) => {
+test('MCP Server: create/list/get/patch/publish tools and permission boundary', async (t) => {
   const h = await createSystemHarness('mcp-test-' + crypto.randomUUID());
   t.after(() => h.close());
 
@@ -17,7 +19,7 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
   // Create API Key
   const keyRes = await h.request('/keys', {
     method: 'POST',
-    value: { name: 'MCP Key', scopes: ['bin:read', 'bin:update', 'history:read', 'collection:read'] },
+    value: { name: 'MCP Key', scopes: ['bin:read', 'bin:create', 'bin:update', 'history:read', 'collection:read'] },
   });
   const { token } = await keyRes.json();
 
@@ -44,17 +46,27 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
   };
 
   try {
-    // 1. Tool: list_bins
-    const listResult = await tools.list_bins.handler({});
-    assert.equal(listResult.total >= 1, true);
-    assert.equal(listResult.bins.some(b => b.name === 'MCP App Config'), true);
+    // 1. Tool: create_bin
+    const created = await tools.create_bin.handler({
+      name: 'MCP Created Config',
+      value: { seeded: true },
+      tags: ['mcp'],
+    });
+    assert.equal(created.value.seeded, true);
+    assert.equal(created.meta.currentVersion, 1);
 
-    // 2. Tool: get_bin (via slug)
+    // 2. Tool: list_bins
+    const listResult = await tools.list_bins.handler({});
+    assert.equal(listResult.total >= 2, true);
+    assert.equal(listResult.bins.some(b => b.name === 'MCP App Config'), true);
+    assert.equal(listResult.bins.some(b => b.name === 'MCP Created Config'), true);
+
+    // 3. Tool: get_bin (via slug)
     const getResult = await tools.get_bin.handler({ idOrSlug: 'mcp-app-config' });
     assert.equal(getResult.meta.id, bin.meta.id);
     assert.equal(getResult.value.port, 3000);
 
-    // 3. Tool: json_patch_bin
+    // 4. Tool: json_patch_bin
     const patchResult = await tools.json_patch_bin.handler({
       id: bin.meta.id,
       etag: getResult.etag,
@@ -66,28 +78,28 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
     assert.equal(patchResult.value.port, 9000);
     assert.equal(patchResult.value.features.beta, true);
 
-    // 4. Tool: publish_bin
+    // 5. Tool: publish_bin
     const pubResult = await tools.publish_bin.handler({
       id: bin.meta.id,
       etag: patchResult.etag,
     });
     assert.equal(pubResult.meta.publishedVersion, 2);
 
-    // 5. Tool: get_published_bin
+    // 6. Tool: get_published_bin
     const pubGet = await tools.get_published_bin.handler({ idOrSlug: 'mcp-app-config' });
     assert.equal(pubGet.value.port, 9000);
 
-    // 6. Tool: list_bin_versions & get_bin_version
+    // 7. Tool: list_bin_versions & get_bin_version
     const versionsResult = await tools.list_bin_versions.handler({ id: bin.meta.id });
     assert.equal(versionsResult.total >= 2, true);
     const v1Result = await tools.get_bin_version.handler({ id: bin.meta.id, version: 1 });
     assert.equal(v1Result.value.port, 3000);
 
-    // 7. Tool: search_bins (verify type=bin default parameter)
+    // 8. Tool: search_bins (verify type=bin default parameter)
     const searchBinsResult = await tools.search_bins.handler({ query: 'MCP' });
     assert.equal(searchBinsResult.items.some(item => item.id === bin.meta.id), true);
 
-    // 8. Tool: search_json (verify API Key can call content search)
+    // 9. Tool: search_json (verify API Key can call content search)
     // Enable content search on the test bin
     const metaUpdateRes = await h.request(`/bins/${bin.meta.id}/meta`, {
       method: 'PATCH',
@@ -100,4 +112,74 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('MCP Server: JSON-RPC dispatch semantics (notifications, ping, unknown methods, version negotiation)', async () => {
+  // Notifications (no id) never receive a response
+  assert.equal(await dispatchMessage({ jsonrpc: '2.0', method: 'notifications/initialized' }), null);
+  assert.equal(await dispatchMessage({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }), null);
+  assert.equal(await dispatchMessage(null), null);
+
+  // initialize echoes a supported protocol version and reports the package version
+  const init = await dispatchMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+  assert.equal(init.result.protocolVersion, '2025-06-18');
+  assert.equal(init.result.serverInfo.name, 'jsonbin-mcp');
+  assert.equal(init.result.serverInfo.version, pkg.version);
+
+  const initFallback = await dispatchMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } });
+  assert.equal(initFallback.result.protocolVersion, '2024-11-05');
+
+  // ping is supported; unknown methods and non-requests get JSON-RPC errors
+  const ping = await dispatchMessage({ jsonrpc: '2.0', id: 3, method: 'ping' });
+  assert.deepEqual(ping.result, {});
+
+  const unknown = await dispatchMessage({ jsonrpc: '2.0', id: 4, method: 'resources/list' });
+  assert.equal(unknown.error.code, -32601);
+
+  const invalid = await dispatchMessage({ jsonrpc: '2.0', id: 5 });
+  assert.equal(invalid.error.code, -32600);
+
+  // tools/list includes every handler, including create_bin
+  const list = await dispatchMessage({ jsonrpc: '2.0', id: 6, method: 'tools/list' });
+  const names = list.result.tools.map(tool => tool.name);
+  assert.equal(names.includes('create_bin'), true);
+  assert.equal(names.length, Object.keys(tools).length);
+
+  // tools/call with an unknown tool is an isError result, not a transport error
+  const unknownTool = await dispatchMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'nope' } });
+  assert.equal(unknownTool.result.isError, true);
+  assert.equal(JSON.parse(unknownTool.result.content[0].text).error, 'unknown_tool');
+});
+
+test('MCP Server: error payloads use the stable error vocabulary', async () => {
+  // API codes pass through when they are already stable
+  const etag = normalizeErrorPayload(new EtagConflictError('etag_conflict', { error: 'etag_conflict' }));
+  assert.equal(etag.error, 'etag_conflict');
+  assert.equal(etag.statusCode, 412);
+
+  // Non-SDK failures degrade to a generic operation_failed without a stack trace
+  const generic = normalizeErrorPayload(new Error('boom'));
+  assert.equal(generic.error, 'operation_failed');
+  assert.equal(generic.message, 'boom');
+
+  // Auth codes are normalized to the documented vocabulary
+  const auth = normalizeErrorPayload(new AuthenticationError('unauthorized', { error: 'unauthorized' }));
+  assert.equal(auth.error, 'authentication_failed');
+  assert.equal(auth.statusCode, 401);
+
+  const scope = normalizeErrorPayload(new AuthenticationError('insufficient_scope', { error: 'insufficient_scope', requiredScopes: ['bin:read'] }));
+  assert.equal(scope.error, 'permission_denied');
+  assert.deepEqual(scope.requiredScopes, ['bin:read']);
+
+  // Bodies without a code fall back to the HTTP status mapping
+  const rate = normalizeErrorPayload(new JsonBinError('HTTP 429', 429, null));
+  assert.equal(rate.error, 'rate_limited');
+
+  // Validation issues are preserved
+  const validation = normalizeErrorPayload(new JsonBinError('validation_failed', 422, {
+    error: 'validation_failed',
+    issues: [{ path: ['name'], message: 'required' }],
+  }));
+  assert.equal(validation.error, 'validation_failed');
+  assert.equal(validation.issues.length, 1);
 });

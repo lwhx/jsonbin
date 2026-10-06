@@ -1,7 +1,17 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { version } from "../../../package.json";
+import { hmacSign, timingSafeEqualBase64Url } from "../lib/crypto";
+import { readApiKey } from "../storage/keys";
 
 const app = new Hono<{ Bindings: Env }>();
+
+const SERVER_NAME = "jsonbin-remote-mcp";
+/** Protocol revisions this transport understands; initialize echoes a supported request. */
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
+/** SSE transport sessions are stateless but self-authenticating and expire after one hour. */
+const MCP_SESSION_TTL_SECONDS = 60 * 60;
 
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
@@ -9,6 +19,22 @@ app.use("*", async (c, next) => {
 });
 
 const MCP_TOOLS = [
+  {
+    name: "create_bin",
+    description: "Create a new bin with an initial JSON value (version 1).",
+    inputSchema: {
+      type: "object",
+      required: ["name", "value"],
+      properties: {
+        name: { type: "string", description: "Bin name (1-160 chars)" },
+        value: { description: "Initial JSON value" },
+        slug: { type: "string", description: "Optional custom slug alias" },
+        description: { type: "string", description: "Optional description" },
+        tags: { type: "array", items: { type: "string" }, description: "Optional tags" },
+        visibility: { type: "string", enum: ["private", "public"], description: "Optional visibility (default private)" },
+      },
+    },
+  },
   {
     name: "list_bins",
     description: "List accessible bins with optional filtering by tag, favorite, or pinned status.",
@@ -229,11 +255,73 @@ async function internalFetch(c: Context<{ Bindings: Env }>, path: string, option
   return { status: res.status, data, headers: res.headers };
 }
 
+/** Structured tool failure carrying the normalized MCP error code. */
+class McpToolError extends Error {
+  payload: Record<string, unknown>;
+
+  constructor(payload: Record<string, unknown>) {
+    super(String(payload.error));
+    this.payload = payload;
+  }
+}
+
+/**
+ * Project an upstream API failure onto the stable MCP error vocabulary.
+ * Known API codes pass through; auth/limit codes are normalized; the rest map by status.
+ */
+function normalizeApiError(status: number, data: any): Record<string, unknown> {
+  const codeAliases: Record<string, string> = {
+    unauthorized: "authentication_failed",
+    insufficient_scope: "permission_denied",
+    rate_limit_exceeded: "rate_limited",
+  };
+  const statusCodes: Record<number, string> = {
+    400: "validation_failed",
+    401: "authentication_failed",
+    403: "permission_denied",
+    404: "not_found",
+    409: "conflict",
+    412: "etag_conflict",
+    422: "validation_failed",
+    423: "bin_locked",
+    428: "precondition_required",
+    429: "rate_limited",
+  };
+
+  const body = data && typeof data === "object" ? data : {};
+  const raw = typeof body.error === "string" ? body.error : "";
+  const code = codeAliases[raw] || raw || statusCodes[status] || "server_error";
+
+  const payload: Record<string, unknown> = { error: code, statusCode: status };
+  if (Array.isArray(body.issues)) payload.issues = body.issues;
+  if (Array.isArray(body.requiredScopes)) payload.requiredScopes = body.requiredScopes;
+  return payload;
+}
+
+function requireOk(status: number, data: any): any {
+  if (status >= 400) throw new McpToolError(normalizeApiError(status, data));
+  return data;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Execute a specific tool on behalf of the caller.
  */
 async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: any): Promise<any> {
   switch (name) {
+    case "create_bin": {
+      const body: Record<string, unknown> = { name: args.name, value: args.value };
+      for (const field of ["slug", "description", "tags", "visibility"] as const) {
+        if (args[field] !== undefined) body[field] = args[field];
+      }
+      const { status, data } = await internalFetch(c, "/bins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return requireOk(status, data);
+    }
     case "list_bins": {
       const q = new URLSearchParams();
       if (args.tag) q.set("tag", args.tag);
@@ -241,7 +329,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
       if (args.pinned !== undefined) q.set("pinned", String(args.pinned));
       const qs = q.toString() ? `?${q.toString()}` : "";
       const { status, data } = await internalFetch(c, `/bins${qs}`);
-      if (status >= 400) throw new Error(JSON.stringify(data));
+      requireOk(status, data);
       return {
         total: data.total,
         bins: (data.items || []).map((b: any) => ({
@@ -257,42 +345,36 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
       };
     }
     case "get_bin": {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args.idOrSlug);
-      const path = isUuid ? `/bins/${args.idOrSlug}` : `/b/${args.idOrSlug}`;
+      const path = UUID_PATTERN.test(args.idOrSlug) ? `/bins/${args.idOrSlug}` : `/b/${args.idOrSlug}`;
       const { status, data, headers } = await internalFetch(c, path);
-      if (status >= 400) throw new Error(JSON.stringify(data));
+      requireOk(status, data);
       if (data && typeof data === "object" && !data.etag) {
         data.etag = headers.get("ETag") || "";
       }
       return data;
     }
     case "get_published_bin": {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args.idOrSlug);
-      const path = isUuid ? `/bins/${args.idOrSlug}/published` : `/b/${args.idOrSlug}/published`;
+      const path = UUID_PATTERN.test(args.idOrSlug) ? `/bins/${args.idOrSlug}/published` : `/b/${args.idOrSlug}/published`;
       const { status, data } = await internalFetch(c, path);
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "search_bins": {
       const limit = args.limit || 20;
       const { status, data } = await internalFetch(c, `/search?q=${encodeURIComponent(args.query)}&type=bin&limit=${limit}`);
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "search_json": {
       const qs = args.mode ? `&mode=${encodeURIComponent(args.mode)}` : "";
       const { status, data } = await internalFetch(c, `/search/content?q=${encodeURIComponent(args.query)}${qs}`);
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "list_bin_versions": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}/versions`);
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "get_bin_version": {
       const { status, data, headers } = await internalFetch(c, `/bins/${args.id}/versions/${args.version}`);
-      if (status >= 400) throw new Error(JSON.stringify(data));
+      requireOk(status, data);
       if (data && typeof data === "object" && !data.etag) {
         data.etag = headers.get("ETag") || "";
       }
@@ -311,8 +393,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
         headers,
         body: JSON.stringify({ value: args.value }),
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "merge_patch_bin": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}`, {
@@ -323,8 +404,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
         },
         body: JSON.stringify(args.patch),
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "json_patch_bin": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}`, {
@@ -335,8 +415,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
         },
         body: JSON.stringify(args.operations),
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "publish_bin": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}/publish`, {
@@ -347,8 +426,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
         },
         body: JSON.stringify({ version: args.version }),
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "rollback_bin": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}/rollback`, {
@@ -359,41 +437,101 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
         },
         body: JSON.stringify({ version: args.version }),
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     case "clone_bin": {
       const { status, data } = await internalFetch(c, `/bins/${args.id}/clone`, {
         method: "POST",
         headers: { "If-Match": args.etag },
       });
-      if (status >= 400) throw new Error(JSON.stringify(data));
-      return data;
+      return requireOk(status, data);
     }
     default:
-      throw new Error(`unknown_tool: ${name}`);
+      throw new McpToolError({ error: "unknown_tool", tool: name });
   }
 }
 
-/**
- * Handle JSON-RPC 2.0 messages.
- */
-async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<any> {
-  const id = msg?.id ?? null;
+/** Reject requests without a valid, non-revoked, non-expired Bearer API key. */
+async function verifyBearer(c: Context<{ Bindings: Env }>): Promise<Response | null> {
+  const authorization = c.req.header("Authorization") ?? "";
+  const token = /^Bearer\s+(\S+)$/i.exec(authorization.trim())?.[1];
+  if (!token) {
+    c.header("WWW-Authenticate", 'Bearer realm="JSONBin MCP"');
+    return c.json({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: valid Bearer token required" } }, 401);
+  }
+  const key = await readApiKey(c.env, token);
+  if (!key) {
+    c.header("WWW-Authenticate", 'Bearer realm="JSONBin MCP", error="invalid_token"');
+    return c.json({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: invalid or revoked token" } }, 401);
+  }
+  return null;
+}
 
-  if (msg?.method === "initialize") {
+function sessionSecret(env: Env) {
+  const secret = env.SESSION_SECRET;
+  if (typeof secret !== "string" || secret.length < 32) return null;
+  return secret;
+}
+
+/**
+ * Stateless, self-authenticating SSE session id: `<random32>.<expSeconds>.<hmac>`.
+ * Anyone can read the format; only SESSION_SECRET holders can mint a valid one.
+ */
+async function issueMcpSessionId(env: Env): Promise<string | null> {
+  const secret = sessionSecret(env);
+  if (!secret) return null;
+  const id = crypto.randomUUID().replace(/-/g, "");
+  const exp = Math.floor(Date.now() / 1000) + MCP_SESSION_TTL_SECONDS;
+  const signature = await hmacSign(secret, `mcp-session:${id}:${exp}`);
+  return `${id}.${exp}.${signature}`;
+}
+
+async function verifyMcpSessionId(env: Env, sessionId: string | undefined): Promise<boolean> {
+  if (!sessionId) return false;
+  const match = /^([0-9a-f]{32})\.(\d+)\.([A-Za-z0-9_-]{43})$/.exec(sessionId);
+  if (!match) return false;
+  const [, id, expText, signature] = match;
+  const exp = Number(expText);
+  if (!Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) return false;
+  const secret = sessionSecret(env);
+  if (!secret) return false;
+  const expected = await hmacSign(secret, `mcp-session:${id}:${exp}`);
+  return timingSafeEqualBase64Url(signature, expected);
+}
+
+type JsonRpcResponse = { jsonrpc: "2.0"; id: any; result?: unknown; error?: unknown };
+
+/**
+ * Handle one JSON-RPC 2.0 message. Notifications (no id) return null and must
+ * not receive a response, per the JSON-RPC 2.0 and MCP specifications.
+ */
+async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<JsonRpcResponse | null> {
+  // A missing id marks a notification: never answer it, whatever the method.
+  if (!msg || typeof msg !== "object" || msg.id === undefined) return null;
+  const id = msg.id;
+
+  if (typeof msg.method !== "string" || !msg.method) {
+    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
+  }
+
+  if (msg.method === "initialize") {
+    const requested = msg.params?.protocolVersion;
+    const protocolVersion =
+      typeof requested === "string" && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+        ? requested
+        : DEFAULT_PROTOCOL_VERSION;
     return {
       jsonrpc: "2.0",
       id,
       result: {
-        protocolVersion: "2024-11-05",
+        protocolVersion,
         capabilities: { tools: {} },
-        serverInfo: { name: "jsonbin-remote-mcp", version: "3.2.0" },
+        serverInfo: { name: SERVER_NAME, version },
       },
     };
   }
 
-  if (msg?.method === "tools/list") {
+  if (msg.method === "tools/list") {
     return {
       jsonrpc: "2.0",
       id,
@@ -401,7 +539,7 @@ async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<a
     };
   }
 
-  if (msg?.method === "tools/call") {
+  if (msg.method === "tools/call") {
     const toolName = msg.params?.name;
     const toolArgs = msg.params?.arguments || {};
     try {
@@ -414,18 +552,21 @@ async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<a
         },
       };
     } catch (err: any) {
+      const payload = err instanceof McpToolError
+        ? err.payload
+        : { error: "server_error", message: "Operation failed" };
       return {
         jsonrpc: "2.0",
         id,
         result: {
-          content: [{ type: "text", text: err.message || "Operation failed" }],
+          content: [{ type: "text", text: JSON.stringify(payload) }],
           isError: true,
         },
       };
     }
   }
 
-  if (msg?.method === "ping") {
+  if (msg.method === "ping") {
     return { jsonrpc: "2.0", id, result: {} };
   }
 
@@ -436,12 +577,18 @@ async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<a
   };
 }
 
-// 1. Direct Streamable HTTP POST: POST /api/v1/mcp
+/** 204 for notification-only payloads; a single JSON-RPC object otherwise. */
+async function respondToBatch(c: Context<{ Bindings: Env }>, messages: any[]): Promise<Response> {
+  const responses = (await Promise.all(messages.map((item) => handleJsonRpc(c, item)))).filter(Boolean);
+  if (responses.length === 0) return c.body(null, 204);
+  if (responses.length === 1 && messages.length === 1) return c.json(responses[0]);
+  return c.json(responses);
+}
+
+// 1. Streamable HTTP POST: POST /api/v1/mcp (stateless server: no session header issued)
 app.post("/", async (c) => {
-  const auth = c.req.header("Authorization");
-  if (!auth) {
-    return c.json({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: Bearer token required" } }, 401);
-  }
+  const denied = await verifyBearer(c);
+  if (denied) return denied;
 
   let body: any;
   try {
@@ -450,31 +597,46 @@ app.post("/", async (c) => {
     return c.json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } }, 400);
   }
 
-  if (Array.isArray(body)) {
-    const responses = await Promise.all(body.map((item) => handleJsonRpc(c, item)));
-    return c.json(responses);
-  }
-
+  if (Array.isArray(body)) return respondToBatch(c, body);
   const response = await handleJsonRpc(c, body);
+  if (!response) return c.body(null, 204);
   return c.json(response);
 });
 
+// Stateless streamable server: no server-initiated stream and no session to terminate.
+app.get("/", (c) => c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" }));
+app.delete("/", (c) => c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" }));
+
 // 2. Standard MCP SSE Endpoint: GET /api/v1/mcp/sse
 app.get("/sse", async (c) => {
-  const auth = c.req.header("Authorization");
-  if (!auth) {
-    return c.text("Unauthorized: Bearer token required", 401);
-  }
+  const denied = await verifyBearer(c);
+  if (denied) return denied;
 
-  const sessionId = crypto.randomUUID();
+  if (!sessionSecret(c.env)) {
+    return c.json({ error: "session_not_configured" }, 503);
+  }
+  const sessionId = await issueMcpSessionId(c.env);
+  if (!sessionId) return c.json({ error: "session_not_configured" }, 503);
+
   const endpointUrl = `/api/v1/mcp/message?sessionId=${sessionId}`;
 
+  let heartbeat: any = null;
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
       controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpointUrl}\n\n`));
-      // Heartbeat comment
-      controller.enqueue(encoder.encode(`: ping\n\n`));
+      controller.enqueue(encoder.encode(": connected\n\n"));
+      // Keep proxies from closing the idle stream while the client holds it open.
+      heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          if (heartbeat) clearInterval(heartbeat);
+        }
+      }, 25_000);
+    },
+    cancel() {
+      if (heartbeat) clearInterval(heartbeat);
     },
   });
 
@@ -487,11 +649,14 @@ app.get("/sse", async (c) => {
   });
 });
 
-// 3. MCP SSE Postback: POST /api/v1/mcp/message
+// 3. MCP SSE Postback: POST /api/v1/mcp/message (requires the session minted by /sse)
 app.post("/message", async (c) => {
-  const auth = c.req.header("Authorization");
-  if (!auth) {
-    return c.json({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized: Bearer token required" } }, 401);
+  const denied = await verifyBearer(c);
+  if (denied) return denied;
+
+  const sessionId = new URL(c.req.url).searchParams.get("sessionId") ?? undefined;
+  if (!(await verifyMcpSessionId(c.env, sessionId))) {
+    return c.json({ jsonrpc: "2.0", error: { code: -32001, message: "Unknown or expired MCP session" } }, 404);
   }
 
   let body: any;
@@ -502,6 +667,7 @@ app.post("/message", async (c) => {
   }
 
   const response = await handleJsonRpc(c, body);
+  if (!response) return c.body(null, 204);
   return c.json(response);
 });
 

@@ -184,6 +184,14 @@ export function generateOpenApiSpec(): Record<string, unknown> {
         post: op("Remote MCP Streamable HTTP POST 端点", {
           security: SESSION_OR_BEARER,
         }),
+        get: op("Remote MCP 无状态服务器不提供服务端推送流，固定 405", {
+          security: SESSION_OR_BEARER,
+          responses: { "405": { description: "method_not_allowed，仅支持 POST" } },
+        }),
+        delete: op("Remote MCP 无状态服务器没有会话可终止，固定 405", {
+          security: SESSION_OR_BEARER,
+          responses: { "405": { description: "method_not_allowed，仅支持 POST" } },
+        }),
       },
       "/mcp/sse": {
         get: op("Remote MCP SSE 长连接端点", {
