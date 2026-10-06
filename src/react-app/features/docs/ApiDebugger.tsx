@@ -37,6 +37,20 @@ export function ApiDebugger() {
     },
     { label: "列出集合", method: "GET" as const, url: "/collections", body: "" },
     { label: "列出模板", method: "GET" as const, url: "/templates", body: "" },
+    {
+      label: "JSON Patch",
+      method: "PATCH" as const,
+      url: "/bins/:id",
+      body: JSON.stringify(
+        [
+          { op: "test", path: "/settings/theme", value: "light" },
+          { op: "replace", path: "/settings/theme", value: "dark" },
+          { op: "add", path: "/tags/-", value: "patched" },
+        ],
+        null,
+        2,
+      ),
+    },
     { label: "全站搜索", method: "GET" as const, url: "/search?q=test", body: "" },
     { label: "OpenAPI 规范", method: "GET" as const, url: "/openapi.json", body: "" },
   ];
@@ -65,7 +79,13 @@ export function ApiDebugger() {
       const targetUrl = `/api/v1${normalizedEndpoint}`;
       const headers: Record<string, string> = {};
       if (requestBody && (method === "POST" || method === "PUT" || method === "PATCH")) {
-        headers["Content-Type"] = "application/json";
+        if (method === "PATCH" && requestBody.trim().startsWith("[")) {
+          headers["Content-Type"] = "application/json-patch+json";
+        } else if (method === "PATCH") {
+          headers["Content-Type"] = "application/merge-patch+json";
+        } else {
+          headers["Content-Type"] = "application/json";
+        }
       }
       if (bearerToken.trim()) {
         headers["Authorization"] = `Bearer ${bearerToken.trim()}`;

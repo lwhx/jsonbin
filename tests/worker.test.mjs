@@ -541,6 +541,81 @@ test('content negotiation: YAML, TOML and .env exports on bin and published endp
   assert.match(jsonRes.headers.get('content-type') || '', /application\/json/);
 });
 
+test('P22: JSON Patch RFC 6902 operations (add, remove, replace, move, copy, test)', async () => {
+  const bin = await create({
+    server: { port: 8080, host: '127.0.0.1' },
+    items: ['item1', 'item2'],
+    successRate: 90,
+  });
+  const path = '/bins/' + bin.meta.id;
+
+  // 1. Successful JSON Patch with multiple operations
+  const patchRes = await request(path, {
+    method: 'PATCH',
+    etag: bin.etag,
+    contentType: 'application/json-patch+json',
+    value: [
+      { op: 'test', path: '/successRate', value: 90 },
+      { op: 'replace', path: '/successRate', value: 99 },
+      { op: 'add', path: '/items/-', value: 'item3' },
+      { op: 'copy', from: '/server/port', path: '/oldPort' },
+      { op: 'move', from: '/server/host', path: '/server/hostname' },
+    ],
+  });
+  assert.equal(patchRes.status, 200);
+  const patched = await patchRes.json();
+  assert.equal(patched.meta.currentVersion, 2);
+  assert.equal(patched.value.successRate, 99);
+  assert.deepEqual(patched.value.items, ['item1', 'item2', 'item3']);
+  assert.equal(patched.value.oldPort, 8080);
+  assert.equal(patched.value.server.hostname, '127.0.0.1');
+  assert.equal(patched.value.server.host, undefined);
+
+  // 2. Test failure returns 409 conflict and prevents version bump
+  const testFailRes = await request(path, {
+    method: 'PATCH',
+    etag: patched.etag,
+    contentType: 'application/json-patch+json',
+    value: [
+      { op: 'test', path: '/successRate', value: 50 }, // Should fail
+      { op: 'replace', path: '/successRate', value: 100 },
+    ],
+  });
+  assert.equal(testFailRes.status, 409);
+  const failData = await testFailRes.json();
+  assert.equal(failData.error, 'json_patch_test_failed');
+  assert.equal(failData.operation, 0);
+  assert.equal(failData.path, '/successRate');
+
+  // Value must remain untouched
+  const checkUnchanged = await (await request(path)).json();
+  assert.equal(checkUnchanged.meta.currentVersion, 2);
+  assert.equal(checkUnchanged.value.successRate, 99);
+
+  // 3. Remove operation
+  const removeRes = await request(path, {
+    method: 'PATCH',
+    etag: patched.etag,
+    contentType: 'application/json-patch+json',
+    value: [{ op: 'remove', path: '/oldPort' }],
+  });
+  assert.equal(removeRes.status, 200);
+  const afterRemove = await removeRes.json();
+  assert.equal(afterRemove.meta.currentVersion, 3);
+  assert.equal(afterRemove.value.oldPort, undefined);
+
+  // 4. Backward compatibility: application/json without header still does RFC 7396 Merge Patch
+  const mergeRes = await request(path, {
+    method: 'PATCH',
+    etag: afterRemove.etag,
+    contentType: 'application/json',
+    value: { successRate: 100 },
+  });
+  assert.equal(mergeRes.status, 200);
+  const afterMerge = await mergeRes.json();
+  assert.equal(afterMerge.value.successRate, 100);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

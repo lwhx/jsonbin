@@ -24,6 +24,7 @@ import {
 } from "../storage/bins";
 import { createTemplate } from "../storage/templates";
 import { mergePatch, readValue, valuePath, writeValue } from "../validation/json-operations";
+import { applyJsonPatch, JsonPatchError, type JsonPatchOperation } from "../validation/json-patch";
 
 import { SchemaError } from "../validation/schema";
 
@@ -561,14 +562,46 @@ app.on("GET", ["/:id/value", "/:id/value/*"], readCurrent, (c) => {
 app.patch("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
-  let patch: unknown;
-  try { patch = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 422); }
-  const record = await transformBin(c.env, c.req.param("id"), value => mergePatch(value, patch), etag);
-  if (!record) return c.json({ error: "not_found" }, 404);
-  c.header("ETag", record.etag);
-  c.header("X-JSONBin-Version", String(record.meta.currentVersion));
-  await auditRequest(c, "bin.updated", record.meta.id);
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_json" }, 422);
+  }
+
+  const contentType = (c.req.header("content-type") || c.req.header("Content-Type") || "").toLowerCase();
+  const isJsonPatch = contentType.includes("application/json-patch+json");
+
+  try {
+    const transformFn = isJsonPatch
+      ? (value: unknown) => applyJsonPatch(value, payload as JsonPatchOperation[])
+      : (value: unknown) => mergePatch(value, payload);
+
+    const record = await transformBin(c.env, c.req.param("id"), transformFn, etag);
+    if (!record) return c.json({ error: "not_found" }, 404);
+
+    c.header("ETag", record.etag);
+    c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+    await auditRequest(c, "bin.updated", record.meta.id);
     return c.json(record);
+  } catch (error: any) {
+    if (error instanceof JsonPatchError) {
+      return c.json(
+        {
+          error: error.code,
+          operation: error.operationIndex,
+          path: error.path,
+        },
+        error.statusCode as any,
+      );
+    }
+    if (error instanceof Error && error.message === "etag_conflict") return c.json({ error: "etag_conflict" }, 412);
+    if (error instanceof Error && error.message === "bin_locked") return c.json({ error: "bin_locked" }, 423);
+    // Delegate everything else (schema failures, path errors, ...) to the app-level
+    // handler so the payload keeps `issues` and the documented status mapping.
+    throw error;
+  }
 });
 
 app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), checkBinMutationAccess, async (c) => {

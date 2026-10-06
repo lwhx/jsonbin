@@ -1,0 +1,20 @@
+{
+  "name": "@jsonbin/client",
+  "version": "3.2.0",
+  "description": "Official TypeScript SDK for JSONBin",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": ["jsonbin", "sdk", "cloudflare-workers", "configuration"],
+  "license": "Apache-2.0"
+}
