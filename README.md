@@ -210,7 +210,8 @@ v3.0.0 includes:
 - schemas and validation
 - API keys and scoped permissions
 - deep-path access
-- JSON Merge Patch
+- JSON Merge Patch RFC 7396
+- JSON Patch RFC 6902
 - immutable version history
 - diff and restore
 - ETag / If-Match conflict protection
@@ -219,6 +220,22 @@ v3.0.0 includes:
 - trash
 - import/export
 - search
+- published configuration release and rollback
+- custom slug aliases, tags, favorites and pinned ordering
+- resource-scoped API keys
+- batch operations
+- clone and JSON templates
+- OpenAPI 3.1 and interactive API debugger
+- API key usage counters
+- bounded JSON content search
+- webhooks
+- rate limiting
+- version change notes
+- YAML / TOML / .env content negotiation
+- TypeScript SDK
+- Python SDK
+- MCP Server
+- API request analytics
 - polished desktop/mobile dashboard
 
 

@@ -1248,6 +1248,25 @@ R2 派生清单为 `indexes/search/meta.json`，保存元数据对象 key/ETag �
 - [x] **P21 (Backup / Restore 完整扩展)**：
   - 备份契约扩充：将 `slug`、`tags`、`favorite`、`pinned`、`contentSearchMode`、`publishedVersion`、`publishedAt` 全面纳入系统快照导出。
   - 灾难恢复防冲突 (15.1)：在恢复目标存在同名 Slug 冲突时，优雅降级（主数据优先恢复，冲突别名解绑为 `slug: null` 并记录），杜绝恢复时被意外同名抢占导致全包失败。
+- [x] **v3.2 / P22：JSON Patch RFC 6902**：
+  - `PATCH /api/v1/bins/:id` 通过 `Content-Type` 区分协议：`application/json-patch+json` 走 RFC 6902，`application/merge-patch+json` 与 `application/json` 保持 RFC 7396 兼容，不破坏旧客户端。
+  - 完整实现 `add` / `remove` / `replace` / `move` / `copy` / `test` 六种操作，严格遵循 RFC 6901 JSON Pointer（`~0`、`~1`、空键、根路径、数组索引与 `-` 追加）。
+  - 原子语义：整批 operation 在内存中整体应用，任一操作失败则不创建任何版本；一次请求只产生 **1 个** 不可变版本。
+  - `test` 失败返回 `409 json_patch_test_failed` 并携带 `operation` 与 `path`，不泄露实际值；单批上限 100 个 operation。
+  - 原型污染防护：`__proto__` / `constructor` / `prototype` 一律按普通 JSON 数据处理。
+- [x] **v3.2 / P23：官方 TypeScript 与 Python SDK**：
+  - `sdk/typescript`（`@jsonbin/client`，零运行时依赖）与 `sdk/python`（`jsonbin-client`，仅标准库）独立可发布，不与前端内部 API Client 耦合。
+  - 统一异常层级（Authentication / PermissionDenied / NotFound / Conflict / EtagConflict / Validation / Locked / PreconditionRequired / RateLimit / Server）。
+  - 完整保留服务器 ETag 原始格式；304 返回 `{ modified: false }` 且不对空响应体做 JSON 解析；写请求不做隐式自动重试；Token 仅进入 `Authorization` 头。
+- [x] **v3.2 / P24：JSONBin MCP Server**：
+  - `mcp/server.js` 提供 stdio JSON-RPC 服务，仅需 `JSONBIN_URL` 与 `JSONBIN_TOKEN`。
+  - 提供 `list_bins`、`get_bin`、`get_published_bin`、`search_bins`、`search_json`、`update_bin`、`merge_patch_bin`、`json_patch_bin`、`publish_bin`、`rollback_bin`、`clone_bin`。
+  - 全程通过官方 SDK 调用 HTTP API，不直连 R2；权限完全由 JSONBIN_TOKEN 的 Scope 与 Resource Access 决定。
+- [x] **v3.2 / P25：API 请求分析**：
+  - 请求生命周期埋点采集 method、规范化 route、status、duration、authType，KV 小时分桶保留 35 天；写入使用 `ctx.waitUntil()`，统计失败绝不影响业务响应。
+  - 强隐私底线：不采集 Authorization、Token、Cookie、密码、请求/响应体、用户 JSON 与搜索关键词；route 规范化避免高基数。
+  - `GET /api/v1/analytics/overview?range=1h|24h|7d|30d` 提供 Management Session Only 的服务端聚合（总量、成功率、平均/P95 延迟、4xx/5xx/429、Endpoint 排行、状态码分布、API Key 排行、错误排行）。
+  - 控制台新增「API 分析」页面，支持时间范围切换、Overview 卡片、Endpoint 排行表格与状态码分布。
 - [x] **全站统一确认弹窗**：实现 `Dialog` 与 `ConfirmDialog`，移除原生 `confirm`，支持 Focus Trap、Esc 取消、遮罩点击取消。
 - [x] **API Key 彻底物理删除**：提供针对废弃 Key 的物理删除能力，兼顾撤销审计与凭证精简。
 - [x] **双模态结构化表单**：实现 `JsonFormEditor`、`JsonValueField` 及独立状态建模 `json-form-model`，支持根对象键值表单、递归对象/数组、数组重排与删除、类型切换、特殊键保留、CRLF 保护及非法草稿页面 dirty 保护。
