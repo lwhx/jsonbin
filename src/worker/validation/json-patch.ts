@@ -239,8 +239,14 @@ export function applyJsonPatch(doc: unknown, patch: JsonPatchOperation[]): unkno
         if (tokens.length === 0) {
           currentDoc = deepClone(op.value);
         } else {
-          currentDoc = applyRemove(currentDoc, tokens, i, path);
-          currentDoc = applyAdd(currentDoc, tokens, op.value, i, path);
+          const { parent, lastKey } = resolveParent(currentDoc, tokens, i, path);
+          const clonedVal = deepClone(op.value);
+          if (Array.isArray(parent)) {
+            const idx = Number(lastKey);
+            parent[idx] = clonedVal;
+          } else if (isObject(parent)) {
+            parent[lastKey] = clonedVal;
+          }
         }
         break;
       }

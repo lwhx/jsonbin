@@ -95,10 +95,40 @@ const tools: Record<
       required: ["query"],
       properties: {
         query: { type: "string", description: "Search term" },
+        limit: { type: "integer", description: "Maximum results (1-50, default 20)" },
       },
     },
     handler: async (args) => {
-      return await getClient().search.metadata(args.query);
+      return await getClient().search.metadata(args.query, { type: "bin", limit: args.limit });
+    },
+  },
+
+  list_bin_versions: {
+    description: "List stored immutable historical versions of a bin.",
+    parameters: {
+      type: "object",
+      required: ["id"],
+      properties: {
+        id: { type: "string", description: "Bin UUID" },
+      },
+    },
+    handler: async (args) => {
+      return await getClient().bins.listVersions(args.id);
+    },
+  },
+
+  get_bin_version: {
+    description: "Retrieve a specific immutable historical version of a bin.",
+    parameters: {
+      type: "object",
+      required: ["id", "version"],
+      properties: {
+        id: { type: "string", description: "Bin UUID" },
+        version: { type: "integer", description: "Historical version number" },
+      },
+    },
+    handler: async (args) => {
+      return await getClient().bins.getVersion(args.id, args.version);
     },
   },
 

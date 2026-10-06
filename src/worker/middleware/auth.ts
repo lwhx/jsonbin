@@ -50,6 +50,7 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
       c.header("WWW-Authenticate", 'Bearer realm="JSONBin", error="invalid_token"');
       return c.json({ error: "unauthorized" }, 401);
     }
+    c.set("apiKeyId" as any, current.key.id);
     // Best-effort per-key rate limit; unlimited only via an explicit null override.
     const limit = current.key.rateLimitPerMinute ?? DEFAULT_KEY_RATE_LIMIT;
     if (limit !== null && c.env.CACHE) {

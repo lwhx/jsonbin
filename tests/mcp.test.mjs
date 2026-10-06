@@ -17,7 +17,7 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
   // Create API Key
   const keyRes = await h.request('/keys', {
     method: 'POST',
-    value: { name: 'MCP Key', scopes: ['bin:read', 'bin:update', 'history:read'] },
+    value: { name: 'MCP Key', scopes: ['bin:read', 'bin:update', 'history:read', 'collection:read'] },
   });
   const { token } = await keyRes.json();
 
@@ -76,6 +76,27 @@ test('MCP Server: list_bins, get_bin, json_patch_bin, publish_bin, and permissio
     // 5. Tool: get_published_bin
     const pubGet = await tools.get_published_bin.handler({ idOrSlug: 'mcp-app-config' });
     assert.equal(pubGet.value.port, 9000);
+
+    // 6. Tool: list_bin_versions & get_bin_version
+    const versionsResult = await tools.list_bin_versions.handler({ id: bin.meta.id });
+    assert.equal(versionsResult.total >= 2, true);
+    const v1Result = await tools.get_bin_version.handler({ id: bin.meta.id, version: 1 });
+    assert.equal(v1Result.value.port, 3000);
+
+    // 7. Tool: search_bins (verify type=bin default parameter)
+    const searchBinsResult = await tools.search_bins.handler({ query: 'MCP' });
+    assert.equal(searchBinsResult.items.some(item => item.id === bin.meta.id), true);
+
+    // 8. Tool: search_json (verify API Key can call content search)
+    // Enable content search on the test bin
+    const metaUpdateRes = await h.request(`/bins/${bin.meta.id}/meta`, {
+      method: 'PATCH',
+      headers: { 'If-Match': pubResult.etag },
+      value: { contentSearchMode: 'all' },
+    });
+    assert.equal(metaUpdateRes.status, 200);
+    const searchJsonResult = await tools.search_json.handler({ query: '9000' });
+    assert.equal(searchJsonResult.items.some(item => item.binId === bin.meta.id), true);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -210,16 +210,163 @@ export class JsonBinClient {
       });
       return res.data;
     },
+
+    listVersions: async (id: string): Promise<{ items: { version: number; uploaded: string; size: number; message?: string }[]; total: number }> => {
+      const res = await this.request<{ items: { version: number; uploaded: string; size: number; message?: string }[]; total: number }>(`/bins/${id}/versions`);
+      return res.data;
+    },
+
+    getVersion: async <T = unknown>(id: string, version: number): Promise<BinRecord<T>> => {
+      const res = await this.request<BinRecord<T>>(`/bins/${id}/versions/${version}`);
+      return res.data;
+    },
   };
 
   readonly search = {
-    metadata: async (query: string) => {
-      const res = await this.request<{ items: any[]; total: number }>(`/search?q=${encodeURIComponent(query)}`);
+    metadata: async (query: string, options?: { type?: "all" | "bin" | "collection" | "schema"; limit?: number }) => {
+      const type = options?.type ?? "all";
+      const limit = options?.limit ?? 20;
+      const res = await this.request<{ items: any[]; total: number }>(`/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`);
       return res.data;
     },
     content: async (query: string, mode?: "keys" | "all") => {
       const qs = mode ? `&mode=${mode}` : "";
       const res = await this.request<{ items: any[]; total: number }>(`/search/content?q=${encodeURIComponent(query)}${qs}`);
+      return res.data;
+    },
+  };
+
+  readonly collections = {
+    list: async (): Promise<{ items: any[]; total: number }> => {
+      const res = await this.request<{ items: any[]; total: number }>("/collections");
+      return res.data;
+    },
+    get: async (id: string): Promise<any> => {
+      const res = await this.request<any>(`/collections/${id}`);
+      return res.data;
+    },
+    create: async (input: { name: string; description?: string }): Promise<any> => {
+      const res = await this.request<any>("/collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    update: async (id: string, input: { name?: string; description?: string }, options: { etag: string }): Promise<any> => {
+      const res = await this.request<any>(`/collections/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        ifMatch: options.etag,
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    delete: async (id: string, options: { etag: string }): Promise<{ ok: boolean }> => {
+      const res = await this.request<{ ok: boolean }>(`/collections/${id}`, {
+        method: "DELETE",
+        ifMatch: options.etag,
+      });
+      return res.data;
+    },
+  };
+
+  readonly schemas = {
+    list: async (): Promise<{ items: any[]; total: number }> => {
+      const res = await this.request<{ items: any[]; total: number }>("/schemas");
+      return res.data;
+    },
+    get: async (id: string): Promise<any> => {
+      const res = await this.request<any>(`/schemas/${id}`);
+      return res.data;
+    },
+    create: async (input: { name: string; description?: string; schema: Record<string, unknown> }): Promise<any> => {
+      const res = await this.request<any>("/schemas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    update: async (id: string, input: { name?: string; description?: string; schema?: Record<string, unknown> }, options: { etag: string }): Promise<any> => {
+      const res = await this.request<any>(`/schemas/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        ifMatch: options.etag,
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    delete: async (id: string, options: { etag: string }): Promise<{ ok: boolean }> => {
+      const res = await this.request<{ ok: boolean }>(`/schemas/${id}`, {
+        method: "DELETE",
+        ifMatch: options.etag,
+      });
+      return res.data;
+    },
+    validate: async (id: string, value: unknown): Promise<{ valid: boolean; issues?: any[] }> => {
+      const res = await this.request<{ valid: boolean; issues?: any[] }>(`/schemas/${id}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+      return res.data;
+    },
+  };
+
+  readonly keys = {
+    list: async (): Promise<{ items: any[]; total: number }> => {
+      const res = await this.request<{ items: any[]; total: number }>("/keys");
+      return res.data;
+    },
+    create: async (input: { name: string; scopes: string[]; expiresAt?: string | null; resourceAccess?: any }): Promise<any> => {
+      const res = await this.request<any>("/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    update: async (id: string, input: { name?: string; scopes?: string[]; expiresAt?: string | null; resourceAccess?: any }, options: { etag: string }): Promise<any> => {
+      const res = await this.request<any>(`/keys/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        ifMatch: options.etag,
+        body: JSON.stringify(input),
+      });
+      return res.data;
+    },
+    delete: async (id: string): Promise<{ ok: boolean }> => {
+      const res = await this.request<{ ok: boolean }>(`/keys/${id}`, {
+        method: "DELETE",
+      });
+      return res.data;
+    },
+  };
+
+  readonly trash = {
+    list: async (): Promise<{ items: any[]; total: number }> => {
+      const res = await this.request<{ items: any[]; total: number }>("/trash");
+      return res.data;
+    },
+    restore: async (id: string, options: { etag: string }): Promise<any> => {
+      const res = await this.request<any>(`/trash/${id}/restore`, {
+        method: "POST",
+        ifMatch: options.etag,
+      });
+      return res.data;
+    },
+    purge: async (id: string, options: { etag: string }): Promise<{ ok: boolean }> => {
+      const res = await this.request<{ ok: boolean }>(`/trash/${id}`, {
+        method: "DELETE",
+        ifMatch: options.etag,
+      });
+      return res.data;
+    },
+    empty: async (): Promise<{ ok: boolean; purged: number }> => {
+      const res = await this.request<{ ok: boolean; purged: number }>("/trash/empty", {
+        method: "POST",
+      });
       return res.data;
     },
   };

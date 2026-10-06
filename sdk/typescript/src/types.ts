@@ -56,3 +56,40 @@ export type JsonPatchOperation =
   | { op: "move"; from: string; path: string }
   | { op: "copy"; from: string; path: string }
   | { op: "test"; path: string; value: unknown };
+
+export type CollectionRecord = {
+  id: string;
+  name: string;
+  description: string;
+  etag: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SchemaRecord = {
+  id: string;
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  revision: number;
+  etag: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApiKeyRecord = {
+  id: string;
+  name: string;
+  scopes: string[];
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  resourceAccess?: {
+    mode: "all" | "restricted";
+    binIds?: string[];
+    collectionIds?: string[];
+  };
+  createdAt: string;
+  updatedAt: string;
+  etag: string;
+  token?: string; // Only returned on creation
+};

@@ -178,6 +178,161 @@ class BinsResource:
         res, _ = self._client._request(f"/bins/{id}", method="DELETE", headers=headers)
         return res
 
+    def list_versions(self, id: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/bins/{id}/versions", method="GET")
+        return res
+
+    def get_version(self, id: str, version: int) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/bins/{id}/versions/{version}", method="GET")
+        return res
+
+
+class CollectionsResource:
+    def __init__(self, client: "JsonBin"):
+        self._client = client
+
+    def list(self) -> Dict[str, Any]:
+        res, _ = self._client._request("/collections", method="GET")
+        return res
+
+    def get(self, id: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/collections/{id}", method="GET")
+        return res
+
+    def create(self, name: str, description: Optional[str] = None) -> Dict[str, Any]:
+        data = {"name": name}
+        if description:
+            data["description"] = description
+        res, _ = self._client._request("/collections", method="POST", data=data)
+        return res
+
+    def update(self, id: str, etag: str, name: Optional[str] = None, description: Optional[str] = None) -> Dict[str, Any]:
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if description is not None:
+            data["description"] = description
+        res, _ = self._client._request(f"/collections/{id}", method="PATCH", data=data, headers={"If-Match": etag})
+        return res
+
+    def delete(self, id: str, etag: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/collections/{id}", method="DELETE", headers={"If-Match": etag})
+        return res
+
+
+class SchemasResource:
+    def __init__(self, client: "JsonBin"):
+        self._client = client
+
+    def list(self) -> Dict[str, Any]:
+        res, _ = self._client._request("/schemas", method="GET")
+        return res
+
+    def get(self, id: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/schemas/{id}", method="GET")
+        return res
+
+    def create(self, name: str, schema: Dict[str, Any], description: Optional[str] = None) -> Dict[str, Any]:
+        data = {"name": name, "schema": schema}
+        if description:
+            data["description"] = description
+        res, _ = self._client._request("/schemas", method="POST", data=data)
+        return res
+
+    def update(self, id: str, etag: str, name: Optional[str] = None, schema: Optional[Dict[str, Any]] = None, description: Optional[str] = None) -> Dict[str, Any]:
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if schema is not None:
+            data["schema"] = schema
+        if description is not None:
+            data["description"] = description
+        res, _ = self._client._request(f"/schemas/{id}", method="PUT", data=data, headers={"If-Match": etag})
+        return res
+
+    def delete(self, id: str, etag: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/schemas/{id}", method="DELETE", headers={"If-Match": etag})
+        return res
+
+    def validate(self, id: str, value: Any) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/schemas/{id}/validate", method="POST", data={"value": value})
+        return res
+
+
+class KeysResource:
+    def __init__(self, client: "JsonBin"):
+        self._client = client
+
+    def list(self) -> Dict[str, Any]:
+        res, _ = self._client._request("/keys", method="GET")
+        return res
+
+    def create(self, name: str, scopes: List[str], expires_at: Optional[str] = None, resource_access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        data = {"name": name, "scopes": scopes}
+        if expires_at:
+            data["expiresAt"] = expires_at
+        if resource_access:
+            data["resourceAccess"] = resource_access
+        res, _ = self._client._request("/keys", method="POST", data=data)
+        return res
+
+    def update(self, id: str, etag: str, name: Optional[str] = None, scopes: Optional[List[str]] = None, expires_at: Optional[str] = None, resource_access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if scopes is not None:
+            data["scopes"] = scopes
+        if expires_at is not None:
+            data["expiresAt"] = expires_at
+        if resource_access is not None:
+            data["resourceAccess"] = resource_access
+        res, _ = self._client._request(f"/keys/{id}", method="PATCH", data=data, headers={"If-Match": etag})
+        return res
+
+    def delete(self, id: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/keys/{id}", method="DELETE")
+        return res
+
+
+class TrashResource:
+    def __init__(self, client: "JsonBin"):
+        self._client = client
+
+    def list(self) -> Dict[str, Any]:
+        res, _ = self._client._request("/trash", method="GET")
+        return res
+
+    def restore(self, id: str, etag: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/trash/{id}/restore", method="POST", headers={"If-Match": etag})
+        return res
+
+    def purge(self, id: str, etag: str) -> Dict[str, Any]:
+        res, _ = self._client._request(f"/trash/{id}", method="DELETE", headers={"If-Match": etag})
+        return res
+
+    def empty(self) -> Dict[str, Any]:
+        res, _ = self._client._request("/trash/empty", method="POST")
+        return res
+
+
+class SearchResource:
+    def __init__(self, client: "JsonBin"):
+        self._client = client
+
+    def metadata(self, query: str, search_type: str = "all", limit: int = 20) -> Dict[str, Any]:
+        params = {"q": query, "type": search_type, "limit": str(limit)}
+        qs = urllib.parse.urlencode(params)
+        res, _ = self._client._request(f"/search?{qs}", method="GET")
+        return res
+
+    def content(self, query: str, mode: Optional[str] = None) -> Dict[str, Any]:
+        params = {"q": query}
+        if mode:
+            params["mode"] = mode
+        qs = urllib.parse.urlencode(params)
+        res, _ = self._client._request(f"/search/content?{qs}", method="GET")
+        return res
+
 
 class JsonBin:
     def __init__(self, base_url: str, token: Optional[str] = None, timeout: float = 30.0):
@@ -185,6 +340,11 @@ class JsonBin:
         self.token = token
         self.timeout = timeout
         self.bins = BinsResource(self)
+        self.collections = CollectionsResource(self)
+        self.schemas = SchemasResource(self)
+        self.keys = KeysResource(self)
+        self.trash = TrashResource(self)
+        self.search = SearchResource(self)
 
     def _request(
         self,

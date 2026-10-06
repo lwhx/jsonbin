@@ -99,6 +99,7 @@ export function normalizeRoute(pathname: string): string {
 }
 
 const ANALYTICS_PREFIX = "analytics:agg:";
+const SHARDS_COUNT = 4;
 
 /**
  * Record a single request metrics data point in KV.
@@ -107,7 +108,8 @@ export async function recordAnalytics(env: Env, dp: AnalyticsDataPoint): Promise
   if (!env.CACHE) return;
   try {
     const hourBucket = dp.timestamp.slice(0, 13); // e.g. "2026-10-06T04"
-    const key = `${ANALYTICS_PREFIX}${hourBucket}`;
+    const shardId = Math.floor(Math.random() * SHARDS_COUNT);
+    const key = `${ANALYTICS_PREFIX}${hourBucket}:${shardId}`;
 
     // Read or init bucket
     const existing = await env.CACHE.get<string>(key, "json").catch(() => null) as any;
@@ -182,7 +184,11 @@ export async function queryAnalytics(env: Env, hours = 24) {
   for (let i = 0; i < hours; i++) {
     const d = new Date(now - i * 3600000);
     const hourBucket = d.toISOString().slice(0, 13);
+    // Include both sharded keys and legacy non-sharded keys
     bucketKeys.push(`${ANALYTICS_PREFIX}${hourBucket}`);
+    for (let s = 0; s < SHARDS_COUNT; s++) {
+      bucketKeys.push(`${ANALYTICS_PREFIX}${hourBucket}:${s}`);
+    }
   }
 
   const buckets = await Promise.all(

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSystemHarness } from './support/system-harness.mjs';
-import { JsonBinClient, EtagConflictError, NotFoundError } from '../sdk/typescript/dist/index.js';
+import { JsonBinClient, EtagConflictError, NotFoundError, PermissionDeniedError } from '../sdk/typescript/dist/index.js';
 
 test('TypeScript SDK: full lifecycle (create, get, jsonPatch, mergePatch, publish, 304, error mapping)', async (t) => {
   const h = await createSystemHarness('sdk-ts-' + crypto.randomUUID());
@@ -100,6 +100,44 @@ test('TypeScript SDK: full lifecycle (create, get, jsonPatch, mergePatch, publis
       },
       (err) => err instanceof NotFoundError,
     );
+
+    // 10. Versions listing & specific version get
+    const versions = await client.bins.listVersions(created.meta.id);
+    assert.equal(versions.total >= 3, true);
+    const v1 = await client.bins.getVersion(created.meta.id, 1);
+    assert.equal(v1.value.port, 3000);
+
+    // 11. Collections Resource (verify insufficient_scope first)
+    await assert.rejects(
+      async () => {
+        await client.collections.create({ name: 'SDK Test Collection' });
+      },
+      (err) => err instanceof PermissionDeniedError,
+    );
+
+    // Create an admin key with full valid scopes
+    const adminKeyRes = await h.request('/keys', {
+      method: 'POST',
+      value: { name: 'SDK Admin Key', scopes: ['bin:read', 'bin:create', 'bin:update', 'collection:read', 'collection:write', 'schema:read', 'schema:write'] },
+    });
+    const { token: adminToken } = await adminKeyRes.json();
+    const adminClient = new JsonBinClient({ baseUrl: 'http://localhost', token: adminToken });
+
+    const col = await adminClient.collections.create({ name: 'SDK Test Collection' });
+    assert.equal(col.meta.name, 'SDK Test Collection');
+    const cols = await adminClient.collections.list();
+    assert.equal(cols.items.some(c => c.id === col.meta.id), true);
+
+    // 12. Schemas Resource
+    const schema = await adminClient.schemas.create({
+      name: 'SDK Schema',
+      schema: { type: 'object', properties: { port: { type: 'number' } }, required: ['port'] },
+    });
+    assert.equal(schema.meta.name, 'SDK Schema');
+    const validRes = await adminClient.schemas.validate(schema.meta.id, { port: 80 });
+    assert.equal(validRes.valid, true);
+    const invalidRes = await adminClient.schemas.validate(schema.meta.id, { port: 'invalid' });
+    assert.equal(invalidRes.valid, false);
   } finally {
     globalThis.fetch = originalFetch;
   }

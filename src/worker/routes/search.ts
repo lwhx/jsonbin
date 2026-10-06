@@ -18,7 +18,7 @@ app.onError((error, c) => {
 app.get('/index', managementSession, async c => c.json(await searchIndexStatus(c.env)));
 app.post('/rebuild', managementSession, async c => c.json(await rebuildSearchIndex(c.env)));
 
-app.get('/content', managementSession, async (c) => {
+app.get('/content', requireAccess("bin:read"), async (c) => {
   const q = c.req.query('q')?.trim();
   if (!q) return c.json({ items: [], total: 0 });
 
@@ -27,6 +27,13 @@ app.get('/content', managementSession, async (c) => {
 
   try {
     const results = await searchJsonContent(c.env, q, mode);
+    const key = c.get('apiKey');
+    if (key && key.resourceAccess?.mode === 'restricted') {
+      results.items = results.items.filter(item => {
+        return checkResourceAccess(key, { type: 'bin', id: item.binId });
+      });
+      results.total = results.items.length;
+    }
     return c.json(results);
   } catch (err: any) {
     if (err.message === 'content_search_limit_exceeded') {

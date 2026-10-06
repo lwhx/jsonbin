@@ -45,6 +45,7 @@ app.use("/api/*", async (c, next) => {
   const hasCookie = c.req.header("Cookie")?.includes("jb_session");
   const authType = hasAuth ? "api_key" : hasCookie ? "session" : "anonymous";
   const status = c.res.status;
+  const keyId = (c.get("apiKeyId" as any) || (c.get("apiKey" as any) as any)?.id) ?? null;
 
   // Best-effort metrics: never block the response, never fail the request.
   const record = recordAnalytics(c.env, {
@@ -54,6 +55,7 @@ app.use("/api/*", async (c, next) => {
     status,
     durationMs,
     authType,
+    keyId,
   }).catch(() => {});
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
