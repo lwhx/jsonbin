@@ -56,6 +56,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [formSession, setFormSession] = useState<JsonFormState | null>(null);
   const [formRevision, setFormRevision] = useState(0);
+  const [saveMessage, setSaveMessage] = useState("");
   const metadataDirty = Boolean(draft && metadata && JSON.stringify(metadata) !== JSON.stringify(metadataOf(draft.record)));
   const dirty = Boolean(draft && (metadataDirty || formSession?.dirty || isDirty(draft)));
   const dirtyRef = useRef(dirty);
@@ -123,17 +124,20 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     if (!draft || busy) return;
     const parsed = parseJson(draft.text); if (!parsed.valid) return;
     const submittedText = draft.text;
+    const message = saveMessage.trim() || undefined;
     setBusy("json"); setError(null); setNotice("");
     try {
       await client.cancelQueries({ queryKey: ["bin", id] });
-      const record = await saveBin(id, parsed.value, draft.record.etag);
+      const record = await saveBin(id, parsed.value, draft.record.etag, undefined, message);
       if (!mounted.current) return;
       await client.cancelQueries({ queryKey: ["bin", id] });
       if (!mounted.current) return;
       setDraft(previous => previous ? savedDraft(previous, record, submittedText) : createDraft(record));
       setFormSession(null);
+      setSaveMessage("");
       client.setQueryData(["bin", id], record);
       await client.invalidateQueries({ queryKey: ["bins"] });
+      await client.invalidateQueries({ queryKey: ["bin-versions", id] });
       setNotice("保存成功，已生成新的版本。");
     } catch (caught) { report(caught); } finally { setBusy(null); }
   }
@@ -368,6 +372,16 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       </div>)}
       {tab === "编辑器" && <>
         <div className="editor-toolbar"><span>JSON</span>
+          <input
+            type="text"
+            aria-label="版本变更说明"
+            placeholder="本次保存的变更说明（可选，显示在版本历史中）"
+            value={saveMessage}
+            onChange={event => setSaveMessage(event.target.value)}
+            disabled={Boolean(busy) || locked}
+            maxLength={500}
+            style={{ flex: 1, minWidth: "160px", padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "inherit", fontSize: "12px" }}
+          />
           <button type="button" className="secondary-button" disabled={!parsed.valid || Boolean(busy) || locked}
             onClick={() => parsed.valid && setDraft({ ...draft, text: JSON.stringify(parsed.value, null, 2) })}><Braces size={15} />格式化</button>
           <button type="button" className="primary-button" disabled={!parsed.valid || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}><Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}</button>

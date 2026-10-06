@@ -37,10 +37,12 @@ export default function BinHistory({ record, dark, busy, onRestore, onPublish }:
     <div className="history-heading"><h2>版本历史</h2><span>共 {versions.data.total} 个版本 · 当前 v{currentVersion}{publishedVersion && ` · 已发布 v${publishedVersion}`}</span></div>
     <p className="history-hint">恢复会将所选内容保存为新版本；发布会将生产只读指针指向所选版本。</p>
     <div className="history-table-wrap"><table className="history-table"><caption>已保存的版本</caption>
-      <thead><tr><th scope="col">版本</th><th scope="col">保存时间</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead>
+      <thead><tr><th scope="col">版本</th><th scope="col">保存时间</th><th scope="col">变更说明</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead>
       <tbody>{items.map(item => <tr key={item.version}>
-        <th scope="row">v{item.version}{item.version === currentVersion && <span>（当前）</span>}</th>
-        <td>{new Date(item.createdAt).toLocaleString("zh-CN")}</td><td>{item.size} B</td>
+        <th scope="row">v{item.version}{item.version === currentVersion && <span>（当前）</span>}{publishedVersion === item.version && <span title="当前已发布"> 🚀</span>}</th>
+        <td>{new Date(item.createdAt).toLocaleString("zh-CN")}</td>
+        <td style={{ maxWidth: "260px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.message}>{item.message || <span style={{ color: "var(--muted)" }}>—</span>}</td>
+        <td>{item.size} B</td>
         <td><button className="secondary-button" aria-pressed={left === item.version} onClick={() => setSelected(item.version)}>查看 v{item.version}</button></td>
       </tr>)}</tbody>
     </table></div>

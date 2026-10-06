@@ -84,6 +84,7 @@ export type BinVersionSummary = {
   version: number;
   createdAt: string;
   size: number;
+  message?: string;
 };
 export type BinVersionRecord = BinVersionSummary & {
   id: string;
@@ -106,7 +107,7 @@ function assertWritable(meta: BinMeta, etag: string, expectedEtag?: string) {
   }
 }
 
-async function appendVersion(bucket: R2Bucket, id: string, currentVersion: number, value: unknown) {
+async function appendVersion(bucket: R2Bucket, id: string, currentVersion: number, value: unknown, message?: string) {
   let nextVersion = currentVersion + 1;
   let cursor: string | undefined;
   do {
@@ -122,6 +123,7 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
     if (!Number.isSafeInteger(nextVersion) || nextVersion < 1) throw new Error("version_limit_reached");
     const written = await putJson(bucket, versionKey(id, nextVersion), value, {
       onlyIf: { etagDoesNotMatch: "*" },
+      customMetadata: message ? { message: message.slice(0, 500) } : undefined,
     });
     if (written) return nextVersion;
   }
@@ -327,7 +329,12 @@ export async function listBinVersions(env: Env, id: string) {
       if (!/^\d{6,}\.json$/.test(filename)) continue;
       const version = Number(filename.slice(0, -5));
       if (!Number.isSafeInteger(version) || version < 1 || object.key !== versionKey(id, version)) continue;
-      items.push({ version, createdAt: object.customMetadata?.originalUploadedAt ?? object.uploaded.toISOString(), size: object.size });
+      items.push({
+        version,
+        createdAt: object.customMetadata?.originalUploadedAt ?? object.uploaded.toISOString(),
+        size: object.size,
+        message: object.customMetadata?.message,
+      });
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -357,13 +364,14 @@ export async function updateBin(
   id: string,
   value: unknown,
   expectedEtag?: string,
+  message?: string,
 ): Promise<BinRecord | null> {
   const bucket = requireDataBucket(env);
   const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
   if (!current || !isActiveBin(current.value)) return null;
   assertWritable(current.value, current.etag, expectedEtag);
   await assertBoundSchema(env, current.value, value);
-  const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value);
+  const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value, message);
   const now = new Date().toISOString();
   const json = JSON.stringify(value);
 

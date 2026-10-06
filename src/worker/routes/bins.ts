@@ -5,6 +5,7 @@ import { requireAccess } from "../middleware/auth";
 import { managementSession } from "../lib/system-http";
 import { conditionalGet } from "../middleware/conditional";
 import { limitAnonymousRequest } from "../storage/rate-limit";
+import { detectFormat, formatContentType, serializeContent } from "../lib/format-serializers";
 import {
   cloneBin,
   createBin,
@@ -440,8 +441,13 @@ app.get("/:id/published", readCurrent, async (c) => {
   const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
   if (!published) return c.json({ error: "published_version_missing" }, 404);
 
+  const format = detectFormat(c.req.url, c.req.header("Accept"));
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  if (format !== "json") {
+    c.header("Content-Type", formatContentType(format));
+    return c.body(serializeContent(published.value, format));
+  }
   return c.json({
     meta: record.meta,
     value: published.value,
@@ -532,8 +538,13 @@ app.get("/:id", readCurrent, async (c) => {
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);
 
+  const format = detectFormat(c.req.url, c.req.header("Accept"));
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  if (format !== "json") {
+    c.header("Content-Type", formatContentType(format));
+    return c.body(serializeContent(record.value, format));
+  }
   return c.json(record);
 });
 
@@ -583,12 +594,23 @@ app.put("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) =
     );
   }
 
+  const rawMessage = c.req.header("X-JSONBin-Message");
+  let message: string | undefined;
+  if (rawMessage) {
+    try {
+      message = (rawMessage.includes("%") ? decodeURIComponent(rawMessage) : rawMessage).slice(0, 500);
+    } catch {
+      message = rawMessage.slice(0, 500);
+    }
+  }
+
   try {
     const record = await updateBin(
       c.env,
       c.req.param("id"),
       parsed.data.value,
       c.req.header("If-Match"),
+      message,
     );
 
     if (!record) return c.json({ error: "not_found" }, 404);
@@ -671,8 +693,13 @@ slugApp.get("/:slug/published", readCurrentBySlug, async (c) => {
   const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
   if (!published) return c.json({ error: "published_version_missing" }, 404);
 
+  const format = detectFormat(c.req.url, c.req.header("Accept"));
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  if (format !== "json") {
+    c.header("Content-Type", formatContentType(format));
+    return c.body(serializeContent(published.value, format));
+  }
   return c.json({
     meta: record.meta,
     value: published.value,
@@ -683,8 +710,14 @@ slugApp.get("/:slug/published", readCurrentBySlug, async (c) => {
 slugApp.get("/:slug", readCurrentBySlug, async (c) => {
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);
+
+  const format = detectFormat(c.req.url, c.req.header("Accept"));
   c.header("ETag", record.etag);
   c.header("X-JSONBin-Version", String(record.meta.currentVersion));
+  if (format !== "json") {
+    c.header("Content-Type", formatContentType(format));
+    return c.body(serializeContent(record.value, format));
+  }
   return c.json(record);
 });
 

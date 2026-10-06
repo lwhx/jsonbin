@@ -470,6 +470,77 @@ test('P20: configuration publish, rollback and /published endpoints honor pointe
   assert.deepEqual(readPub2.value, { env: 'staging', port: 4000 });
 });
 
+test('version change message: saved with X-JSONBin-Message and returned in version history', async () => {
+  const bin = await create({ initial: true });
+  const path = '/bins/' + bin.meta.id;
+
+  // Save v2 with a message header
+  const updated = await request(path, {
+    method: 'PUT',
+    etag: bin.etag,
+    headers: { 'X-JSONBin-Message': encodeURIComponent('修复支付网关超时配置') },
+    value: { value: { initial: false, timeout: 15 } },
+  });
+  assert.equal(updated.status, 200);
+  const v2 = await updated.json();
+  assert.equal(v2.meta.currentVersion, 2);
+
+  // Save v3 without a message
+  const updated3 = await request(path, {
+    method: 'PUT',
+    etag: v2.etag,
+    value: { value: { initial: false, timeout: 30 } },
+  });
+  assert.equal(updated3.status, 200);
+
+  // List versions: v2 has the message, v3 does not
+  const versions = await (await request(path + '/versions')).json();
+  assert.equal(versions.items.length, 3);
+  const v2Item = versions.items.find(v => v.version === 2);
+  const v3Item = versions.items.find(v => v.version === 3);
+  assert.equal(v2Item.message, '修复支付网关超时配置');
+  assert.equal(v3Item.message, undefined);
+});
+
+test('content negotiation: YAML, TOML and .env exports on bin and published endpoints', async () => {
+  const bin = await create({ DB_HOST: '10.0.0.1', PORT: 8080, name: 'prod' });
+  const path = '/bins/' + bin.meta.id;
+
+  // 1. YAML via Accept header
+  const yamlRes = await request(path, { headers: { Accept: 'application/x-yaml' } });
+  assert.equal(yamlRes.status, 200);
+  assert.match(yamlRes.headers.get('content-type') || '', /yaml/);
+  const yamlText = await yamlRes.text();
+  assert.match(yamlText, /DB_HOST: 10\.0\.0\.1/);
+  assert.match(yamlText, /PORT: 8080/);
+
+  // 2. TOML via Accept header
+  const tomlRes = await request(path, { headers: { Accept: 'application/toml' } });
+  assert.equal(tomlRes.status, 200);
+  const tomlText = await tomlRes.text();
+  assert.match(tomlText, /DB_HOST = "10\.0\.0\.1"/);
+  assert.match(tomlText, /PORT = 8080/);
+
+  // 3. .env via Accept header
+  const envRes = await request(path, { headers: { Accept: 'text/x-env' } });
+  assert.equal(envRes.status, 200);
+  const envText = await envRes.text();
+  assert.match(envText, /DB_HOST=10\.0\.0\.1/);
+  assert.match(envText, /PORT=8080/);
+  assert.match(envText, /NAME=prod/);
+  // 4. Publish then fetch published as YAML
+  const pubRes = await request(path + '/publish', { method: 'POST', etag: (await (await request(path)).json()).etag });
+  assert.equal(pubRes.status, 200);
+
+  const pubYamlRes = await request(path + '/published', { headers: { Accept: 'text/yaml' } });
+  assert.equal(pubYamlRes.status, 200);
+  assert.match(await pubYamlRes.text(), /DB_HOST: 10\.0\.0\.1/);
+
+  // 5. Default stays JSON
+  const jsonRes = await request(path);
+  assert.match(jsonRes.headers.get('content-type') || '', /application\/json/);
+});
+
 test('history lists stored versions with upload metadata and serves immutable values', async () => {
   const bin = await create({ original: true });
   const path = '/bins/' + bin.meta.id;

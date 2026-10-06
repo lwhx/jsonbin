@@ -47,9 +47,12 @@ async function recordResponse(response: Response): Promise<BinRecord> {
 export async function getBin(id: string, base = endpoint, signal?: AbortSignal) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}`, { signal }));
 }
-export async function saveBin(id: string, value: unknown, etag: string, base = endpoint) {
+export async function saveBin(id: string, value: unknown, etag: string, base = endpoint, message?: string) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}`, {
-    method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etag },
+    method: "PUT", headers: {
+      "Content-Type": "application/json", "If-Match": etag,
+      ...(message ? { "X-JSONBin-Message": encodeURIComponent(message) } : {}),
+    },
     body: JSON.stringify({ value }),
   }));
 }
