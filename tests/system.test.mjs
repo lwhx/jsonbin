@@ -119,3 +119,43 @@ test('an interrupted bin restore retries without losing its slug alias (F05)',as
  assert.equal(alias.binId,id);assert.equal(alias.lifecycleId,current.meta.lifecycleId);
  assert.equal((await h.request('/b/f05-resume-slug')).status,200);
 });
+test('normal writes share the business JSON budget: depth, bytes and patch amplification (F11)',async t=>{
+ const h=await harness(t);
+ const nest=d=>{let v=0;for(let i=0;i<d;i++)v={child:v};return v;};
+ // Depth 64 round-trips; 65 is rejected before anything is stored.
+ assert.equal((await h.request('/bins',{method:'POST',value:{name:'depth64',value:nest(64)}})).status,201);
+ assert.equal((await h.request('/bins',{method:'POST',value:{name:'depth65',value:nest(65)}})).status,422);
+ assert.equal((await (await h.request('/bins')).json()).items.filter(b=>b.name==='depth65').length,0);
+ // Bytes: a value just under 1MiB is accepted, just over is rejected with 413.
+ assert.equal((await h.request('/bins',{method:'POST',value:{name:'big-ok',value:'x'.repeat(1024*1024-100)}})).status,201);
+ assert.equal((await h.request('/bins',{method:'POST',value:{name:'big-bad',value:'x'.repeat(1024*1024)}})).status,413);
+ const bin=await (await h.request('/bins',{method:'POST',value:{name:'budget',value:{keep:true}}})).json();
+ const oversized=await h.request(`/bins/${bin.meta.id}`,{method:'PUT',headers:{'If-Match':bin.etag},value:{value:'y'.repeat(1024*1024)}});
+ assert.equal(oversized.status,413);
+ assert.equal((await (await h.request(`/bins/${bin.meta.id}/versions`)).json()).total,1,'a rejected overwrite must not append a version');
+ // Patch amplification: copying a ~600KB field twice exceeds the result budget.
+ const fat=await (await h.request('/bins',{method:'POST',value:{name:'fat',value:{data:'z'.repeat(600*1000)}}})).json();
+ const amplified=await h.request(`/bins/${fat.meta.id}`,{method:'PATCH',headers:{'If-Match':fat.etag,'Content-Type':'application/json-patch+json'},body:JSON.stringify([{op:'copy',from:'/data',path:'/a'},{op:'copy',from:'/data',path:'/b'}])});
+ assert.equal(amplified.status,413);
+ assert.equal((await (await h.request(`/bins/${fat.meta.id}/versions`)).json()).total,1);
+ // Legal patches keep working, including root-null merge patch semantics.
+ assert.equal((await h.request(`/bins/${bin.meta.id}`,{method:'PATCH',headers:{'If-Match':bin.etag},body:'{"keep":false}'})).status,200);
+ const after=await (await h.request(`/bins/${bin.meta.id}`)).json();
+ assert.deepEqual(after.value,{keep:false});
+ // Oversized raw bodies are cut by the streaming bound before parsing.
+ assert.equal((await h.request('/bins',{method:'POST',body:'"'+('x'.repeat(2*1024*1024))+'"'})).status,413);
+});
+test('content search reserves its read budget from metadata before fetching any value body (F11)',async t=>{
+ const h=await harness(t);
+ const bin=await (await h.request('/bins',{method:'POST',value:{name:'searchable',value:{needle:'here'}}})).json();
+ assert.equal((await h.request(`/bins/${bin.meta.id}/meta`,{method:'PATCH',headers:{'If-Match':bin.etag},value:{contentSearchMode:'all'}})).status,200);
+ // Inflate the canonical size so the corpus budget trips; the real value stays tiny.
+ const stored=await (await h.bucket.get(`bins/${bin.meta.id}/meta.json`)).json();
+ await h.bucket.put(`bins/${bin.meta.id}/meta.json`,JSON.stringify({...stored,size:21*1024*1024}));
+ let valueReads=0;const env={...h.env,DATA:h.adapt({get:async(key,...args)=>{
+  if(key.startsWith(`bins/${bin.meta.id}/versions/`))valueReads++;
+  return h.bucket.get(key,...args);}})};
+ const res=await h.request('/search/content?q=needle',{},env);
+ assert.equal(res.status,503);assert.equal((await res.json()).error,'content_search_limit_exceeded');
+ assert.equal(valueReads,0,'the budget must trip before any value body is read');
+});

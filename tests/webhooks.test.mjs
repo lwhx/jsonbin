@@ -140,3 +140,72 @@ test('failed deliveries retry via Cron with backoff and prune after resolution',
   deliveries = await (await h.request(`/webhooks/${created.webhook.id}/deliveries`)).json();
   assert.equal(deliveries.items.length, 0);
 });
+test('delivery lists expose the newest records even beyond the read window (F23)',async t=>{
+ const h=await withHarness(t),sink=await receiver(t);
+ const created=await (await h.request('/webhooks',{method:'POST',value:{...validInput(sink.url),events:['bin.*']}})).json();
+ // Real dispatches must generate newest-first sortable ids (each /test call
+ // includes a receiver round trip, so the timestamps differ by >1ms).
+ const ids=[];
+ for(let i=0;i<3;i++){const r=await (await h.request('/webhooks/'+created.webhook.id+'/test',{method:'POST'})).json();
+  assert.ok(r.delivery,'test dispatch must return its delivery');ids.push(r.delivery.id);}
+ assert.ok(await sink.waitUntil(3));
+ assert.ok(ids[1]<ids[0]&&ids[2]<ids[1],'newer delivery ids must sort lexically first, got '+JSON.stringify(ids));
+ // With such ids the list window returns the newest records, newest first.
+ // Seed timestamps sit in the future so the three real dispatches above never
+ // interleave with the seeded window.
+ const hookId=created.webhook.id,base=Date.now()+3600_000;
+ for(let i=0;i<600;i++){const ts=base-i*1000,id=`${String(99999999999999-ts).padStart(14,'0')}-${String(i).padStart(4,'0')}`,createdAt=new Date(ts).toISOString();
+  await h.bucket.put(`webhooks/${hookId}/deliveries/${id}.json`,JSON.stringify({id,webhookId:hookId,event:'bin.created',
+   payload:{event:'bin.created',resourceId:null,actor:null,dispatchedAt:createdAt},attempts:1,maxAttempts:6,nextRetryAt:createdAt,status:'delivered',createdAt}));}
+ const deliveries=await (await h.request('/webhooks/'+hookId+'/deliveries')).json();
+ assert.equal(deliveries.items.length,20);
+ for(let i=0;i<20;i++)assert.equal(new Date(deliveries.items[i].createdAt).getTime(),base-i*1000,'item '+i+' must be the '+(i+1)+'-th newest');
+});
+test('a paused webhook silences Cron retries and resumes where it left off (F23)',async t=>{
+ const h=await withHarness(t),sink=await receiver(t);
+ const created=await (await h.request('/webhooks',{method:'POST',value:{...validInput(sink.url),secret:'pause-secret-000000000000001'},events:['bin.*']})).json();
+ sink.respond(()=>500);
+ await h.request('/bins',{method:'POST',value:{name:'暂停前',value:null}});
+ assert.ok(await sink.waitUntil(1));
+ let deliveries=await (await h.request(`/webhooks/${created.webhook.id}/deliveries`)).json();
+ const key=`webhooks/${created.webhook.id}/deliveries/${deliveries.items[0].id}.json`;
+ const record=JSON.parse(await (await h.bucket.get(key)).text());
+ await h.bucket.put(key,JSON.stringify({...record,nextRetryAt:new Date(Date.now()-1000).toISOString()}));
+ // Pause: the due retry must not fire.
+ const current=await h.request(`/webhooks/${created.webhook.id}`);
+ assert.equal((await h.request(`/webhooks/${created.webhook.id}`,{method:'PATCH',headers:{'If-Match':current.headers.get('etag')},value:{active:false}})).status,200);
+ await h.worker.scheduled({},h.env);
+ await new Promise(r=>setTimeout(r,300));
+ assert.equal(sink.received.length,1,'paused hooks fire no retries');
+ deliveries=await (await h.request(`/webhooks/${created.webhook.id}/deliveries`)).json();
+ assert.equal(deliveries.items[0].status,'pending');assert.equal(deliveries.items[0].attempts,1);
+ // Resume: the pending delivery continues its schedule.
+ const paused=await h.request(`/webhooks/${created.webhook.id}`);
+ assert.equal((await h.request(`/webhooks/${created.webhook.id}`,{method:'PATCH',headers:{'If-Match':paused.headers.get('etag')},value:{active:true}})).status,200);
+ sink.respond(()=>200);
+ await h.worker.scheduled({},h.env);
+ assert.ok(await sink.waitUntil(2));
+ deliveries=await (await h.request(`/webhooks/${created.webhook.id}/deliveries`)).json();
+ assert.equal(deliveries.items[0].status,'delivered');assert.equal(deliveries.items[0].attempts,2);
+});
+test('a losing concurrent attempt never rolls back newer delivery state (F23)',async t=>{
+ const h=await withHarness(t),sink=await receiver(t);
+ const created=await (await h.request('/webhooks',{method:'POST',value:{name:'竞态钩子',url:sink.url,secret:'race-secret-0000000000000001',events:['bin.*']}})).json();
+ sink.respond(()=>200);
+ await h.request('/bins',{method:'POST',value:{name:'竞态源',value:null}});
+ assert.ok(await sink.waitUntil(1));
+ // Build a due pending snapshot that a second attempt will race against.
+ const deliveries=await (await h.request(`/webhooks/${created.webhook.id}/deliveries`)).json();
+ const key=`webhooks/${created.webhook.id}/deliveries/${deliveries.items[0].id}.json`;
+ await h.bucket.put(key,JSON.stringify({...deliveries.items[0],status:'pending',nextRetryAt:new Date(Date.now()-1000).toISOString()}));
+ // Between the sweep's read and its write-back a concurrent winner records
+ // attempts=5 delivered; the stale write-back must lose its CAS and adopt it.
+ let injected=false;const env={...h.env,DATA:h.adapt({put:async(k,value,options)=>{
+  if(k===key&&!injected){injected=true;const current=JSON.parse(await (await h.bucket.get(key)).text());
+   await h.bucket.put(key,JSON.stringify({...current,attempts:5,status:'delivered',deliveredAt:new Date().toISOString()}));}
+  return h.bucket.put(k,value,options);}})};
+ await h.worker.scheduled({},env);
+ const final=JSON.parse(await (await h.bucket.get(key)).text());
+ assert.equal(final.attempts,5,'a stale attempt must not reset the counter');
+ assert.equal(final.status,'delivered');
+});

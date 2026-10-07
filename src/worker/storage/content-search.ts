@@ -47,7 +47,14 @@ export async function searchJsonContent(
     throw new Error("content_search_limit_exceeded");
   }
 
-  let totalBytes = 0;
+  // Reserve the read budget from canonical metadata sizes BEFORE any value
+  // body is fetched: oversized corpora must be rejected without first paying
+  // for full reads of a whole concurrency chunk.
+  const totalBytes = eligibleBins.reduce((sum, b) => sum + b.size, 0);
+  if (totalBytes > MAX_READ_BYTES) {
+    throw new Error("content_search_limit_exceeded");
+  }
+
   const matches: ContentMatch[] = [];
 
   // Limit concurrency to 8
@@ -59,11 +66,6 @@ export async function searchJsonContent(
     for (const record of records) {
       // Truthy checks would skip legal scalar roots like false / 0 / "".
       if (!record) continue;
-
-      totalBytes += record.meta.size;
-      if (totalBytes > MAX_READ_BYTES) {
-        throw new Error("content_search_limit_exceeded");
-      }
 
       const effectiveMode =
         mode === "keys" || record.meta.contentSearchMode === "keys" ? "keys" : "all";

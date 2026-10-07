@@ -2,7 +2,9 @@ import { auditRequest } from "../activity";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
-import { managementSession } from "../lib/system-http";
+import { managementSession, readBoundedJson } from "../lib/system-http";
+import { SystemError } from "../../shared/system";
+import { MAX_VALUE_BYTES } from "../../shared/backup";
 import { conditionalGet } from "../middleware/conditional";
 import { limitAnonymousRequest } from "../storage/rate-limit";
 import { detectFormat, formatContentType, serializeContent } from "../lib/format-serializers";
@@ -137,6 +139,7 @@ const metadataSchema = z.object({
 }).strict().refine((input) => Object.keys(input).length > 0);
 
 app.onError((error, c) => {
+  if (error instanceof SystemError) return c.json({ error: error.code }, error.status as 400);
   if (error.message === "slug_conflict") return c.json({ error: "slug_conflict" }, 409);
   if (error.message === "invalid_slug") return c.json({ error: "invalid_slug" }, 422);
   if (error.message === "invalid_tags" || error.message === "tags_limit_reached") return c.json({ error: error.message }, 422);
@@ -516,8 +519,20 @@ app.post("/:id/clone", requireAccess(["bin:read", "bin:create"]), checkBinMutati
   }
 });
 
+// Write bodies are streamed against a byte budget before parsing: a value plus
+// its envelope can never legitimately exceed one business value plus slack.
+const BINS_WRITE_LIMIT = MAX_VALUE_BYTES + 64 * 1024;
+async function parseBoundedBody(c: { req: { raw: Request } }): Promise<unknown> {
+  try {
+    return await readBoundedJson(c.req.raw, BINS_WRITE_LIMIT);
+  } catch (error) {
+    if (error instanceof SystemError && error.status === 413) throw error;
+    return null;
+  }
+}
+
 app.post("/", requireAccess("bin:create"), async (c) => {
-  const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
+  const parsed = createSchema.safeParse(await parseBoundedBody(c));
   if (!parsed.success) {
     return c.json(
       { error: "validation_failed", issues: parsed.error.issues },
@@ -570,8 +585,9 @@ app.patch("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c)
 
   let payload: unknown;
   try {
-    payload = await c.req.json();
-  } catch {
+    payload = await readBoundedJson(c.req.raw, BINS_WRITE_LIMIT);
+  } catch (error) {
+    if (error instanceof SystemError && error.status === 413) throw error;
     return c.json({ error: "invalid_json" }, 422);
   }
 
@@ -612,7 +628,7 @@ app.patch("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c)
 app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
   const etag = c.req.header("If-Match");
   if (!etag?.trim()) return c.json({ error: "precondition_required" }, 428);
-  const parsed = updateSchema.strict().safeParse(await c.req.json().catch(() => undefined));
+  const parsed = updateSchema.strict().safeParse(await parseBoundedBody(c));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   const path = valuePath(c.req.url);
   const record = await transformBin(c.env, c.req.param("id"), value => writeValue(value, path, parsed.data.value), etag);
@@ -624,7 +640,7 @@ app.on("PUT", ["/:id/value", "/:id/value/*"], requireAccess("bin:update"), check
 });
 
 app.put("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
-  const parsed = updateSchema.safeParse(await c.req.json().catch(() => null));
+  const parsed = updateSchema.safeParse(await parseBoundedBody(c));
   if (!parsed.success) {
     return c.json(
       { error: "validation_failed", issues: parsed.error.issues },

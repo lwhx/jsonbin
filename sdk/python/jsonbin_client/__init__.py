@@ -68,6 +68,11 @@ class ServerError(JsonBinError):
         super().__init__(message, status_code, data)
 
 
+# Sentinel distinguishing "caller passed None as the JSON body" from "caller
+# passed no body at all"; a root-null merge patch must be transmitted.
+_UNSET = object()
+
+
 def _map_http_error(status: int, body: Any, headers: Any) -> JsonBinError:
     msg = ""
     if isinstance(body, dict):
@@ -128,7 +133,7 @@ class BinsResource:
             headers["If-None-Match"] = if_none_match
         res, status = self._client._request(path, method="GET", headers=headers)
         if status == 304:
-            return {"modified": False}
+            return res
         return res
 
     def get_published(self, id_or_slug: str) -> Dict[str, Any]:
@@ -150,7 +155,8 @@ class BinsResource:
         res, _ = self._client._request(f"/bins/{id}", method="PUT", data={"value": value}, headers=headers)
         return res
 
-    def merge_patch(self, id: str, patch: Dict[str, Any], etag: str) -> Dict[str, Any]:
+    def merge_patch(self, id: str, patch: Optional[Dict[str, Any]], etag: str) -> Dict[str, Any]:
+        """patch=None is a legal RFC 7396 operation: replace the document with null."""
         headers = {"If-Match": etag, "Content-Type": "application/merge-patch+json"}
         res, _ = self._client._request(f"/bins/{id}", method="PATCH", data=patch, headers=headers)
         return res
@@ -259,59 +265,29 @@ class SchemasResource:
         return res
 
 
-class KeysResource:
-    def __init__(self, client: "JsonBin"):
-        self._client = client
-
-    def list(self) -> Dict[str, Any]:
-        res, _ = self._client._request("/keys", method="GET")
-        return res
-
-    def create(self, name: str, scopes: List[str], expires_at: Optional[str] = None, resource_access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        data = {"name": name, "scopes": scopes}
-        if expires_at:
-            data["expiresAt"] = expires_at
-        if resource_access:
-            data["resourceAccess"] = resource_access
-        res, _ = self._client._request("/keys", method="POST", data=data)
-        return res
-
-    def update(self, id: str, etag: str, name: Optional[str] = None, scopes: Optional[List[str]] = None, expires_at: Optional[str] = None, resource_access: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        data = {}
-        if name is not None:
-            data["name"] = name
-        if scopes is not None:
-            data["scopes"] = scopes
-        if expires_at is not None:
-            data["expiresAt"] = expires_at
-        if resource_access is not None:
-            data["resourceAccess"] = resource_access
-        res, _ = self._client._request(f"/keys/{id}", method="PATCH", data=data, headers={"If-Match": etag})
-        return res
-
-    def delete(self, id: str) -> Dict[str, Any]:
-        res, _ = self._client._request(f"/keys/{id}", method="DELETE")
-        return res
-
-
 class TrashResource:
     def __init__(self, client: "JsonBin"):
         self._client = client
 
     def list(self) -> Dict[str, Any]:
-        res, _ = self._client._request("/trash", method="GET")
+        res, _ = self._client._request("/trash/bins", method="GET")
         return res
 
     def restore(self, id: str, etag: str) -> Dict[str, Any]:
-        res, _ = self._client._request(f"/trash/{id}/restore", method="POST", headers={"If-Match": etag})
+        res, _ = self._client._request(f"/trash/bins/{id}/restore", method="POST", headers={"If-Match": etag})
         return res
 
     def purge(self, id: str, etag: str) -> Dict[str, Any]:
-        res, _ = self._client._request(f"/trash/{id}", method="DELETE", headers={"If-Match": etag})
+        res, _ = self._client._request(f"/trash/bins/{id}", method="DELETE", headers={"If-Match": etag})
         return res
 
-    def empty(self) -> Dict[str, Any]:
-        res, _ = self._client._request("/trash/empty", method="POST")
+    def purge_many(self, items: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Permanently purge explicit client-approved snapshots only.
+
+        There is deliberately no "empty everything" form: every item must carry
+        the ETag of the trash entry the caller confirmed.
+        """
+        res, _ = self._client._request("/trash/bins/purge", method="POST", data={"items": items})
         return res
 
 
@@ -319,8 +295,10 @@ class SearchResource:
     def __init__(self, client: "JsonBin"):
         self._client = client
 
-    def metadata(self, query: str, search_type: str = "all", limit: int = 20) -> Dict[str, Any]:
+    def metadata(self, query: str, search_type: str = "all", limit: int = 20, cursor: Optional[str] = None) -> Dict[str, Any]:
         params = {"q": query, "type": search_type, "limit": str(limit)}
+        if cursor:
+            params["cursor"] = cursor
         qs = urllib.parse.urlencode(params)
         res, _ = self._client._request(f"/search?{qs}", method="GET")
         return res
@@ -342,7 +320,8 @@ class JsonBin:
         self.bins = BinsResource(self)
         self.collections = CollectionsResource(self)
         self.schemas = SchemasResource(self)
-        self.keys = KeysResource(self)
+        # API key management is intentionally not exposed: those endpoints are
+        # Session-only and this client is Bearer-only.
         self.trash = TrashResource(self)
         self.search = SearchResource(self)
 
@@ -350,7 +329,7 @@ class JsonBin:
         self,
         path: str,
         method: str = "GET",
-        data: Any = None,
+        data: Any = _UNSET,
         headers: Optional[Dict[str, str]] = None,
     ):
         url = f"{self.base_url}/api/v1{path if path.startswith('/') else '/' + path}"
@@ -361,7 +340,9 @@ class JsonBin:
             req_headers.update(headers)
 
         body_bytes = None
-        if data is not None:
+        # Distinguish "no body" from an explicit JSON null body: a root-null
+        # merge patch must be transmitted, not silently dropped.
+        if data is not _UNSET:
             if "Content-Type" not in req_headers:
                 req_headers["Content-Type"] = "application/json"
             body_bytes = json.dumps(data).encode("utf-8")
@@ -387,7 +368,9 @@ class JsonBin:
             except Exception:
                 parsed_err = err_body
             if e.code == 304:
-                return None, 304
+                # Keep the callers' cache key: the 304 response still carries
+                # the current ETag.
+                return {"modified": False, "etag": e.headers.get("ETag", "")}, 304
             raise _map_http_error(e.code, parsed_err, e.headers)
         except Exception as e:
             raise JsonBinError(str(e), 0)

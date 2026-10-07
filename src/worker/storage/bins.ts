@@ -1,5 +1,5 @@
 import { syncSearchResource } from './search';
-import { isImportMarker } from '../../shared/backup.ts';
+import { assertBytes, isImportMarker, validateBusinessValue, MAX_VALUE_BYTES } from '../../shared/backup.ts';
 import { resolveCreateDefaults } from './settings';
 import { getJson, putJson, requireDataBucket, listJsonObjects } from "./r2";
 import { assertCollectionAvailable, getCollection, detachBinFromCollection } from "./collections";
@@ -232,6 +232,10 @@ export async function createBin(
   const lifecycleId = crypto.randomUUID();
   const now = new Date().toISOString();
   const defaults = await resolveCreateDefaults(env, input, Date.parse(now));
+  // One shared business-JSON budget for every write entry: whatever the API
+  // accepts must stay exportable and restorable (depth <= 64, bytes <= 1MiB).
+  validateBusinessValue(input.value);
+  assertBytes(input.value, MAX_VALUE_BYTES);
   const json = JSON.stringify(input.value);
 
   if (slug) {
@@ -359,6 +363,11 @@ export async function updateBin(
   const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
   if (!current || !isActiveBin(current.value)) return null;
   assertWritable(current.value, current.etag, expectedEtag);
+  // Validate the FINAL value (post patch/merge/transform), before any
+  // immutable version is created: patch amplification is bounded by the same
+  // business-JSON budget as direct writes.
+  validateBusinessValue(value);
+  assertBytes(value, MAX_VALUE_BYTES);
   await assertBoundSchema(env, current.value, value);
   const nextVersion = await appendVersion(bucket, id, current.value.currentVersion, value, message);
   const now = new Date().toISOString();

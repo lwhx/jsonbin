@@ -36,9 +36,14 @@ export type WebhookDelivery = {
 
 const metaKey = (id: string) => `webhooks/${id}/meta.json`;
 const deliveryKey = (webhookId: string, id: string) => `webhooks/${webhookId}/deliveries/${id}.json`;
-/** Sortable delivery ids: time-ordered, collision-safe. */
+/**
+ * Sortable delivery ids that order NEWEST FIRST: R2 lists keys lexically
+ * ascending, so inverting the timestamp keeps the newest deliveries inside any
+ * read window (list cap, sweep pages). Legacy ascending ids keep sorting after
+ * every new-format key and remain readable until pruned.
+ */
 function newDeliveryId(now = Date.now()) {
-  return `${String(now).padStart(14, "0")}-${crypto.randomUUID().slice(0, 8)}`;
+  return `${String(99999999999999 - now).padStart(14, "0")}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 /** Selectable event groups: every audited action except auth/key administration. */
@@ -160,7 +165,7 @@ async function signDelivery(secret: string, timestamp: string, body: string) {
   return [...new Uint8Array(signature)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function attemptDelivery(env: Env, delivery: WebhookDelivery, webhook: Webhook): Promise<WebhookDelivery> {
+async function attemptDelivery(env: Env, delivery: WebhookDelivery, webhook: Webhook, expectedEtag?: string): Promise<WebhookDelivery> {
   const bucket = requireDataBucket(env);
   const body = JSON.stringify({ ...delivery.payload, deliveryId: delivery.id, attempts: delivery.attempts + 1, webhook: { id: webhook.id, name: webhook.name } });
   const timestamp = new Date().toISOString();
@@ -198,7 +203,17 @@ async function attemptDelivery(env: Env, delivery: WebhookDelivery, webhook: Web
   } else {
     next.nextRetryAt = new Date(Date.now() + RETRY_DELAYS_MS[Math.min(attempts - 1, RETRY_DELAYS_MS.length - 1)]).toISOString();
   }
-  await putJson(bucket, deliveryKey(delivery.webhookId, delivery.id), next);
+  const written = expectedEtag
+    ? await putJson(bucket, deliveryKey(delivery.webhookId, delivery.id), next, { onlyIf: { etagMatches: normalizeEtag(expectedEtag) } })
+    : await putJson(bucket, deliveryKey(delivery.webhookId, delivery.id), next);
+  if (expectedEtag && !written) {
+    // A concurrent attempt already advanced this delivery. Its newer attempt
+    // counter, status and backoff schedule must never be rolled back by this
+    // stale write: adopt whatever is canonical now (at-least-once delivery
+    // makes the duplicate HTTP call acceptable; state regression is not).
+    const latest = await getJson<WebhookDelivery>(bucket, deliveryKey(delivery.webhookId, delivery.id));
+    return latest ? latest.value : next;
+  }
   return next;
 }
 
@@ -238,8 +253,8 @@ export async function dispatchWebhooks(env: Env, event: {
         createdAt: now.toISOString(),
       };
       // Persist first: even if this isolate dies, Cron retries the delivery.
-      await putJson(bucket, deliveryKey(hook.id, delivery.id), delivery);
-      await attemptDelivery(env, delivery, hook).catch(() => {});
+      const stored = await putJson(bucket, deliveryKey(hook.id, delivery.id), delivery);
+      await attemptDelivery(env, delivery, hook, stored?.httpEtag).catch(() => {});
     }
   } catch {
     console.error("webhook_dispatch_failed");
@@ -263,6 +278,10 @@ export async function sweepWebhookDeliveries(env: Env, now = Date.now()): Promis
   } while (cursor);
 
   for (const hook of webhooks.values()) {
+    // Pausing a hook silences all outbound traffic, not just new events:
+    // due pending deliveries wait until the hook is resumed (their schedule
+    // and attempt count are preserved). Pruning is cleanup and continues.
+    const paused = !hook.active;
     let deliveryCursor: string | undefined;
     do {
       const page = await bucket.list({ prefix: `webhooks/${hook.id}/deliveries/`, cursor: deliveryCursor, limit: 100 });
@@ -270,8 +289,8 @@ export async function sweepWebhookDeliveries(env: Env, now = Date.now()): Promis
         const stored = await getJson<WebhookDelivery>(bucket, object.key);
         if (!stored) continue;
         const delivery = stored.value;
-        if (delivery.status === "pending" && Date.parse(delivery.nextRetryAt) <= now) {
-          await attemptDelivery(env, delivery, hook).catch(() => {});
+        if (delivery.status === "pending" && !paused && Date.parse(delivery.nextRetryAt) <= now) {
+          await attemptDelivery(env, delivery, hook, stored.etag).catch(() => {});
           result.retried++;
         } else if (delivery.status !== "pending" && Date.parse(delivery.createdAt) < now - 24 * 3600_000) {
           await bucket.delete(object.key);

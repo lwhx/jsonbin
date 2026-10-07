@@ -34,6 +34,43 @@ export type BinRecord<T = unknown> = {
   etag: string;
 };
 
+/** Flat version object returned by getVersion (not wrapped in meta/value). */
+export type BinVersionRecord<T = unknown> = {
+  id: string;
+  version: number;
+  createdAt: string;
+  size: number;
+  value: T;
+  etag: string;
+};
+
+export type BinVersionSummary = {
+  version: number;
+  createdAt: string;
+  size: number;
+  message?: string;
+};
+
+export type BinVersionList = {
+  items: BinVersionSummary[];
+  currentVersion: number;
+  total: number;
+};
+
+/** Metadata search pages by cursor; there is no total count. */
+export type SearchMetadataResult = {
+  items: Array<Record<string, unknown> & { id: string; type: string }>;
+  nextCursor?: string;
+  source: "kv" | "r2";
+};
+
+/** A trashed Bin snapshot: restore/purge require its exact ETag. */
+export type TrashEntry = {
+  meta: BinMeta & { deletedAt: string };
+  etag: string;
+  status: "deleted" | "expired" | "purging";
+};
+
 export type CreateBinInput<T = unknown> = {
   name: string;
   value: T;
@@ -75,21 +112,4 @@ export type SchemaRecord = {
   etag: string;
   createdAt: string;
   updatedAt: string;
-};
-
-export type ApiKeyRecord = {
-  id: string;
-  name: string;
-  scopes: string[];
-  expiresAt: string | null;
-  lastUsedAt: string | null;
-  resourceAccess?: {
-    mode: "all" | "restricted";
-    binIds?: string[];
-    collectionIds?: string[];
-  };
-  createdAt: string;
-  updatedAt: string;
-  etag: string;
-  token?: string; // Only returned on creation
 };

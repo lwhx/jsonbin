@@ -3,8 +3,12 @@ import type {
   JsonBinOptions,
   BinRecord,
   BinMeta,
+  BinVersionList,
+  BinVersionRecord,
   CreateBinInput,
   JsonPatchOperation,
+  SearchMetadataResult,
+  TrashEntry,
 } from "./types.js";
 
 export * from "./errors.js";
@@ -211,22 +215,23 @@ export class JsonBinClient {
       return res.data;
     },
 
-    listVersions: async (id: string): Promise<{ items: { version: number; uploaded: string; size: number; message?: string }[]; total: number }> => {
-      const res = await this.request<{ items: { version: number; uploaded: string; size: number; message?: string }[]; total: number }>(`/bins/${id}/versions`);
+    listVersions: async (id: string): Promise<BinVersionList> => {
+      const res = await this.request<BinVersionList>(`/bins/${id}/versions`);
       return res.data;
     },
 
-    getVersion: async <T = unknown>(id: string, version: number): Promise<BinRecord<T>> => {
-      const res = await this.request<BinRecord<T>>(`/bins/${id}/versions/${version}`);
+    getVersion: async <T = unknown>(id: string, version: number): Promise<BinVersionRecord<T>> => {
+      const res = await this.request<BinVersionRecord<T>>(`/bins/${id}/versions/${version}`);
       return res.data;
     },
   };
 
   readonly search = {
-    metadata: async (query: string, options?: { type?: "all" | "bin" | "collection" | "schema"; limit?: number }) => {
+    metadata: async (query: string, options?: { type?: "all" | "bin" | "collection" | "schema"; limit?: number; cursor?: string }): Promise<SearchMetadataResult> => {
       const type = options?.type ?? "all";
       const limit = options?.limit ?? 20;
-      const res = await this.request<{ items: any[]; total: number }>(`/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`);
+      const cursor = options?.cursor ? `&cursor=${encodeURIComponent(options.cursor)}` : "";
+      const res = await this.request<SearchMetadataResult>(`/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}${cursor}`);
       return res.data;
     },
     content: async (query: string, mode?: "keys" | "all") => {
@@ -314,58 +319,38 @@ export class JsonBinClient {
     },
   };
 
-  readonly keys = {
-    list: async (): Promise<{ items: any[]; total: number }> => {
-      const res = await this.request<{ items: any[]; total: number }>("/keys");
-      return res.data;
-    },
-    create: async (input: { name: string; scopes: string[]; expiresAt?: string | null; resourceAccess?: any }): Promise<any> => {
-      const res = await this.request<any>("/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      return res.data;
-    },
-    update: async (id: string, input: { name?: string; scopes?: string[]; expiresAt?: string | null; resourceAccess?: any }, options: { etag: string }): Promise<any> => {
-      const res = await this.request<any>(`/keys/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        ifMatch: options.etag,
-        body: JSON.stringify(input),
-      });
-      return res.data;
-    },
-    delete: async (id: string): Promise<{ ok: boolean }> => {
-      const res = await this.request<{ ok: boolean }>(`/keys/${id}`, {
-        method: "DELETE",
-      });
-      return res.data;
-    },
-  };
-
+  // API key management is intentionally not exposed: those endpoints are
+  // Session-only and this client is Bearer-only, so such methods could only
+  // ever fail with 401 while implying they work.
   readonly trash = {
-    list: async (): Promise<{ items: any[]; total: number }> => {
-      const res = await this.request<{ items: any[]; total: number }>("/trash");
+    list: async (): Promise<{ items: TrashEntry[]; total: number }> => {
+      const res = await this.request<{ items: TrashEntry[]; total: number }>("/trash/bins");
       return res.data;
     },
-    restore: async (id: string, options: { etag: string }): Promise<any> => {
-      const res = await this.request<any>(`/trash/${id}/restore`, {
+    restore: async (id: string, options: { etag: string }): Promise<BinRecord> => {
+      const res = await this.request<BinRecord>(`/trash/bins/${id}/restore`, {
         method: "POST",
         ifMatch: options.etag,
       });
       return res.data;
     },
     purge: async (id: string, options: { etag: string }): Promise<{ ok: boolean }> => {
-      const res = await this.request<{ ok: boolean }>(`/trash/${id}`, {
+      const res = await this.request<{ ok: boolean }>(`/trash/bins/${id}`, {
         method: "DELETE",
         ifMatch: options.etag,
       });
       return res.data;
     },
-    empty: async (): Promise<{ ok: boolean; purged: number }> => {
-      const res = await this.request<{ ok: boolean; purged: number }>("/trash/empty", {
+    /**
+     * Permanently purge the explicit client-approved snapshots only. The API
+     * deliberately has no "empty everything" form: each item carries the ETag
+     * of the trash entry the caller confirmed.
+     */
+    purgeMany: async (items: Array<{ id: string; etag: string }>): Promise<{ results: Array<{ id: string; status: number }> }> => {
+      const res = await this.request<{ results: Array<{ id: string; status: number }> }>("/trash/bins/purge", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
       });
       return res.data;
     },
