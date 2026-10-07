@@ -6,12 +6,16 @@ export const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 export const MAX_VALUE_BYTES = 1024 * 1024;
 const uuid = z.string().uuid(), date = z.iso.datetime(), positive = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const common = { id: uuid, name: z.string().trim().min(1).max(160), description: z.string().max(1000), createdAt: date, updatedAt: date };
+// Backup fields share the live domain constraints: a restored package must not
+// carry metadata the ordinary API could never produce or repair.
+const binSlug = z.string().regex(/^[a-z0-9][a-z0-9-_]{1,62}[a-z0-9]$/, 'invalid_slug').nullable().optional();
+const binTags = z.array(z.string().trim().min(1).max(32)).max(20).optional();
 const defaults = z.object({ defaultVisibility: z.enum(['private', 'public']), defaultTtlSeconds: z.number().int().min(1).max(31536000).nullable() }).strict();
 export const collectionMetaShape = z.object({ ...common, slug: z.string().min(1).max(240), status: z.enum(['active', 'deleted']) }).strict();
 export const schemaMetaShape = z.object({ ...common, currentRevision: positive, status: z.enum(['active', 'deleted']) }).strict();
 export const binMetaShape = z.object({ ...common, visibility: z.enum(['private', 'public']), collectionId: uuid.nullable(), schemaId: uuid.nullable(), schemaRevision: positive.nullable(), currentVersion: positive,
-  slug: z.string().nullable().optional(),
-  tags: z.array(z.string()).optional(),
+  slug: binSlug,
+  tags: binTags,
   favorite: z.boolean().optional(),
   pinned: z.boolean().optional(),
   contentSearchMode: z.enum(['off', 'keys', 'all']).optional(),
@@ -60,6 +64,11 @@ function checkResource(r: RestoreResource) {
     if (r.kind === 'bin') {
       const m = r.data.meta;
       if ((m.schemaId === null) !== (m.schemaRevision === null) || (m.schemaLocked && !m.schemaId) || Boolean(m.deletedAt) !== Boolean(m.deletionReason)) invalid();
+      // The published pointer must resolve inside the restored version graph,
+      // and it is only ever set together with its timestamp. A dangling
+      // reference would restore "successfully" while published reads 404.
+      if (m.publishedVersion != null && !versions.some(v => v.version === m.publishedVersion)) invalid();
+      if ((m.publishedVersion == null) !== (m.publishedAt == null)) invalid();
     }
     for (const v of versions) { if (!Object.hasOwn(v, 'value')) invalid(); validateBusinessValue(v.value); }
   }

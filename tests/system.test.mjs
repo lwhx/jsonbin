@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSystemHarness } from './support/system-harness.mjs';
+import { createSystemHarness } from './support/system-harness.mjs';import { minimalBackup } from './support/backup-fixtures.mjs';
 async function harness(t) {const h=await createSystemHarness('system-'+crypto.randomUUID()); t.after(()=>h.close()); return h;}
 test('virtual settings read is read-only; first and later writes use CAS',async t=>{
  const h=await harness(t), r=await h.request('/system/settings'); assert.equal(r.status,200);
@@ -73,4 +73,49 @@ test('unpreconditioned restricted writes commit against the authorized snapshot,
  // Unchanged in-scope snapshot: PUT without If-Match still succeeds for the restricted key.
  const stableBin=await (await h.request('/bins',{method:'POST',value:{name:'F03 stable',collectionId:colA.meta.id,value:{ok:1}}})).json();
  assert.equal((await h.request(`/bins/${stableBin.meta.id}`,{method:'PUT',headers:auth,value:{value:{ok:2}}})).status,200);
+});
+test('a trash restore that loses the metadata CAS converges its alias side effect to the winner (F04)',async t=>{
+ const h=await harness(t);
+ const bin=await (await h.request('/bins',{method:'POST',value:{name:'F04 race',slug:'f04-race-slug',value:{v:1}}})).json();
+ assert.equal((await h.request(`/bins/${bin.meta.id}`,{method:'DELETE'})).status,200);
+ const entry=(await (await h.request('/trash/bins')).json()).items.find(i=>i.meta.id===bin.meta.id);
+ const winnerLifecycle=crypto.randomUUID();
+ // The concurrent winner commits its restore right before our metadata CAS runs.
+ let metaPuts=0;const env={...h.env,DATA:h.adapt({put:async(key,...args)=>{
+  if(key===`bins/${bin.meta.id}/meta.json`&&++metaPuts===1)await h.bucket.put(key,JSON.stringify({...bin.meta,lifecycleId:winnerLifecycle}));
+  return h.bucket.put(key,...args);}})};
+ const res=await h.request(`/trash/bins/${bin.meta.id}/restore`,{method:'POST',headers:{'If-Match':entry.etag}},env);
+ assert.equal(res.status,412);
+ const alias=await (await h.bucket.get('aliases/bins/f04-race-slug.json')).json();
+ assert.equal(alias.lifecycleId,winnerLifecycle,'the loser must not leave its alias pinned to a dead lifecycle');
+ assert.equal((await (await h.request(`/bins/${bin.meta.id}`)).json()).meta.lifecycleId,winnerLifecycle);
+ assert.equal((await h.request('/b/f04-race-slug')).status,200);
+});
+test('slug reads heal an alias pinned to a stale lifecycle instead of serving a permanent 404 (F04)',async t=>{
+ const h=await harness(t);
+ const bin=await (await h.request('/bins',{method:'POST',value:{name:'F04 heal',slug:'f04-heal-slug',value:{v:1}}})).json();
+ const stored=await (await h.bucket.get(`bins/${bin.meta.id}/meta.json`)).json();
+ // Simulate a lost race whose alias write outlived its rejected lifecycle.
+ await h.bucket.put('aliases/bins/f04-heal-slug.json',JSON.stringify({slug:'f04-heal-slug',binId:bin.meta.id,lifecycleId:crypto.randomUUID(),createdAt:new Date().toISOString()}));
+ assert.equal((await h.request('/b/f04-heal-slug')).status,200);
+ assert.equal((await (await h.bucket.get('aliases/bins/f04-heal-slug.json')).json()).lifecycleId,stored.lifecycleId);
+});
+test('an interrupted bin restore retries without losing its slug alias (F05)',async t=>{
+ const h=await harness(t);
+ const p=minimalBackup({keep:true}),id=crypto.randomUUID();p.bins[0].meta.id=id;p.bins[0].meta.slug='f05-resume-slug';
+ const input={resource:{kind:'bin',data:p.bins[0]},dependencies:[]};
+ // Crash between the alias claim and the final metadata publish (put #2 on the meta key).
+ let metaPuts=0;const env={...h.env,DATA:h.adapt({put:async(key,...args)=>{
+  if(key===`bins/${id}/meta.json`&&++metaPuts===2)throw Error('interrupted');
+  return h.bucket.put(key,...args);}})};
+ assert.equal((await h.request('/system/restore',{method:'POST',value:input},env)).status,503);
+ assert.ok(await h.bucket.get('aliases/bins/f05-resume-slug.json'),'the first attempt already claimed the alias');
+ const retry=await (await h.request('/system/restore',{method:'POST',value:input})).json();
+ assert.equal(retry.status,'created');
+ assert.equal((retry.warnings??[]).includes('slug_conflict_detached'),false,'own pending claim must not count as a conflict');
+ const current=await (await h.request('/bins/'+id)).json();
+ assert.equal(current.meta.slug,'f05-resume-slug');
+ const alias=await (await h.bucket.get('aliases/bins/f05-resume-slug.json')).json();
+ assert.equal(alias.binId,id);assert.equal(alias.lifecycleId,current.meta.lifecycleId);
+ assert.equal((await h.request('/b/f05-resume-slug')).status,200);
 });

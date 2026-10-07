@@ -8,6 +8,8 @@ import { resolveSchemaBinding, assertBoundSchema } from "./schemas";
 import { SchemaError } from "../validation/schema";
 import { isActiveBin, normalizeEtag, type StoredBinMeta } from "./bin-state";
 export { normalizeEtag } from "./bin-state";
+import { binAliasKey, claimBinAlias, createBinAlias, readBinAlias, reconcileBinAliasToCanonical, releaseBinAlias, type BinAliasRecord } from "./bin-alias";
+export { binAliasKey, createBinAlias, rewriteBinAlias, claimBinAlias, type BinAliasRecord } from "./bin-alias";
 
 export type BinMeta = {
   id: string;
@@ -37,15 +39,6 @@ export type BinMeta = {
   purgeEtag?: string;
   lifecycleId?: string;
 };
-
-export type BinAliasRecord = {
-  slug: string;
-  binId: string;
-  lifecycleId?: string;
-  createdAt: string;
-};
-
-export const binAliasKey = (slug: string) => `aliases/bins/${slug}.json`;
 
 export type BinRecord = {
   meta: BinMeta;
@@ -243,10 +236,7 @@ export async function createBin(
 
   if (slug) {
     const aliasRecord: BinAliasRecord = { slug, binId: id, lifecycleId, createdAt: now };
-    const claimed = await putJson(bucket, binAliasKey(slug), aliasRecord, {
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
-    if (!claimed) throw new Error("slug_conflict");
+    if (!(await createBinAlias(bucket, aliasRecord))) throw new Error("slug_conflict");
   }
 
   const meta: BinMeta = {
@@ -287,9 +277,8 @@ export async function createBin(
       etag: metaObject.httpEtag,
     };
   } catch (error) {
-    if (slug) {
-      await bucket.delete(binAliasKey(slug)).catch(() => {});
-    }
+    // Never delete a slug another bin may have re-claimed meanwhile.
+    if (slug) await releaseBinAlias(bucket, slug, id);
     throw error;
   }
 }
@@ -529,10 +518,7 @@ export async function updateBinMetadata(
   // Atomically claim new slug if changed
   if (changedSlug && newSlug) {
     const aliasRecord: BinAliasRecord = { slug: newSlug, binId: id, lifecycleId, createdAt: now };
-    const claimed = await putJson(bucket, binAliasKey(newSlug), aliasRecord, {
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
-    if (!claimed) throw new Error("slug_conflict");
+    if (!(await createBinAlias(bucket, aliasRecord))) throw new Error("slug_conflict");
   }
 
   const meta: BinMeta = {
@@ -545,7 +531,7 @@ export async function updateBinMetadata(
     updatedAt: now,
   };
   if (meta.schemaLocked && !meta.schemaId) {
-    if (changedSlug && newSlug) await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+    if (changedSlug && newSlug) await releaseBinAlias(bucket, newSlug, id);
     throw new SchemaError("schema_required");
   }
 
@@ -555,16 +541,16 @@ export async function updateBinMetadata(
       onlyIf: { etagMatches: normalizeEtag(current.etag) },
     });
     if (!written) {
-      if (changedSlug && newSlug) await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+      if (changedSlug && newSlug) await releaseBinAlias(bucket, newSlug, id);
       throw new Error("etag_conflict");
     }
-    // Delete old slug alias after CAS success
+    // Delete old slug alias after CAS success, without touching a re-claimed slug.
     if (changedSlug && oldSlug) {
-      await bucket.delete(binAliasKey(oldSlug)).catch(() => {});
+      await releaseBinAlias(bucket, oldSlug, id);
     }
   } catch (error) {
     if (changedSlug && newSlug && !written) {
-      await bucket.delete(binAliasKey(newSlug)).catch(() => {});
+      await releaseBinAlias(bucket, newSlug, id);
     }
     throw error;
   }
@@ -582,7 +568,7 @@ export async function getBinBySlug(env: Env, slug: string): Promise<BinRecord | 
   const normalized = validateSlug(slug);
   if (!normalized) return null;
 
-  const alias = await getJson<BinAliasRecord>(bucket, binAliasKey(normalized));
+  const alias = await readBinAlias(bucket, normalized);
   if (!alias) return null;
 
   const binRecord = await getBin(env, alias.value.binId);
@@ -591,7 +577,11 @@ export async function getBinBySlug(env: Env, slug: string): Promise<BinRecord | 
   // Verify full ownership and lifecycle consistency
   if (binRecord.meta.slug !== normalized) return null;
   if (alias.value.lifecycleId && binRecord.meta.lifecycleId && alias.value.lifecycleId !== binRecord.meta.lifecycleId) {
-    return null;
+    // The alias is pinned to a lifecycle that never became canonical (a lost
+    // restore race). Canonical metadata owns the slug: converge and resolve
+    // instead of serving a permanent 404 for a live configuration URL.
+    await reconcileBinAliasToCanonical(bucket, alias.value.binId);
+    return binRecord;
   }
 
   return binRecord;

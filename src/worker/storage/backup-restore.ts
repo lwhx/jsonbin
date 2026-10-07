@@ -6,6 +6,7 @@ import type { BackupBinMeta, BackupCollection, BackupSchema, BackupTemplate, Res
 import { assertSchemaDefinition, assertSchemaValue, type JsonSchema } from '../../shared/schema-validation.ts';
 import { historyKey } from './backup-export';
 import { putJson, requireDataBucket } from './r2';
+import { claimBinAlias } from './bin-alias';
 import { normalizeEtag } from './bin-state';
 import { detachBinFromCollection, getCollection } from './collections';
 const conflict = () => new SystemError(409, 'restore_conflict');
@@ -65,8 +66,8 @@ async function cleanupCollection(env: Env, input: RestoreRequest, result: Restor
   if (input.resource.kind !== 'bin' || !input.resource.data.meta.collectionId) return result;
   const { id, collectionId } = input.resource.data.meta;
   try {
-    if ((await getCollection(env, collectionId))?.meta.status !== 'active' && await detachBinFromCollection(env, id, collectionId)) result.warnings = ['collection_detached'];
-  } catch { result.warnings = ['collection_cleanup_failed']; }
+    if ((await getCollection(env, collectionId))?.meta.status !== 'active' && await detachBinFromCollection(env, id, collectionId)) result.warnings = [...(result.warnings ?? []), 'collection_detached'];
+  } catch { result.warnings = [...(result.warnings ?? []), 'collection_cleanup_failed']; }
   return result;
 }
 export async function restoreResource(env: Env, raw: RestoreRequest): Promise<RestoreResult> {
@@ -117,19 +118,20 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
     const rawMeta = resource.kind === 'purged' ? { ...resource.data, purgeState: 'purged' }
       : resource.kind === 'bin' ? { ...resource.data.meta, size: new TextEncoder().encode(JSON.stringify(resource.data.versions.find(v => v.version === resource.data.meta.currentVersion)!.value)).length, lifecycleId: crypto.randomUUID() } : resource.data.meta;
 
-    // Handle slug restoration with collision fallback (15.1)
+    // Handle slug restoration with collision fallback (15.1). An alias that
+    // already names this very bin is a side effect of our own interrupted
+    // attempt: converge it to this attempt's lifecycle instead of detaching
+    // the slug on retry (F05). Only a foreign live owner detaches, loudly.
     let meta = rawMeta;
+    let slugDetached = false;
     if (resource.kind === 'bin') {
       const binMeta = rawMeta as BackupBinMeta & { lifecycleId: string };
       if (binMeta.slug) {
-        const slug = binMeta.slug;
-        const aliasKey = `aliases/bins/${slug}.json`;
-        const claimed = await putJson(bucket, aliasKey, { slug, binId: id, createdAt: new Date().toISOString() }, {
-          onlyIf: { etagDoesNotMatch: '*' },
-        });
-        if (!claimed) {
+        const claim = await claimBinAlias(bucket, { slug: binMeta.slug, binId: id, lifecycleId: binMeta.lifecycleId, createdAt: new Date().toISOString() });
+        if (claim.outcome === 'conflict') {
           // Detach slug to preserve primary bin recovery without collision overwrite
           meta = { ...binMeta, slug: null };
+          slugDetached = true;
         }
       }
     }
@@ -138,7 +140,9 @@ export async function restoreResource(env: Env, raw: RestoreRequest): Promise<Re
     if (published) {
       // Templates are not part of the search index.
       if (resource.kind !== 'template') await syncSearchResource(env, resource.kind === 'purged' ? 'bin' : resource.kind, id);
-      return cleanupCollection(env, input, result('created'));
+      const created = await cleanupCollection(env, input, result('created'));
+      if (slugDetached) created.warnings = [...(created.warnings ?? []), 'slug_conflict_detached'];
+      return created;
     }
     record = await read(bucket, key); const winner = await existing(); if (winner) return winner; throw conflict();
   } catch (error) { if (error instanceof SystemError) throw error; throw new SystemError(503, 'storage_unavailable'); }

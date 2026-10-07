@@ -2,7 +2,8 @@ import { syncSearchResource } from './search';
 import { isImportMarker } from '../../shared/backup.ts';
 import { getJson, listJsonObjects, putJson, requireDataBucket } from "./r2";
 import { binMetaKey, legacyTrashKey, isExpired, normalizeEtag, type StoredBinMeta } from "./bin-state";
-import { getBin, binAliasKey, type BinAliasRecord, type BinMeta } from "./bins";
+import { getBin, type BinMeta } from "./bins";
+import { createBinAlias, readBinAlias, reconcileBinAliasToCanonical, releaseBinAlias, rewriteBinAlias, type BinAliasRecord } from "./bin-alias";
 import { assertBoundSchema } from "./schemas";
 import { detachBinFromCollection, getCollection } from "./collections";
 
@@ -68,15 +69,15 @@ export async function restoreTrashBin(env: Env, id: string, expectedEtag: string
   let slugWarning: string | undefined;
   const slug = meta.slug ?? null;
   if (slug) {
-    const alias = await getJson<BinAliasRecord>(bucket, binAliasKey(slug));
+    const alias = await readBinAlias(bucket, slug);
     const owned = alias && alias.value.binId === id;
     const owner = alias && !owned ? await getBin(env, alias.value.binId) : null;
     const contested = Boolean(owner && owner.meta.slug === slug);
     if (!contested) {
       const record: BinAliasRecord = { slug, binId: id, lifecycleId, createdAt: new Date().toISOString() };
       const claimed = alias
-        ? await putJson(bucket, binAliasKey(slug), record, { onlyIf: { etagMatches: normalizeEtag(alias.etag) } })
-        : await putJson(bucket, binAliasKey(slug), record, { onlyIf: { etagDoesNotMatch: "*" } });
+        ? await rewriteBinAlias(bucket, record, alias.etag)
+        : await createBinAlias(bucket, record);
       if (!claimed) {
         meta.slug = null;
         slugWarning = "slug_conflict_detached";
@@ -88,7 +89,21 @@ export async function restoreTrashBin(env: Env, id: string, expectedEtag: string
   }
 
   const written = await putJson(bucket, binMetaKey(id), meta, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
-  if (!written) throw new Error("etag_conflict");
+  if (!written) {
+    // A concurrent restore won the metadata CAS. The canonical winner decides
+    // the slug's fate: our alias side effect must never outlive this loser —
+    // converge it to the winner's lifecycle, or release it when the winner no
+    // longer claims the slug (otherwise the slug stays dead and unclaimable).
+    if (slug) {
+      const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
+      const value = canonical?.value;
+      // Purged markers have no slug: only a live BinMeta can still claim it.
+      const canonicalSlug = value && !isImportMarker(value) && "currentVersion" in value ? value.slug ?? null : null;
+      if (canonicalSlug === slug) await reconcileBinAliasToCanonical(bucket, id);
+      else await releaseBinAlias(bucket, slug, id);
+    }
+    throw new Error("etag_conflict");
+  }
   await syncSearchResource(env, 'bin', id);
   await bucket.delete(legacyTrashKey(id));
   if (collectionId && (await getCollection(env, collectionId))?.meta.status !== "active") {
@@ -128,7 +143,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
   }
   // Only the permanent purging state permits physical deletion. Restore cannot win after this CAS.
   if (current.meta.slug) {
-    await bucket.delete(binAliasKey(current.meta.slug)).catch(() => {});
+    await releaseBinAlias(bucket, current.meta.slug, id);
   }
   await syncSearchResource(env, 'bin', id);
   await removeContents(bucket, id);

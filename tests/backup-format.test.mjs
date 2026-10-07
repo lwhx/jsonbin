@@ -30,3 +30,20 @@ test('restore requests validate dependencies and canonical fingerprints keep arr
  assert.throws(()=>api.validateRestoreRequest({resource:r,dependencies:[{kind:'collection',id:crypto.randomUUID(),fingerprint:'0'.repeat(64)}]}));
  assert.equal(api.isImportMarker({importState:'pending'}),true);
 });
+test('backup validates the published pointer graph and REST slug/tags domain constraints (F06)',()=>{
+ assert.equal(typeof api.validateBackup,'function');
+ const ok=minimalBackup(null);ok.bins[0].meta.publishedVersion=1;ok.bins[0].meta.publishedAt=ok.exportedAt;assert.doesNotThrow(()=>api.validateBackup(ok));
+ for(const change of [
+  p=>{p.bins[0].meta.publishedVersion=999;p.bins[0].meta.publishedAt=p.exportedAt;},
+  p=>{p.bins[0].meta.publishedVersion=1;},
+  p=>{p.bins[0].meta.publishedAt=p.exportedAt;},
+  p=>p.bins[0].meta.slug='Not A Slug',
+  p=>p.bins[0].meta.slug='UPPER-case',
+  p=>p.bins[0].meta.slug='-leading-dash',
+  p=>p.bins[0].meta.slug='ab',
+  p=>p.bins[0].meta.tags=Array.from({length:21},(_,i)=>'t'+i),
+  p=>p.bins[0].meta.tags=[''],
+  p=>p.bins[0].meta.tags=['x'.repeat(33)],
+ ]) {const p=minimalBackup();change(p);assert.throws(()=>api.validateBackup(p),change.toString());}
+ const valid=minimalBackup();valid.bins[0].meta.slug='valid-slug-1';valid.bins[0].meta.tags=['ok','中文'];assert.doesNotThrow(()=>api.validateBackup(valid));
+});
