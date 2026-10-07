@@ -147,7 +147,7 @@ POST ${origin}/api/v1/mcp
 Authorization: Bearer ${shownToken}
 Content-Type: application/json
 
-兼容 SSE 模式：GET ${origin}/api/v1/mcp/sse（签名会话，1 小时过期）`;
+仅支持 Streamable HTTP 传输（旧版 SSE 端点已移除，返回 410）`;
 
   return (
     <section className="docs-page mcp-page">
@@ -263,7 +263,7 @@ Content-Type: application/json
           <li>给 MCP 建独立的最小权限密钥：没有 bin:delete，AI 就永远无法删除数据；删除、密钥管理等工具不会经 MCP 暴露。</li>
           <li>密钥泄露时在「API 密钥」页直接撤销，不影响其他集成。</li>
           <li>远程端点在连接时即校验令牌，无效、已撤销或已过期的令牌返回 401。</li>
-          <li>SSE 模式会话由服务端签名、1 小时过期，伪造会话无法回传消息。</li>
+          <li>仅支持 Streamable HTTP 传输：每个请求都独立校验令牌，无长期会话凭据。</li>
           <li>复制带令牌的片段时令牌会进入剪贴板，注意所在环境的安全。</li>
         </ul>
       </section>

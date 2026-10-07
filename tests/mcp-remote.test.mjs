@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createSystemHarness } from './support/system-harness.mjs';
 import pkg from '../package.json' with { type: 'json' };
 
-test('Remote MCP: Streamable HTTP and SSE endpoints on Cloudflare Worker', async (t) => {
+test('Remote MCP: Streamable HTTP transport, strict envelopes and budgets on Cloudflare Worker', async (t) => {
   const h = await createSystemHarness('remote-mcp-' + crypto.randomUUID());
   t.after(() => h.close());
 
@@ -30,17 +30,19 @@ test('Remote MCP: Streamable HTTP and SSE endpoints on Cloudflare Worker', async
   const unauthPost = await post({ jsonrpc: '2.0', id: 1, method: 'initialize' });
   assert.equal(unauthPost.status, 401);
 
+  // Removed legacy endpoints answer with 410 regardless of credentials (F12)
   const unauthSse = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/sse'), h.env);
-  assert.equal(unauthSse.status, 401);
+  assert.equal(unauthSse.status, 410);
+  assert.equal((await unauthSse.json()).error, 'legacy_sse_removed');
 
   const badToken = await post({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { Authorization: 'Bearer jb_live_invalid_invalid_invalid' });
   assert.equal(badToken.status, 401);
   assert.equal((await badToken.json()).error.code, -32000);
 
-  const badTokenSse = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/sse', {
-    headers: { Authorization: 'Bearer jb_live_invalid_invalid_invalid' },
-  }), h.env);
-  assert.equal(badTokenSse.status, 401);
+  const authedSse = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/sse', { headers: { Authorization: `Bearer ${token}` } }), h.env);
+  assert.equal(authedSse.status, 410);
+  const authedMessage = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/message', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }), h.env);
+  assert.equal(authedMessage.status, 410);
 
   const auth = { Authorization: `Bearer ${token}` };
 
@@ -54,7 +56,7 @@ test('Remote MCP: Streamable HTTP and SSE endpoints on Cloudflare Worker', async
 
   // Unsupported requested versions fall back to the baseline revision
   const initFallback = await post({ jsonrpc: '2.0', id: 'init-2', method: 'initialize', params: { protocolVersion: '1999-01-01' } }, auth);
-  assert.equal((await initFallback.json()).result.protocolVersion, '2024-11-05');
+  assert.equal((await initFallback.json()).result.protocolVersion, '2025-06-18');
 
   // 5. Streamable HTTP: tools/list
   const toolsRes = await post({ jsonrpc: '2.0', id: 'list-1', method: 'tools/list' }, auth);
@@ -143,62 +145,57 @@ test('Remote MCP: Streamable HTTP and SSE endpoints on Cloudflare Worker', async
   assert.equal(stalePayload.error, 'etag_conflict');
   assert.equal(stalePayload.statusCode, 412);
 
-  // 10. Standard MCP SSE: GET /api/v1/mcp/sse issues a signed session
-  const sseRes = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/sse', {
-    headers: { Authorization: `Bearer ${token}` },
-  }), h.env);
-  assert.equal(sseRes.status, 200);
-  assert.equal(sseRes.headers.get('Content-Type')?.includes('text/event-stream'), true);
+  // 10. Strict envelope validation: malformed requests are never executed (F20)
+  const badVersion = await post({ jsonrpc: 'not-2.0', id: 7, method: 'ping' }, auth);
+  assert.equal(badVersion.status, 200);
+  assert.equal((await badVersion.json()).error.code, -32600);
 
-  const reader = sseRes.body.getReader();
-  const chunk = await reader.read();
-  const chunkText = new TextDecoder().decode(chunk.value);
-  assert.equal(chunkText.includes('event: endpoint'), true);
-  const sessionId = /sessionId=([0-9a-f]{32}\.\d+\.[A-Za-z0-9_-]{43})/.exec(chunkText)?.[1];
-  assert.ok(sessionId);
-  await reader.cancel();
+  const badId = await post({ jsonrpc: '2.0', id: { bad: 1 }, method: 'ping' }, auth);
+  assert.equal((await badId.json()).error.code, -32600);
 
-  // 11. SSE Postback: session-less or forged session ids are rejected
-  const noSession = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
-  }), h.env);
-  assert.equal(noSession.status, 404);
+  const badParams = await post({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 42 } }, auth);
+  assert.equal((await badParams.json()).error.code, -32600);
 
-  const forgedSession = await h.worker.fetch(new Request('https://example.test/api/v1/mcp/message?sessionId=' + crypto.randomUUID().replace(/-/g, '') + '.9999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
-  }), h.env);
-  assert.equal(forgedSession.status, 404);
+  // A malformed notification (wrong jsonrpc, no id) is invalid, not silent.
+  const malformedNotification = await post({ jsonrpc: '1.0', method: 'notifications/initialized' }, auth);
+  assert.equal(malformedNotification.status, 200);
+  assert.equal((await malformedNotification.json()).error.code, -32600);
 
-  // 12. SSE Postback: a valid signed session works
-  const msgRes = await h.worker.fetch(new Request(`https://example.test/api/v1/mcp/message?sessionId=${sessionId}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 'msg-1',
-      method: 'tools/call',
-      params: { name: 'get_bin', arguments: { idOrSlug: createBin.meta.id } },
-    }),
-  }), h.env);
-  assert.equal(msgRes.status, 200);
-  const msgOutput = JSON.parse((await msgRes.json()).result.content[0].text);
-  assert.equal(msgOutput.value.workers, 8);
+  // 11. Batch budgets: empty and oversized batches reject instead of amplifying
+  const emptyBatch = await post([], auth);
+  assert.equal((await emptyBatch.json()).error.code, -32600);
+  const oversized = await post(Array.from({ length: 101 }, (_, i) => ({ jsonrpc: '2.0', id: i, method: 'ping' })), auth);
+  const oversizedBody = await oversized.json();
+  assert.equal(oversizedBody.error.code, -32600);
+  assert.equal(oversizedBody.error.message.includes('batch exceeds'), true);
+  const mixedBatch = await post([
+    { jsonrpc: '2.0', id: 'b1', method: 'ping' },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.9', id: 'b2', method: 'ping' },
+  ], auth);
+  const mixedBody = await mixedBatch.json();
+  assert.equal(Array.isArray(mixedBody), true);
+  assert.equal(mixedBody.length, 2);
+  assert.equal(mixedBody[1].error.code, -32600);
 
-  // 13. Notifications over the SSE postback endpoint also stay silent (204)
-  const msgNotification = await h.worker.fetch(new Request(`https://example.test/api/v1/mcp/message?sessionId=${sessionId}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-  }), h.env);
-  assert.equal(msgNotification.status, 204);
+  // 12. create_bin accepts collectionId for collection-scoped keys (F20)
+  const collection = await (await h.request('/collections', { method: 'POST', value: { name: 'MCP Collection' } })).json();
+  const scopedKey = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'MCP scoped', scopes: ['bin:read', 'bin:create', 'collection:read'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [collection.meta.id] },
+  } })).json();
+  const scopedAuth = { Authorization: `Bearer ${scopedKey.token}` };
+  const inCollection = await post({
+    jsonrpc: '2.0', id: 'scoped-1', method: 'tools/call',
+    params: { name: 'create_bin', arguments: { name: 'Scoped MCP Bin', value: { ok: 1 }, collectionId: collection.meta.id } },
+  }, scopedAuth);
+  const scopedOutput = JSON.parse((await inCollection.json()).result.content[0].text);
+  assert.equal(scopedOutput.meta.collectionId, collection.meta.id);
+  // ...and an ungrouped create stays forbidden for that key.
+  const ungrouped = await post({
+    jsonrpc: '2.0', id: 'scoped-2', method: 'tools/call',
+    params: { name: 'create_bin', arguments: { name: 'No Collection', value: {} } },
+  }, scopedAuth);
+  const ungroupedOutput = JSON.parse((await ungrouped.json()).result.content[0].text);
+  assert.equal(ungroupedOutput.error, 'resource_forbidden');
 });

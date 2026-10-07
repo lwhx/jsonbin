@@ -1,17 +1,19 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { version } from "../../../package.json";
-import { hmacSign, timingSafeEqualBase64Url } from "../lib/crypto";
 import { readApiKey } from "../storage/keys";
+import { readBoundedJson } from "../lib/system-http";
+import { SystemError } from "../../shared/system";
 
 const app = new Hono<{ Bindings: Env }>();
 
 const SERVER_NAME = "jsonbin-remote-mcp";
 /** Protocol revisions this transport understands; initialize echoes a supported request. */
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
-const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
-/** SSE transport sessions are stateless but self-authenticating and expire after one hour. */
-const MCP_SESSION_TTL_SECONDS = 60 * 60;
+const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
+/** A request body and a JSON-RPC batch can never legitimately exceed these. */
+const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+const MAX_BATCH_ITEMS = 100;
 
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
@@ -32,6 +34,7 @@ const MCP_TOOLS = [
         description: { type: "string", description: "Optional description" },
         tags: { type: "array", items: { type: "string" }, description: "Optional tags" },
         visibility: { type: "string", enum: ["private", "public"], description: "Optional visibility (default private)" },
+        collectionId: { type: "string", description: "Optional collection UUID to create the bin in (collection-restricted keys can only create inside a granted collection)" },
       },
     },
   },
@@ -312,7 +315,7 @@ async function executeTool(c: Context<{ Bindings: Env }>, name: string, args: an
   switch (name) {
     case "create_bin": {
       const body: Record<string, unknown> = { name: args.name, value: args.value };
-      for (const field of ["slug", "description", "tags", "visibility"] as const) {
+      for (const field of ["slug", "description", "tags", "visibility", "collectionId"] as const) {
         if (args[field] !== undefined) body[field] = args[field];
       }
       const { status, data } = await internalFetch(c, "/bins", {
@@ -467,52 +470,33 @@ async function verifyBearer(c: Context<{ Bindings: Env }>): Promise<Response | n
   return null;
 }
 
-function sessionSecret(env: Env) {
-  const secret = env.SESSION_SECRET;
-  if (typeof secret !== "string" || secret.length < 32) return null;
-  return secret;
-}
-
-/**
- * Stateless, self-authenticating SSE session id: `<random32>.<expSeconds>.<hmac>`.
- * Anyone can read the format; only SESSION_SECRET holders can mint a valid one.
- */
-async function issueMcpSessionId(env: Env): Promise<string | null> {
-  const secret = sessionSecret(env);
-  if (!secret) return null;
-  const id = crypto.randomUUID().replace(/-/g, "");
-  const exp = Math.floor(Date.now() / 1000) + MCP_SESSION_TTL_SECONDS;
-  const signature = await hmacSign(secret, `mcp-session:${id}:${exp}`);
-  return `${id}.${exp}.${signature}`;
-}
-
-async function verifyMcpSessionId(env: Env, sessionId: string | undefined): Promise<boolean> {
-  if (!sessionId) return false;
-  const match = /^([0-9a-f]{32})\.(\d+)\.([A-Za-z0-9_-]{43})$/.exec(sessionId);
-  if (!match) return false;
-  const [, id, expText, signature] = match;
-  const exp = Number(expText);
-  if (!Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) return false;
-  const secret = sessionSecret(env);
-  if (!secret) return false;
-  const expected = await hmacSign(secret, `mcp-session:${id}:${exp}`);
-  return timingSafeEqualBase64Url(signature, expected);
-}
-
 type JsonRpcResponse = { jsonrpc: "2.0"; id: any; result?: unknown; error?: unknown };
 
+/** JSON-RPC 2.0 request ids are strings, numbers or null — nothing else. */
+function isRequestId(id: unknown): boolean {
+  return typeof id === "string" || typeof id === "number" || id === null;
+}
+
+function invalidRequest(id: unknown, detail?: string): JsonRpcResponse {
+  return { jsonrpc: "2.0", id, error: { code: -32600, message: detail ? `Invalid Request: ${detail}` : "Invalid Request" } };
+}
+
 /**
- * Handle one JSON-RPC 2.0 message. Notifications (no id) return null and must
- * not receive a response, per the JSON-RPC 2.0 and MCP specifications.
+ * Handle one JSON-RPC 2.0 message with strict envelope validation: a wrong
+ * jsonrpc version or a non-scalar id is an Invalid Request, never executed.
+ * Only a structurally VALID message without an id counts as a notification
+ * (no response, per the JSON-RPC 2.0 and MCP specifications). Mirrored in
+ * mcp/server.ts for the stdio transport.
  */
 async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<JsonRpcResponse | null> {
-  // A missing id marks a notification: never answer it, whatever the method.
-  if (!msg || typeof msg !== "object" || msg.id === undefined) return null;
-  const id = msg.id;
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return invalidRequest(null, "not a message object");
+  const { jsonrpc, id, method } = msg as Record<string, unknown>;
 
-  if (typeof msg.method !== "string" || !msg.method) {
-    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
-  }
+  if (jsonrpc !== "2.0") return invalidRequest(isRequestId(id) ? id : null, "jsonrpc must be exactly \"2.0\"");
+  if (id !== undefined && !isRequestId(id)) return invalidRequest(null, "id must be a string, number or null");
+  if (typeof method !== "string" || !method) return invalidRequest(id === undefined ? null : id, "method must be a non-empty string");
+  // A valid envelope without an id is a notification: never answer it.
+  if (id === undefined) return null;
 
   if (msg.method === "initialize") {
     const requested = msg.params?.protocolVersion;
@@ -541,7 +525,9 @@ async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<J
 
   if (msg.method === "tools/call") {
     const toolName = msg.params?.name;
-    const toolArgs = msg.params?.arguments || {};
+    const toolArgs = msg.params?.arguments ?? {};
+    if (typeof toolName !== "string" || !toolName) return invalidRequest(id, "params.name must be a tool name");
+    if (typeof toolArgs !== "object" || toolArgs === null || Array.isArray(toolArgs)) return invalidRequest(id, "params.arguments must be an object");
     try {
       const output = await executeTool(c, toolName, toolArgs);
       return {
@@ -579,6 +565,10 @@ async function handleJsonRpc(c: Context<{ Bindings: Env }>, msg: any): Promise<J
 
 /** 204 for notification-only payloads; a single JSON-RPC object otherwise. */
 async function respondToBatch(c: Context<{ Bindings: Env }>, messages: any[]): Promise<Response> {
+  // An empty batch is a single Invalid Request; oversized batches are rejected
+  // outright instead of amplifying into unbounded internal tool executions.
+  if (messages.length === 0) return c.json(invalidRequest(null, "empty batch"));
+  if (messages.length > MAX_BATCH_ITEMS) return c.json(invalidRequest(null, `batch exceeds ${MAX_BATCH_ITEMS} items`));
   const responses = (await Promise.all(messages.map((item) => handleJsonRpc(c, item)))).filter(Boolean);
   if (responses.length === 0) return c.body(null, 204);
   if (responses.length === 1 && messages.length === 1) return c.json(responses[0]);
@@ -592,8 +582,11 @@ app.post("/", async (c) => {
 
   let body: any;
   try {
-    body = await c.req.json();
-  } catch {
+    body = await readBoundedJson(c.req.raw, MAX_REQUEST_BYTES);
+  } catch (error) {
+    if (error instanceof SystemError && error.status === 413) {
+      return c.json(invalidRequest(null, "payload exceeds the request budget"), 413);
+    }
     return c.json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } }, 400);
   }
 
@@ -607,68 +600,14 @@ app.post("/", async (c) => {
 app.get("/", (c) => c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" }));
 app.delete("/", (c) => c.json({ error: "method_not_allowed" }, 405, { Allow: "POST" }));
 
-// 2. Standard MCP SSE Endpoint: GET /api/v1/mcp/sse
-app.get("/sse", async (c) => {
-  const denied = await verifyBearer(c);
-  if (denied) return denied;
-
-  if (!sessionSecret(c.env)) {
-    return c.json({ error: "session_not_configured" }, 503);
-  }
-  const sessionId = await issueMcpSessionId(c.env);
-  if (!sessionId) return c.json({ error: "session_not_configured" }, 503);
-
-  const endpointUrl = `/api/v1/mcp/message?sessionId=${sessionId}`;
-
-  let heartbeat: any = null;
-  const stream = new ReadableStream({
-    start(controller) {
-      const encoder = new TextEncoder();
-      controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpointUrl}\n\n`));
-      controller.enqueue(encoder.encode(": connected\n\n"));
-      // Keep proxies from closing the idle stream while the client holds it open.
-      heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(": ping\n\n"));
-        } catch {
-          if (heartbeat) clearInterval(heartbeat);
-        }
-      }, 25_000);
-    },
-    cancel() {
-      if (heartbeat) clearInterval(heartbeat);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-    },
-  });
-});
-
-// 3. MCP SSE Postback: POST /api/v1/mcp/message (requires the session minted by /sse)
-app.post("/message", async (c) => {
-  const denied = await verifyBearer(c);
-  if (denied) return denied;
-
-  const sessionId = new URL(c.req.url).searchParams.get("sessionId") ?? undefined;
-  if (!(await verifyMcpSessionId(c.env, sessionId))) {
-    return c.json({ jsonrpc: "2.0", error: { code: -32001, message: "Unknown or expired MCP session" } }, 404);
-  }
-
-  let body: any;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } }, 400);
-  }
-
-  const response = await handleJsonRpc(c, body);
-  if (!response) return c.body(null, 204);
-  return c.json(response);
-});
+// 2. Legacy HTTP+SSE transport (2024-11-05): REMOVED. This stateless Worker
+// could never deliver responses over the GET stream, so a spec-compliant SSE
+// client connected, sent requests and waited forever. Old clients now get an
+// explicit 410 pointing at Streamable HTTP instead of a connection that
+// silently accepts requests and never answers. (Audit F12)
+const legacySseRemoved = (c: Context<{ Bindings: Env }>) =>
+  c.json({ error: "legacy_sse_removed", message: "The HTTP+SSE transport is no longer supported; use Streamable HTTP: POST /api/v1/mcp" }, 410, { Allow: "POST", "Deprecation": "true" });
+app.get("/sse", legacySseRemoved);
+app.post("/message", legacySseRemoved);
 
 export default app;

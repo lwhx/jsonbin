@@ -118,7 +118,13 @@ test('MCP Server: JSON-RPC dispatch semantics (notifications, ping, unknown meth
   // Notifications (no id) never receive a response
   assert.equal(await dispatchMessage({ jsonrpc: '2.0', method: 'notifications/initialized' }), null);
   assert.equal(await dispatchMessage({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }), null);
-  assert.equal(await dispatchMessage(null), null);
+  // A null message is a malformed envelope, not a notification: it gets an
+  // explicit Invalid Request instead of silent silence the client cannot see.
+  assert.equal((await dispatchMessage(null)).error.code, -32600);
+  assert.equal((await dispatchMessage({ jsonrpc: '1.0', id: 9, method: 'ping' })).error.code, -32600);
+  assert.equal((await dispatchMessage({ jsonrpc: '2.0', id: { bad: 1 }, method: 'ping' })).error.code, -32600);
+  // Only structurally VALID messages without an id count as notifications.
+  assert.equal(await dispatchMessage({ jsonrpc: '1.0', method: 'notifications/initialized' }).then(r => r.error.code), -32600);
 
   // initialize echoes a supported protocol version and reports the package version
   const init = await dispatchMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
@@ -127,7 +133,7 @@ test('MCP Server: JSON-RPC dispatch semantics (notifications, ping, unknown meth
   assert.equal(init.result.serverInfo.version, pkg.version);
 
   const initFallback = await dispatchMessage({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } });
-  assert.equal(initFallback.result.protocolVersion, '2024-11-05');
+  assert.equal(initFallback.result.protocolVersion, '2025-06-18');
 
   // ping is supported; unknown methods and non-requests get JSON-RPC errors
   const ping = await dispatchMessage({ jsonrpc: '2.0', id: 3, method: 'ping' });

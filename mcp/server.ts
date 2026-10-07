@@ -14,7 +14,7 @@ const SERVER_NAME = "jsonbin-mcp";
 const SERVER_VERSION = pkg.version;
 /** Protocol revisions this server understands; initialize echoes a supported request. */
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
-const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
+const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 
 function getClient() {
   const url = process.env.JSONBIN_URL || "http://localhost:8787";
@@ -83,11 +83,12 @@ const tools: Record<
         description: { type: "string", description: "Optional description" },
         tags: { type: "array", items: { type: "string" }, description: "Optional tags" },
         visibility: { type: "string", enum: ["private", "public"], description: "Optional visibility (default private)" },
+        collectionId: { type: "string", description: "Optional collection UUID to create the bin in (collection-restricted keys can only create inside a granted collection)" },
       },
     },
     handler: async (args) => {
       const input: Record<string, unknown> = { name: args.name, value: args.value };
-      for (const field of ["slug", "description", "tags", "visibility"] as const) {
+      for (const field of ["slug", "description", "tags", "visibility", "collectionId"] as const) {
         if (args[field] !== undefined) input[field] = args[field];
       }
       return await getClient().bins.create(input as any);
@@ -328,17 +329,31 @@ const tools: Record<
 
 export type JsonRpcMessage = { jsonrpc: "2.0"; id: any; result?: unknown; error?: unknown } | null;
 
+/** JSON-RPC 2.0 request ids are strings, numbers or null — nothing else. */
+function isRequestId(id: any): boolean {
+  return typeof id === "string" || typeof id === "number" || id === null;
+}
+
+function invalidRequest(id: any, detail?: string): NonNullable<JsonRpcMessage> {
+  return { jsonrpc: "2.0", id, error: { code: -32600, message: detail ? `Invalid Request: ${detail}` : "Invalid Request" } };
+}
+
 /**
- * Handle one JSON-RPC 2.0 message. Notifications (no id) return null and must
- * not receive a response, per the JSON-RPC 2.0 and MCP specifications.
+ * Handle one JSON-RPC 2.0 message with strict envelope validation: a wrong
+ * jsonrpc version or a non-scalar id is an Invalid Request, never executed.
+ * Only a structurally VALID message without an id counts as a notification
+ * (no response, per the JSON-RPC 2.0 and MCP specifications). Mirrored in
+ * src/worker/routes/mcp.ts for the Streamable HTTP transport.
  */
 export async function dispatchMessage(msg: any): Promise<JsonRpcMessage> {
-  if (!msg || typeof msg !== "object" || msg.id === undefined) return null;
-  const id = msg.id;
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return invalidRequest(null, "not a message object");
+  const { jsonrpc, id, method } = msg as Record<string, unknown>;
 
-  if (typeof msg.method !== "string" || !msg.method) {
-    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
-  }
+  if (jsonrpc !== "2.0") return invalidRequest(isRequestId(id) ? id : null, "jsonrpc must be exactly \"2.0\"");
+  if (id !== undefined && !isRequestId(id)) return invalidRequest(null, "id must be a string, number or null");
+  if (typeof method !== "string" || !method) return invalidRequest(id === undefined ? null : id, "method must be a non-empty string");
+  // A valid envelope without an id is a notification: never answer it.
+  if (id === undefined) return null;
 
   if (msg.method === "initialize") {
     const requested = msg.params?.protocolVersion;
@@ -418,8 +433,14 @@ export async function dispatchMessage(msg: any): Promise<JsonRpcMessage> {
   };
 }
 
+/** A stdio line or batch can never legitimately exceed these budgets. */
+const MAX_LINE_BYTES = 10 * 1024 * 1024;
+const MAX_BATCH_ITEMS = 100;
+
 /**
- * Standard JSON-RPC 2.0 stdio loop for MCP Server.
+ * Standard JSON-RPC 2.0 stdio loop for MCP Server: bounded input, strict
+ * envelopes, batch support. Malformed JSON gets a Parse error response
+ * instead of being silently dropped (a client would otherwise wait forever).
  */
 async function runStdioServer() {
   let buffer = "";
@@ -430,14 +451,40 @@ async function runStdioServer() {
     const lines = buffer.split("\n");
     buffer = lines.pop() || "";
 
+    // The remainder without a newline is the pending line: cap it so a client
+    // streaming an endless line cannot grow memory without bound.
+    if (buffer.length > MAX_LINE_BYTES) {
+      sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: line exceeds ${MAX_LINE_BYTES} bytes` } });
+      buffer = "";
+    }
+
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
+      if (line.length > MAX_LINE_BYTES) {
+        sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: `Parse error: line exceeds ${MAX_LINE_BYTES} bytes` } });
+        continue;
+      }
 
       let msg: any;
       try {
         msg = JSON.parse(trimmed);
       } catch {
+        sendResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+        continue;
+      }
+
+      if (Array.isArray(msg)) {
+        if (msg.length === 0) {
+          sendResponse(invalidRequest(null, "empty batch"));
+          continue;
+        }
+        if (msg.length > MAX_BATCH_ITEMS) {
+          sendResponse(invalidRequest(null, `batch exceeds ${MAX_BATCH_ITEMS} items`));
+          continue;
+        }
+        const responses = (await Promise.all(msg.map((item: any) => dispatchMessage(item)))).filter(Boolean);
+        if (responses.length > 0) sendResponse(responses.length === 1 && msg.length === 1 ? responses[0] : responses);
         continue;
       }
 

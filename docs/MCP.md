@@ -31,32 +31,16 @@ JSONBin 支持两种接入模式：
 }
 ```
 
-### 兼容 SSE 模式（`GET /api/v1/mcp/sse` + 回传端点）：
+### 关于旧版 HTTP+SSE 传输（已移除）
 
-```json
-{
-  "mcpServers": {
-    "jsonbin": {
-      "url": "https://js.gnn.im/api/v1/mcp/sse",
-      "headers": {
-        "Authorization": "Bearer jb_live_xxxxxxxx"
-      }
-    }
-  }
-}
-```
-
-SSE 模式的会话语义：
-
-- `GET /sse` 通过后返回 `endpoint` 事件，其中携带用 `SESSION_SECRET` 签名、1 小时过期的会话 ID；
-- 后续请求必须回传到 `/api/v1/mcp/message?sessionId=<id>`，缺失、伪造或过期的会话 ID 返回 `404`；
-- 会话无服务端状态（无 Durable Object），仅做签名与过期校验；回传端点直接在 HTTP 响应中返回 JSON-RPC 结果（Cursor / Windsurf 兼容），不通过 SSE 通道回推，如客户端严格要求 202 + SSE 推送，请改用 Streamable HTTP 端点。
+旧版 2024-11-05 的 HTTP+SSE 传输（`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`）已移除：该实现无法在这个无状态 Worker 上把响应通过 SSE 流回推，规范客户端会一直等待。旧端点现在返回 `410` 并指向 Streamable HTTP。请统一使用上方的 `POST /api/v1/mcp` 端点。
 
 ### Remote MCP 传输语义
 
 - **Streamable HTTP（`POST /api/v1/mcp`）为无状态服务**：不下发 `Mcp-Session-Id`，`GET` / `DELETE /api/v1/mcp` 返回 `405`；
 - 支持 JSON-RPC 批量请求；只含通知（无 `id`）的请求返回 `204` 无响应体，符合 JSON-RPC 2.0 规范；
-- `initialize` 支持协议版本协商：`2025-06-18` / `2025-03-26` / `2024-11-05`，未识别的版本回落到 `2024-11-05`；
+- `initialize` 支持协议版本协商：`2025-06-18` / `2025-03-26` / `2024-11-05`，未识别的版本回落到 `2025-06-18`；
+- 严格 JSON-RPC 2.0 信封校验：`jsonrpc` 不是 `"2.0"`、`id` 不是字符串/数字/null 均返回 `-32600 Invalid Request`；批量请求上限 100 条，请求体上限 10 MiB；
 - 支持 `ping`；未知方法（带 `id`）返回 `-32601 Method not found`；
 - `serverInfo.version` 与 `package.json` 版本号同源，不再手工维护。
 
@@ -88,7 +72,7 @@ npm run build:mcp        # 输出 mcp/server.js
 }
 ```
 
-stdio 模式与 Remote MCP 保持相同的协议行为：`ping`、通知静默、未知方法 `-32601` 与协议版本协商。
+stdio 模式与 Remote MCP 保持相同的协议行为：`ping`、通知静默、未知方法 `-32601`、严格信封校验与协议版本协商；单行与批量同样受 10 MiB / 100 条预算约束，坏 JSON 行返回 `-32700` 而非静默丢弃。
 
 ---
 
@@ -96,7 +80,7 @@ stdio 模式与 Remote MCP 保持相同的协议行为：`ping`、通知静默�
 
 **不要为 MCP 重新设计 ACL**。MCP 的权限上限就是 `JSONBIN_TOKEN` 本身拥有的权限。
 
-Remote MCP 在 `initialize`、SSE 建连与消息回传时即校验 Bearer 令牌（无效、已撤销或已过期返回 `401`）；每个 Tool 调用再按各自 Scope 由内部 API 精确鉴权。
+Remote MCP 在每个 HTTP 请求上校验 Bearer 令牌（无效、已撤销或已过期返回 `401`）；每个 Tool 调用再按各自 Scope 由内部 API 精确鉴权。
 
 例如创建一个专用密钥：
 
