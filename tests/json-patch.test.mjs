@@ -339,3 +339,43 @@ test('JSON Patch: merge patch semantics are unchanged for non-patch content type
   const rec = await res.json();
   assert.deepEqual(rec.value, { keep: 1 }, 'null still deletes a member');
 });
+
+test('malformed operations and pointer edge cases reject instead of misapplying (F10)', async t => {
+  const h = await harness(t);
+  const bin = await (await (await h.request('/bins', { method: 'POST', value: { name: 'f10', value: { keep: 1 } } })).json());
+
+  // value member is required for add/replace/test: no implicit undefined.
+  for (const ops of [[{ op: 'add', path: '/bad' }], [{ op: 'replace', path: '/keep', path2: 1 }], [{ op: 'test', path: '/keep' }]]) {
+    const res = await patch(h, bin.meta.id, ops, bin.etag);
+    assert.equal(res.status, 422, JSON.stringify(ops));
+  }
+  assert.equal((await (await h.request(`/bins/${bin.meta.id}`)).json()).value.keep, 1, 'no undefined member may leak into the document');
+
+  // A null root has no /missing child: the comparison must not treat the
+  // missing location as a null match (it used to return 200).
+  const nullRoot = await (await (await h.request('/bins', { method: 'POST', value: { name: 'f10-null', value: null } })).json());
+  const tested = await patch(h, nullRoot.meta.id, [{ op: 'test', path: '/missing', value: null }], nullRoot.etag);
+  assert.equal(tested.status, 422);
+
+  // Same-location move still verifies the source exists.
+  const moved = await patch(h, bin.meta.id, [{ op: 'move', from: '/nope', path: '/nope' }], bin.etag);
+  assert.equal(moved.status, 422);
+  // RFC 6901: "" is the root pointer; "/" is the empty-string key. A
+  // same-location move via the root form is a legal no-op.
+  const rootMoved = await patch(h, bin.meta.id, [{ op: 'move', from: '', path: '' }], bin.etag);
+  assert.equal(rootMoved.status, 200, 'move root -> root is a legal no-op');
+
+  // "/" is the empty-string key, NOT the root: moving it to a sibling key must
+  // be legal. The old string-prefix cycle check confused "/" with the root pointer.
+  const keyedBin = await (await (await h.request('/bins', { method: 'POST', value: { name: 'f10-key', value: { '': { v: 1 }, x: 0 } } })).json());
+  const keyMove = await patch(h, keyedBin.meta.id, [{ op: 'move', from: '/', path: '/x' }], keyedBin.etag);
+  assert.equal(keyMove.status, 200);
+  assert.deepEqual((await (await h.request('/bins/' + keyedBin.meta.id)).json()).value, { x: { v: 1 } });
+  const keyedNow = await (await h.request('/bins/' + keyedBin.meta.id)).json();
+  // The actual root pointer ("") contains every destination: a cycle.
+  const fromRoot = await patch(h, keyedBin.meta.id, [{ op: 'move', from: '', path: '/x' }], keyedNow.etag);
+  assert.equal(fromRoot.status, 422, 'the root contains every destination');
+  // Moving a parent into its own child is a cycle as well.
+  const intoChild = await patch(h, keyedBin.meta.id, [{ op: 'move', from: '/x', path: '/x/v' }], keyedNow.etag);
+  assert.equal(intoChild.status, 422, 'a parent cannot move into its own child');
+});

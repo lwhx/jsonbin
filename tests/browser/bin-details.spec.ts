@@ -459,6 +459,30 @@ test("表单编辑可以新增字段并与 JSON 编辑器双向同步", async ({
   await expect(panel.getByLabel("fromCode 文本值", { exact: true })).toHaveValue("同步");
 });
 
+test("表单编辑无效状态下 Ctrl+S 不保存旧草稿（F22）", async ({ page }) => {
+  const record = await create(page);
+  await page.getByRole("tab", { name: "表单编辑", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "表单编辑" });
+  // 先提交一个有效修改（进入草稿），再制造重复键的无效表单输入。
+  await panel.getByLabel("字段 1 键", { exact: true }).fill("renamed");
+  await panel.getByRole("button", { name: "添加字段", exact: true }).click();
+  await panel.getByLabel("字段 2 键", { exact: true }).fill("renamed");
+  await expect(page.getByRole("button", { name: "保存 JSON", exact: true })).toBeDisabled();
+  // 快捷键与函数入口必须消费同一规则：旧草稿不得被保存并显示成功。
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(page.locator(".detail-notice[role=status]")).not.toContainText("保存成功");
+  const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(saved.value).toEqual({ initial: true });
+  expect(saved.meta.currentVersion).toBe(1);
+  // 修正重复键后恢复正常保存路径。
+  await panel.getByLabel("字段 2 键", { exact: true }).fill("unique");
+  await panel.getByLabel("unique 文本值", { exact: true }).fill("ok");
+  await page.getByRole("button", { name: "保存 JSON", exact: true }).click();
+  await expect(page.locator(".detail-notice[role=status]")).toContainText("保存成功");
+  const after = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
+  expect(after.value).toEqual({ renamed: true, unique: "ok" });
+});
+
 test("代码编辑器草稿在访问过表单后仍参与离页和 beforeunload 保护", async ({ page }) => {
   await create(page);
   await page.getByRole("tab", { name: "表单编辑", exact: true }).click();

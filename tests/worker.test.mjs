@@ -2201,3 +2201,95 @@ test('audit: If-None-Match turns unchanged reads into empty 304 responses', asyn
   const schema = await (await request('/schemas', { method: 'POST', value: { name: '304 Schema', schema: { type: 'object' } } })).json();
   assert.equal((await request('/schemas/' + schema.meta.id, { headers: { 'If-None-Match': `"${schema.etag.replace(/"/g, '')}"` } })).status, 304);
 });
+
+test('audit: template updates validate the pinned schema revision, not the latest (F07)', async () => {
+  const schema = await (await request('/schemas', { method: 'POST', value: { name: 'F07 Schema', schema: { type: 'string' } } })).json();
+  const tpl = await (await request('/templates', { method: 'POST', value: { name: 'F07 Tpl', schemaId: schema.meta.id, value: 'a-string' } })).json();
+  assert.equal(tpl.meta.schemaRevision, 1);
+
+  // Evolve the schema: rev2 demands numbers while the template stays pinned to rev1.
+  const evolved = await (await request(`/schemas/${schema.meta.id}`, { method: 'PUT', etag: schema.etag, value: { name: 'F07 Schema', schema: { type: 'number' } } })).json();
+  assert.equal(evolved.meta.currentRevision, 2);
+
+  // Metadata-only patches validate the pinned revision: an unrelated change
+  // must not be rejected by the newer revision's rules.
+  const renamed = await request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: tpl.etag, value: { description: 'unrelated' } });
+  assert.equal(renamed.status, 200);
+  const afterRename = await renamed.json();
+
+  // A value update violating the pinned revision is rejected even though the
+  // latest revision would accept it.
+  const badValue = await request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: afterRename.etag, value: { value: 42 } });
+  assert.equal(badValue.status, 422);
+  assert.equal((await (await request(`/templates/${tpl.meta.id}`)).json()).value, 'a-string');
+
+  // Deleting the schema must not silently skip validation: the pinned
+  // revision lives in immutable history and still applies.
+  assert.equal((await request(`/schemas/${schema.meta.id}`, { method: 'DELETE', etag: evolved.etag })).status, 200);
+  const stillEnforced = await request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: afterRename.etag, value: { value: 42 } });
+  assert.equal(stillEnforced.status, 422);
+  const okMeta = await request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: afterRename.etag, value: { name: 'still fine' } });
+  assert.equal(okMeta.status, 200);
+});
+
+test('audit: published deep paths return the addressed node, not the whole document (F15)', async () => {
+  const bin = await (await request('/bins', { method: 'POST', value: { name: 'F15', slug: 'f15-published-path', value: { nested: { visible: 7 } } } })).json();
+  assert.equal((await request(`/bins/${bin.meta.id}/publish`, { method: 'POST', etag: bin.etag })).status, 200);
+
+  const deep = await (await request(`/bins/${bin.meta.id}/published/value/nested/visible`)).json();
+  assert.equal(deep.value, 7);
+  assert.deepEqual(deep.path, ['nested', 'visible']);
+  const mid = await (await request(`/bins/${bin.meta.id}/published/value/nested`)).json();
+  assert.deepEqual(mid.value, { visible: 7 });
+
+  // Current-value deep paths and the slug entry keep working.
+  assert.equal((await (await request(`/bins/${bin.meta.id}/value/nested/visible`)).json()).value, 7);
+  assert.equal((await (await request(`/b/f15-published-path/published/value/nested/visible`)).json()).value, 7);
+  assert.deepEqual((await (await request(`/b/f15-published-path/value/nested/visible`)).json()).value, 7);
+});
+
+test('audit: format exports are shell-safe and type-preserving (F09)', async () => {
+  const bin = await create({ flag: 'true', version: '42', inject: "$(printf INJECTED)", quote: "it's", mixed: 'a b c' });
+  const path = '/bins/' + bin.meta.id;
+
+  // .env is a shell fragment: only the reserved-free subset stays bare, the
+  // command-substitution canary is strictly single-quoted (never double).
+  const envText = await (await request(path, { headers: { Accept: 'text/x-env' } })).text();
+  // Reserved-free scalars stay bare (safe in both shell and dotenv consumers).
+  assert.match(envText, /^FLAG=true$/m);
+  assert.match(envText, /^VERSION=42$/m);
+  assert.match(envText, /^INJECT='\$\(printf INJECTED\)'/m);
+  assert.match(envText, new RegExp('^QUOTE=' + "'it'" + String.fromCharCode(92, 92) + "''s'$", 'm'));
+  assert.match(envText, /^MIXED='a b c'/m);
+  assert.doesNotMatch(envText, /"/);
+
+  // YAML quotes strings that would otherwise parse as booleans or numbers.
+  const yamlText = await (await request(path, { headers: { Accept: 'text/yaml' } })).text();
+  assert.match(yamlText, /flag: "true"/);
+  assert.match(yamlText, /version: "42"/);
+
+  // TOML emits valid syntax for arrays of objects ([[table]]) instead of raw
+  // JSON object syntax, and nested objects stay [table] sections.
+  const tomlBin = await create({ server: { host: 'h', ports: [1, 2] }, items: [{ name: 'a' }, { name: 'b' }] });
+  const tomlText = await (await request('/bins/' + tomlBin.meta.id, { headers: { Accept: 'application/toml' } })).text();
+  assert.match(tomlText, /\[server\]/);
+  assert.match(tomlText, /ports = \[1, 2\]/);
+  assert.match(tomlText, /\[\[items\]\]/);
+  assert.match(tomlText, /name = "a"/);
+  assert.match(tomlText, /name = "b"/);
+  assert.doesNotMatch(tomlText, /\[\{"name"/);
+
+  // Sanitized env keys that collide get suffixes instead of overwriting.
+  const collide = await create({ 'a-b': 1, 'a/b': 2 });
+  const collideText = await (await request('/bins/' + collide.meta.id, { headers: { Accept: 'text/x-env' } })).text();
+  assert.match(collideText, /^A_B=1$/m);
+  assert.match(collideText, /^A_B_2=2$/m);
+
+  // YAML block sequences render nested arrays of objects without duplication.
+  const list = await create({ groups: [{ id: 1, tags: ['x', 'y'] }, { id: 2 }] });
+  const listText = await (await request('/bins/' + list.meta.id, { headers: { Accept: 'text/yaml' } })).text();
+  const idLines = listText.split('\n').filter(line => line.includes('id:'));
+  assert.equal(idLines.length, 2, 'each item appears exactly once: ' + listText);
+  assert.match(listText, /- id: 1/);
+  assert.match(listText, /tags:/);
+});

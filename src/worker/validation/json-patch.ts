@@ -132,7 +132,6 @@ function resolveParent(
 function getPointerValue(root: unknown, tokens: string[], opIndex: number, originalPath: string): unknown {
   if (tokens.length === 0) return root;
   const { parent, lastKey } = resolveParent(root, tokens, opIndex, originalPath);
-  if (parent === null) return root;
 
   if (Array.isArray(parent)) {
     if (!/^(0|[1-9]\d*)$/.test(lastKey)) throw new JsonPatchError("target_not_found", opIndex, originalPath);
@@ -226,6 +225,9 @@ export function applyJsonPatch(doc: unknown, patch: JsonPatchOperation[]): unkno
 
     switch (op.op) {
       case "add": {
+        // RFC 6902: add/replace/test carry a REQUIRED value member; an absent
+        // member is a malformed operation, not an implicit undefined.
+        if (!Object.hasOwn(op, "value")) throw new JsonPatchError("missing_value", i, path);
         currentDoc = applyAdd(currentDoc, tokens, op.value, i, path);
         break;
       }
@@ -234,6 +236,7 @@ export function applyJsonPatch(doc: unknown, patch: JsonPatchOperation[]): unkno
         break;
       }
       case "replace": {
+        if (!Object.hasOwn(op, "value")) throw new JsonPatchError("missing_value", i, path);
         // Target must exist
         getPointerValue(currentDoc, tokens, i, path);
         if (tokens.length === 0) {
@@ -254,14 +257,21 @@ export function applyJsonPatch(doc: unknown, patch: JsonPatchOperation[]): unkno
         if (typeof op.from !== "string") {
           throw new JsonPatchError("missing_from", i, path);
         }
-        if (op.from === path) break;
-
-        // Prevent moving a parent into its own child
-        if (path.startsWith(op.from === "/" ? "/" : `${op.from}/`)) {
+        const fromTokens = parsePointer(op.from, i);
+        // Compare parsed pointers, not their literal strings: /a/~1b (key
+        // "a/b") and /a//b (empty key) are different locations, and "" is the
+        // root while "/" is the empty-string key.
+        const sameLocation = fromTokens.length === tokens.length && fromTokens.every((token, index) => token === tokens[index]);
+        if (sameLocation) {
+          // A no-op move still requires the source location to exist (RFC 6902 4.4).
+          getPointerValue(currentDoc, fromTokens, i, op.from);
+          break;
+        }
+        // Moving a node into its own descendant — including from the root — is a cycle.
+        if (fromTokens.length < tokens.length && fromTokens.every((token, index) => token === tokens[index])) {
           throw new JsonPatchError("move_into_child_cycle", i, path);
         }
 
-        const fromTokens = parsePointer(op.from, i);
         const val = getPointerValue(currentDoc, fromTokens, i, op.from);
         currentDoc = applyRemove(currentDoc, fromTokens, i, op.from);
         currentDoc = applyAdd(currentDoc, tokens, val, i, path);
@@ -277,6 +287,7 @@ export function applyJsonPatch(doc: unknown, patch: JsonPatchOperation[]): unkno
         break;
       }
       case "test": {
+        if (!Object.hasOwn(op, "value")) throw new JsonPatchError("missing_value", i, path);
         const actual = getPointerValue(currentDoc, tokens, i, path);
         if (!deepEquals(actual, op.value)) {
           // RFC 6902 Section 4.6: If the value is not equal, the test fails

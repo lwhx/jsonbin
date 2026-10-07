@@ -179,7 +179,14 @@ export async function updateTemplate(
       schemaId = null;
       schemaRevision = null;
     }
+  } else if (schemaId && schemaRevision) {
+    // Unchanged binding validates the PINNED revision, not the latest: schema
+    // evolution must not retroactively reject or silently repoint existing
+    // templates. Revisions are immutable history, so a deleted schema still
+    // enforces the revision the template actually captured.
+    await assertBoundSchema(env, { schemaId, schemaRevision }, nextValue);
   } else if (schemaId) {
+    // Legacy binding without a recorded revision falls back to latest-if-available.
     const schemaRecord = await getSchema(env, schemaId);
     if (schemaRecord) {
       assertSchemaValue(schemaRecord.schema, nextValue);

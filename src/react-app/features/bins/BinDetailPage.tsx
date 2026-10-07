@@ -62,6 +62,12 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const parsed = useMemo(() => draft ? parseJson(draft.text) : null, [draft?.text]);
+  // An invalid form session never propagates its text into the draft, so the
+  // draft still parses as the PREVIOUS valid input. Saving at that moment
+  // would persist something else than what the user is looking at: every save
+  // entry point (buttons, Ctrl/Cmd+S, saveJson itself) consumes this rule.
+  const activeFormInvalid = tab === "表单编辑" && formSession?.valid === false;
+  const canSaveJson = Boolean(draft && isDirty(draft) && parsed?.valid && !activeFormInvalid && !busy && !draft.record.meta.locked);
 
   useEffect(() => {
     if (!query.data) return;
@@ -78,13 +84,13 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
         if (tab === "设置") {
           if (metadataDirty && !busy && !isLocked) void saveSettings();
         } else if (tab === "表单编辑" || tab === "编辑器") {
-          if (draft && isDirty(draft) && parsed?.valid && !busy && !isLocked) void saveJson();
+          if (canSaveJson) void saveJson();
         }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tab, metadataDirty, busy, draft, parsed, saveSettings, saveJson]);
+  }, [tab, metadataDirty, busy, draft, parsed, canSaveJson, saveSettings, saveJson]);
   useEffect(() => {
     if (!dirty) return;
     const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -122,6 +128,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   }
   async function saveJson() {
     if (!draft || busy) return;
+    // The function entry consumes the same rule as the buttons and the
+    // shortcut: an invalid form session must never save its stale draft text.
+    if (tab === "表单编辑" && formSession?.valid === false) return;
     const parsed = parseJson(draft.text); if (!parsed.valid) return;
     const submittedText = draft.text;
     const message = saveMessage.trim() || undefined;
@@ -359,7 +368,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       {tab === "表单编辑" && (parsed.valid && isJsonObject(parsed.value) ? <>
         <div className="editor-toolbar"><span>键值表单</span>
           <button type="button" className="primary-button"
-            disabled={formSession?.valid === false || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}>
+            disabled={!canSaveJson} onClick={saveJson}>
             <Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}
           </button>
         </div>
@@ -384,7 +393,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
           />
           <button type="button" className="secondary-button" disabled={!parsed.valid || Boolean(busy) || locked}
             onClick={() => parsed.valid && setDraft({ ...draft, text: JSON.stringify(parsed.value, null, 2) })}><Braces size={15} />格式化</button>
-          <button type="button" className="primary-button" disabled={!parsed.valid || !isDirty(draft) || Boolean(busy) || locked} onClick={saveJson}><Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}</button>
+          <button type="button" className="primary-button" disabled={!canSaveJson} onClick={saveJson}><Save size={15} />{busy === "json" ? "正在保存…" : "保存 JSON"}</button>
         </div>
         {!parsed.valid && <p className="detail-error" role="alert">{parsed.error}</p>}
         <Suspense fallback={<p role="status">正在加载 JSON 编辑器…</p>}>

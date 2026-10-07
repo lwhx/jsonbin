@@ -18,8 +18,13 @@ export function mergePatch(target: unknown, patch: unknown, depth = 0): unknown 
 }
 
 // Decode each URL segment exactly once, then JSON Pointer's ~1 and ~0 escapes.
+// Both the current-value and published-value deep-path routes resolve here;
+// any other URL shape is a programming error and rejects instead of silently
+// degrading to a root read (which would return the whole document).
 export function valuePath(url: string): string[] {
-  const suffix = new URL(url).pathname.match(/(?:\/bins\/[^/]+|\/b\/[^/]+)\/value(\/.*)?$/)?.[1];
+  const match = new URL(url).pathname.match(/(?:\/bins\/[^/]+|\/b\/[^/]+)(?:\/published)?\/value(\/.*)?$/);
+  if (!match) throw new Error("invalid_path");
+  const suffix = match[1];
   if (!suffix) return [];
   const segments = suffix.slice(1).split("/");
   if (segments.length > 128) throw new Error("invalid_path");

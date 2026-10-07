@@ -794,6 +794,21 @@ slugApp.get("/:slug", readCurrentBySlug, async (c) => {
   return c.json(record);
 });
 
+slugApp.on("GET", ["/:slug/published/value", "/:slug/published/value/*"], readCurrentBySlug, async (c) => {
+  const record = c.get("bin");
+  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record.meta.publishedVersion) return c.json({ error: "no_published_version" }, 404);
+
+  const published = await getBinVersion(c.env, record.meta.id, record.meta.publishedVersion);
+  if (!published) return c.json({ error: "published_version_missing" }, 404);
+
+  const path = valuePath(c.req.url);
+  const value = readValue(published.value, path);
+  c.header("ETag", record.etag);
+  c.header("X-JSONBin-Version", String(record.meta.publishedVersion));
+  return c.json({ id: record.meta.id, path, value, etag: record.etag, version: record.meta.publishedVersion });
+});
+
 slugApp.on("GET", ["/:slug/value", "/:slug/value/*"], readCurrentBySlug, (c) => {
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);
