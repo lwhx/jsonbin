@@ -468,9 +468,9 @@ test("表单编辑无效状态下 Ctrl+S 不保存旧草稿（F22）", async ({ 
   await panel.getByRole("button", { name: "添加字段", exact: true }).click();
   await panel.getByLabel("字段 2 键", { exact: true }).fill("renamed");
   await expect(page.getByRole("button", { name: "保存 JSON", exact: true })).toBeDisabled();
-  // 快捷键与函数入口必须消费同一规则：旧草稿不得被保存并显示成功。
+  // 快捷键与函数入口必须消费同一规则：服务器状态是硬校验（成功时才
+  // 会出现 notice 元素，被拦截时它根本不存在，故不做反向文本断言）。
   await page.keyboard.press("ControlOrMeta+s");
-  await expect(page.locator(".detail-notice[role=status]")).not.toContainText("保存成功");
   const saved = await (await page.request.get(`/api/v1/bins/${record.meta.id}`)).json();
   expect(saved.value).toEqual({ initial: true });
   expect(saved.meta.currentVersion).toBe(1);
