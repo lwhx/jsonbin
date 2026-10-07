@@ -466,6 +466,12 @@ export function generateOpenApiSpec(): Record<string, unknown> {
       "/b/{slug}/value/{path}": {
         get: op("按 JSON Pointer 通过 Slug 读取子值", { security: PUBLIC, parameters: [slugParameter, { name: "path", in: "path", required: true, schema: { type: "string" } }], responses: { ...ok(), ...notFound } }),
       },
+      "/b/{slug}/published/value": {
+        get: op("通过 Slug 读取已发布版本的 JSON 值（可加子路径）", { security: PUBLIC, parameters: [slugParameter] }),
+      },
+      "/b/{slug}/published/value/{path}": {
+        get: op("按 JSON Pointer 通过 Slug 读取已发布版本的子值", { security: PUBLIC, parameters: [slugParameter, { name: "path", in: "path", required: true, schema: { type: "string" } }], responses: { ...ok(), ...notFound } }),
+      },
       "/collections": {
         get: op("列出集合", { scopes: "collection:read" }),
         post: op("新建集合", { scopes: "collection:write", responses: created() }),

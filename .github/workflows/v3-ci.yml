@@ -35,7 +35,7 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npm run build:sdk && npm run build:mcp && npm run test:only
 
       - name: Install browser
         run: npx playwright install --with-deps chromium

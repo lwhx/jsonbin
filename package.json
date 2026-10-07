@@ -1,6 +1,6 @@
 {
   "name": "jsonbin",
-  "version": "3.1.0-rc.1",
+  "version": "3.2.0",
   "private": true,
   "type": "module",
   "description": "A private, Cloudflare-native JSON storage and configuration platform.",
@@ -16,9 +16,10 @@
     "typecheck": "tsc -b",
     "build:sdk": "tsc -p sdk/typescript/tsconfig.json",
     "build:mcp": "tsc -p mcp/tsconfig.json",
-    "test": "npm run build && npm run build:sdk && npm run build:mcp && node --test tests/*.test.mjs",
+    "test": "npm run build && npm run build:sdk && npm run build:mcp && npm run test:only",
     "test:browser": "playwright test",
-    "cf:types": "wrangler types"
+    "cf:types": "wrangler types",
+    "test:only": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",
