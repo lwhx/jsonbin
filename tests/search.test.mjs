@@ -151,3 +151,54 @@ test('worst-case rebuild remains below 1000 internal-service calls and abandoned
   removed = 0; const crowded = kv({ put: async () => {}, delete: async () => { removed++; }, list: async () => ({ keys: Array.from({ length: 201 }, (_, i) => ({ name: 'idx:bin:abandoned-' + i })), list_complete: true }) });
   const partial = await h.request('/search/rebuild', { method: 'POST' }, { ...h.env, DATA, CACHE: crowded }); assert.equal(partial.status, 503); assert.equal((await partial.json()).error, 'search_cleanup_limit_exceeded'); assert.equal(removed, 200);
 });
+
+test('restricted keys search only their authorized scope while scanning and paging (F19)', async () => {
+  const granted = await create('/collections', { name: 'F19 授权集合' });
+  const other = await create('/collections', { name: 'F19 其他集合' });
+  const inScopeIds = [];
+  // Matching bins: two in the granted collection, one out of scope.
+  for (const name of ['f19scope 甲', 'f19scope 乙']) {
+    const bin = await create('/bins', { name, collectionId: granted.meta.id, value: {} });
+    inScopeIds.push(bin.meta.id);
+  }
+  await create('/bins', { name: 'f19scope 丙', collectionId: other.meta.id, value: {} });
+  const key = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'f19-search', scopes: ['bin:read', 'collection:read', 'schema:read'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [granted.meta.id] },
+  } })).json();
+  const auth = { Authorization: `Bearer ${key.token}` };
+
+  // Metadata search pages only authorized candidates: a full page holds two
+  // in-scope bins (the out-of-scope one never consumed a slot), and a cursor
+  // only ever references an in-scope position.
+  const page = await (await h.request('/search?type=bin&limit=2&q=f19scope', { headers: auth })).json();
+  assert.equal(page.items.length, 2, 'the page must be full of authorized matches');
+  assert.deepEqual(page.items.map(item => item.id).sort(), [...inScopeIds].sort());
+  if (page.nextCursor) {
+    const position = JSON.parse(atob(page.nextCursor)).after;
+    if (position.startsWith('bin:')) assert.equal(inScopeIds.includes(position.slice(4)), true, `cursor leaked out-of-scope position ${position}`);
+  }
+
+  // A scope whose matching candidates are all out of scope ends with no
+  // cursor at all instead of paging through invisible resources.
+  const alien = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'f19-alien', scopes: ['bin:read', 'collection:read', 'schema:read'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [] },
+  } })).json();
+  const empty = await (await h.request('/search?type=bin&limit=1&q=f19scope', { headers: { Authorization: `Bearer ${alien.token}` } })).json();
+  assert.deepEqual(empty.items, []);
+  assert.equal(empty.nextCursor, null, 'an exhausted authorized scope must not emit a cursor');
+
+  // Content search: collection grants pass (the old id-only filter denied
+  // them) and out-of-scope searchable bins never leak matches.
+  const searchable = await create('/bins', { name: 'f19content-in', collectionId: granted.meta.id, value: { needle: 'F19NEEDLE' } });
+  inScopeIds.push(searchable.meta.id);
+  const leaky = await create('/bins', { name: 'f19content-out', collectionId: other.meta.id, value: { needle: 'F19NEEDLE' } });
+  for (const bin of [searchable, leaky]) {
+    const current = await (await h.request(`/bins/${bin.meta.id}`)).json();
+    await h.request(`/bins/${bin.meta.id}/meta`, { method: 'PATCH', headers: { 'If-Match': current.etag }, value: { contentSearchMode: 'all' } });
+  }
+  const content = await (await h.request('/search/content?q=F19NEEDLE', { headers: auth })).json();
+  assert.equal(content.items.some(item => item.binId === searchable.meta.id), true, 'a collection grant must see its own searchable bin');
+  assert.equal(content.items.some(item => item.binId === leaky.meta.id), false, 'out-of-scope bins must not leak content matches');
+});

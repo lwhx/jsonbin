@@ -2293,3 +2293,16 @@ test('audit: format exports are shell-safe and type-preserving (F09)', async () 
   assert.match(listText, /- id: 1/);
   assert.match(listText, /tags:/);
 });
+
+test('audit: template management rejects explicit Authorization like every other management route (F21)', async () => {
+  const tpl = await (await request('/templates', { method: 'POST', value: { name: 'F21 模板', value: { a: 1 } } })).json();
+  const invalid = 'Bearer jb_live_invalid_invalid_invalid';
+  assert.equal((await request('/templates', { authorization: invalid })).status, 401);
+  assert.equal((await request(`/templates/${tpl.meta.id}`, { authorization: invalid })).status, 401);
+  assert.equal((await request(`/templates/${tpl.meta.id}`, { method: 'PATCH', etag: tpl.etag, authorization: invalid, value: { name: 'x' } })).status, 401);
+  assert.equal((await request(`/templates/${tpl.meta.id}`, { method: 'DELETE', etag: tpl.etag, authorization: invalid })).status, 401);
+  assert.equal((await request(`/templates/${tpl.meta.id}/create-bin`, { method: 'POST', etag: tpl.etag, authorization: invalid })).status, 401);
+  // Even a VALID bearer cannot ride a session cookie into management.
+  const real = await (await request('/keys', { method: 'POST', value: { name: 'f21-bearer', scopes: ['bin:read'] } })).json();
+  assert.equal((await request('/templates', { authorization: `Bearer ${real.token}` })).status, 401);
+});

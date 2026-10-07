@@ -1,7 +1,7 @@
 import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
-import { requireSession } from "../middleware/auth";
+import { managementSession } from "../lib/system-http";
 import {
   createTemplate,
   deleteTemplate,
@@ -42,12 +42,12 @@ const updateSchema = z
   .strict()
   .refine((input) => Object.keys(input).length > 0);
 
-app.get("/", requireSession, async (c) => {
+app.get("/", managementSession, async (c) => {
   const items = await listTemplates(c.env);
   return c.json({ items, total: items.length });
 });
 
-app.post("/", requireSession, async (c) => {
+app.post("/", managementSession, async (c) => {
   const parsed = createSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
@@ -66,14 +66,14 @@ app.post("/", requireSession, async (c) => {
   }
 });
 
-app.get("/:id", requireSession, async (c) => {
+app.get("/:id", managementSession, async (c) => {
   const record = await getTemplate(c.env, c.req.param("id"));
   if (!record) return c.json({ error: "not_found" }, 404);
   c.header("ETag", record.etag);
   return c.json(record);
 });
 
-app.patch("/:id", requireSession, async (c) => {
+app.patch("/:id", managementSession, async (c) => {
   const parsed = updateSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
@@ -97,7 +97,7 @@ app.patch("/:id", requireSession, async (c) => {
   }
 });
 
-app.delete("/:id", requireSession, async (c) => {
+app.delete("/:id", managementSession, async (c) => {
   const ifMatch = c.req.header("If-Match");
   if (!ifMatch?.trim()) return c.json({ error: "precondition_required" }, 428);
 
@@ -112,7 +112,7 @@ app.delete("/:id", requireSession, async (c) => {
   }
 });
 
-app.post("/:id/create-bin", requireSession, async (c) => {
+app.post("/:id/create-bin", managementSession, async (c) => {
   const template = await getTemplate(c.env, c.req.param("id"));
   if (!template) return c.json({ error: "not_found" }, 404);
 

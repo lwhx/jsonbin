@@ -82,3 +82,15 @@ test('anonymous public reads are limited per IP and the window resets', async t 
     headers: { 'CF-Connecting-IP': '198.51.100.22' },
   }), h.env)).status, 401);
 });
+
+test('an explicit null key rate limit is honored as unlimited (F16)', async t => {
+  const h = await harness(t);
+  const key = await (await h.request('/keys', { method: 'POST', value: { name: 'unlimited', scopes: ['bin:read'], rateLimitPerMinute: null } })).json();
+  assert.equal(key.key.rateLimitPerMinute, null);
+  // Seed this minute's counter past the 120 default: an unlimited key sails
+  // through, while a default-limited key would 429 on this very request.
+  const window = Math.floor(Date.now() / 60000);
+  await h.env.CACHE.put(`rl:k:${key.key.id}:${window}`, '200');
+  const res = await h.worker.fetch(new Request('https://example.test/api/v1/bins', { headers: { Authorization: `Bearer ${key.token}` } }), h.env);
+  assert.equal(res.status, 200, 'null must mean unlimited, not the 120 default');
+});

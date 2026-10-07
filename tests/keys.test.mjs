@@ -341,3 +341,4 @@ test('audit: key scopes and resource scope can be edited after creation and appl
     assert.equal((await request('/bins', { token: revival.token })).status, 200);
   });
 });
+

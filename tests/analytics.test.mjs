@@ -53,3 +53,20 @@ test('API Analytics: records metrics, normalizes routes, aggregates status codes
   }), h.env);
   assert.equal(bearerRes.status, 401);
 });
+
+test('routes are recorded as bounded templates and never leak path content (F08)', async t => {
+  const h = await createSystemHarness('analytics-f08-' + crypto.randomUUID());
+  t.after(() => h.close());
+  const bin = await (await h.request('/bins', { method: 'POST', value: { name: 'F08 Analytics Bin', value: { secretPath: { deeper: true } } } })).json();
+  // A deep JSON path carrying a canary token, plus a totally unknown route.
+  await h.request(`/bins/${bin.meta.id}/value/secretPath/SECRET_PATH_CANARY`);
+  await h.request('/definitely-not-a-route/xyz');
+  const kvKeys = await h.env.CACHE.list({ prefix: 'analytics:agg:' });
+  const raws = [];
+  for (const k of kvKeys.keys) raws.push(await h.env.CACHE.get(k.name));
+  const all = raws.join('\n');
+  assert.equal(all.includes('SECRET_PATH_CANARY'), false, 'deep JSON paths must collapse to /bins/:id/value/*');
+  assert.equal(all.includes('definitely-not-a-route'), false, 'unknown routes must collapse to /api/v1/unmatched');
+  assert.equal(all.includes('GET /api/v1/bins/:id/value/*'), true);
+  assert.equal(all.includes('GET /api/v1/unmatched'), true);
+});

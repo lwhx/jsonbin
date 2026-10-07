@@ -29,6 +29,7 @@ export async function searchJsonContent(
   env: Env,
   query: string,
   mode: "keys" | "all" = "all",
+  authorize?: (bin: { id: string; collectionId: string | null }) => boolean,
 ): Promise<ContentSearchResult> {
   const q = query.trim().toLowerCase();
   if (!q) return { items: [], total: 0 };
@@ -40,7 +41,11 @@ export async function searchJsonContent(
       b.contentSearchMode !== "off" &&
       (mode === "keys" || b.contentSearchMode === "all" || b.contentSearchMode === "keys") &&
       !isExpired(b, Date.now()) &&
-      !b.deletedAt,
+      !b.deletedAt &&
+      // Authorized candidates only (F19): out-of-scope bins neither consume the
+      // scan/byte budgets nor leak snippets; collection grants pass because the
+      // full metadata (including collectionId) is checked here, not just ids.
+      !(authorize && !authorize({ id: b.id, collectionId: b.collectionId ?? null })),
   );
 
   if (eligibleBins.length > MAX_BINS_SCANNED) {

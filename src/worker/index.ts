@@ -42,11 +42,19 @@ app.use("/api/*", async (c, next) => {
   const durationMs = Math.round(performance.now() - start);
   const url = new URL(c.req.url);
   const route = normalizeRoute(url.pathname);
-  const hasAuth = c.req.header("Authorization");
-  const hasCookie = c.req.header("Cookie")?.includes("jb_session");
-  const authType = hasAuth ? "api_key" : hasCookie ? "session" : "anonymous";
+  // Report the identity the auth middlewares actually established, not a guess
+  // from header names: a rejected Bearer attempt still counts as api_key.
+  const authenticatedKey = (c.get as any)("apiKey");
+  const authenticatedUser = (c.get as any)("user");
+  const authType = authenticatedKey
+    ? "api_key"
+    : authenticatedUser
+      ? "session"
+      : c.req.header("Authorization")
+        ? "api_key"
+        : "anonymous";
   const status = c.res.status;
-  const keyId = (c.get("apiKeyId" as any) || (c.get("apiKey" as any) as any)?.id) ?? null;
+  const keyId = authenticatedKey?.id ?? (c.get("apiKeyId" as any)) ?? null;
 
   // Best-effort metrics: never block the response, never fail the request.
   const record = recordAnalytics(c.env, {

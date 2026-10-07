@@ -54,51 +54,45 @@ export type KeyStat = {
 };
 
 /**
- * Normalizes URL path into standard template route to prevent cardinality explosion.
+ * First path segment vocabulary of the mounted API: a route whose root is not
+ * one of these is an unmatched/extraneous path and collapses into a single
+ * bucket, bounding endpoint cardinality no matter what a client sends.
+ */
+const KNOWN_ROUTE_ROOTS = new Set([
+  "b", "bins", "collections", "schemas", "templates", "keys", "webhooks",
+  "trash", "search", "mcp", "system", "activity", "analytics", "auth",
+]);
+const UUID_ROUTE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Normalizes a URL path into a bounded route template. Deep JSON-path tails
+ * (`/value/<arbitrary tokens>`), version numbers and unknown roots collapse
+ * into fixed placeholders: request paths must never leak resource content or
+ * explode KV cardinality (F08).
  */
 export function normalizeRoute(pathname: string): string {
-  // Normalize /api/v1/bins/:id/...
   let route = pathname.replace(/^\/api\/v1/, "");
-  if (!route) route = "/";
+  if (!route || route === "/") return "/api/v1/";
 
-  // Slug route: /b/:slug
-  route = route.replace(/^\/b\/[^\/]+/, "/b/:slug");
+  const segments = route.slice(1).split("/");
+  // /b/:slug and every UUID-rooted namespace collapse to their template form.
+  if (segments[0] === "b") segments[1] = ":slug";
+  for (const [index, segment] of segments.entries()) {
+    if (UUID_ROUTE.test(segment)) segments[index] = ":id";
+  }
 
-  // UUID route: /bins/<uuid>
-  route = route.replace(
-    /^\/bins\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/bins/:id",
-  );
-  // UUID route: /collections/<uuid>
-  route = route.replace(
-    /^\/collections\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/collections/:id",
-  );
-  // UUID route: /schemas/<uuid>
-  route = route.replace(
-    /^\/schemas\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/schemas/:id",
-  );
-  // UUID route: /templates/<uuid>
-  route = route.replace(
-    /^\/templates\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/templates/:id",
-  );
-  // UUID route: /keys/<uuid>
-  route = route.replace(
-    /^\/keys\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/keys/:id",
-  );
-  // UUID route: /webhooks/<uuid>
-  route = route.replace(
-    /^\/webhooks\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
-    "/webhooks/:id",
-  );
-  // MCP routes
-  route = route.replace(/^\/mcp\/message.*/, "/mcp/message");
-  route = route.replace(/^\/mcp\/sse.*/, "/mcp/sse");
+  route = "/" + segments.join("/");
+  // Deep JSON paths carry attacker-controlled tokens: collapse the tail.
+  route = route.replace(/^(\/(?:b\/:slug|bins\/:id)(?:\/published)?)\/value\/.+$/, "$1/value/*");
+  // Numeric version segments are per-bin unbounded: collapse to a placeholder.
+  route = route.replace(/^(\/bins\/:id\/versions)\/\d+(\/restore)?$/, "$1/:version$2");
 
-  return `/api/v1${route}`;
+  // Unknown roots or leftover exotic segments cannot be a real endpoint.
+  const finalSegments = route.slice(1).split("/");
+  const bounded = KNOWN_ROUTE_ROOTS.has(finalSegments[0])
+    && finalSegments.length <= 8
+    && finalSegments.every(segment => /^[a-z0-9:_.@*-]+$/i.test(segment));
+  return bounded ? `/api/v1${route}` : "/api/v1/unmatched";
 }
 
 const ANALYTICS_PREFIX = "analytics:agg:";

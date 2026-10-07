@@ -183,7 +183,11 @@ export async function searchResources(env: Env, query: SearchQuery): Promise<Sea
     const candidate = ordered[i];
     const position = `${candidate.type}:${candidate.id}`;
     if (position.localeCompare(after) <= 0) continue;
-    if (query.type !== 'all' && candidate.type !== query.type || !matches(candidate, normalize(query.q), collections)) continue;
+    if (query.type !== 'all' && candidate.type !== query.type) continue;
+    // Unauthorized candidates must never match, read or become a cursor
+    // position (F19): filter before any scan work or page accounting.
+    if (query.authorize && !query.authorize({ type: candidate.type, id: candidate.id, collectionId: candidate.collectionId ?? null })) continue;
+    if (!matches(candidate, normalize(query.q), collections)) continue;
     const current = await readRow(env, candidate.type, candidate.id);
     if (!current) continue;
     const currentCollections = new Map<string, SearchItem>();
@@ -191,6 +195,9 @@ export async function searchResources(env: Env, query: SearchQuery): Promise<Sea
       const collection = await readRow(env, 'collection', current.collectionId);
       if (collection) { currentCollections.set(collection.id, collection); current.collectionName = collection.name; }
     }
+    // Re-check with the canonical row: the authoritative collectionId decides
+    // collection grants the inventory snapshot may have missed.
+    if (query.authorize && !query.authorize({ type: current.type, id: current.id, collectionId: current.collectionId ?? null })) continue;
     if (!matches(current, normalize(query.q), currentCollections)) continue;
     if (items.length === query.limit) { nextCursor = btoa(JSON.stringify({ after: last, inventory: source.hash, query: queryHash })); break; }
     const { slug: _slug, ...item } = current;

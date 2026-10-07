@@ -26,14 +26,14 @@ app.get('/content', requireAccess("bin:read"), async (c) => {
   const mode = rawMode === 'keys' ? 'keys' : 'all';
 
   try {
-    const results = await searchJsonContent(c.env, q, mode);
     const key = c.get('apiKey');
-    if (key && key.resourceAccess?.mode === 'restricted') {
-      results.items = results.items.filter(item => {
-        return checkResourceAccess(key, { type: 'bin', id: item.binId });
-      });
-      results.total = results.items.length;
-    }
+    // Authorized candidates only, decided from full metadata before any value
+    // body is read (F19): collection grants pass and the scan/byte budgets
+    // count only what the caller may see.
+    const authorize = key && key.resourceAccess?.mode === 'restricted'
+      ? (bin: { id: string; collectionId: string | null }) => checkResourceAccess(key, { type: 'bin', id: bin.id, collectionId: bin.collectionId })
+      : undefined;
+    const results = await searchJsonContent(c.env, q, mode, authorize);
     return c.json(results);
   } catch (err: any) {
     if (err.message === 'content_search_limit_exceeded') {
@@ -54,15 +54,17 @@ app.get('/', async (c, next) => {
   const q = (params.get('q') ?? '').trim(), type = params.get('type') ?? 'all', rawLimit = params.get('limit') ?? '20', cursor = params.get('cursor') ?? undefined;
   if (!q || q.length > 160 || !['all', 'bin', 'collection', 'schema'].includes(type) || !/^[1-9]\d?$/.test(rawLimit)
     || Number(rawLimit) > 50 || cursor !== undefined && (!cursor || cursor.length > 512)) throw new SystemError(400, 'invalid_query');
-  const result = await searchResources(c.env, { q, type: type as SearchType, limit: Number(rawLimit), cursor });
   const key = c.get('apiKey');
-  if (key && key.resourceAccess?.mode === 'restricted') {
-    result.items = result.items.filter(item => {
-      if (item.type === 'bin') return checkResourceAccess(key, { type: 'bin', id: item.id, collectionId: item.collectionId });
-      if (item.type === 'collection') return checkResourceAccess(key, { type: 'collection', id: item.id });
-      return true;
-    });
-  }
+  // The scope predicate runs INSIDE scan/paging (F19): unauthorized resources
+  // never match, never consume the page and never appear in a cursor.
+  const authorize = key && key.resourceAccess?.mode === 'restricted'
+    ? (item: { type: 'all' | 'bin' | 'collection' | 'schema'; id: string; collectionId: string | null }) => {
+        if (item.type === 'bin') return checkResourceAccess(key, { type: 'bin', id: item.id, collectionId: item.collectionId });
+        if (item.type === 'collection') return checkResourceAccess(key, { type: 'collection', id: item.id });
+        return true;
+      }
+    : undefined;
+  const result = await searchResources(c.env, { q, type: type as SearchType, limit: Number(rawLimit), cursor, ...(authorize ? { authorize } : {}) });
   return c.json(result);
 });
 export default app;

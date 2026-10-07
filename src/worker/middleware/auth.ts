@@ -52,7 +52,8 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
     }
     c.set("apiKeyId" as any, current.key.id);
     // Best-effort per-key rate limit; unlimited only via an explicit null override.
-    const limit = current.key.rateLimitPerMinute ?? DEFAULT_KEY_RATE_LIMIT;
+    // ?? would swallow that null into the default (F16): only an absent setting falls back.
+    const limit = current.key.rateLimitPerMinute === undefined ? DEFAULT_KEY_RATE_LIMIT : current.key.rateLimitPerMinute;
     if (limit !== null && c.env.CACHE) {
       const verdict = await checkRateLimit(c.env.CACHE, `k:${current.key.id}`, limit).catch(() => null);
       if (verdict && !verdict.allowed) return rateLimitResponse(verdict.retryAfterSeconds);
