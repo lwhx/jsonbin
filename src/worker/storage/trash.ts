@@ -8,7 +8,7 @@ import { detachBinFromCollection, getCollection } from "./collections";
 
 export type TrashRecord = { meta: BinMeta & { deletedAt: string }; etag: string; status: "deleted" | "expired" | "purging" };
 
-async function readTrash(env: Env, id: string): Promise<(TrashRecord & { legacy: boolean }) | null> {
+export async function readTrash(env: Env, id: string): Promise<(TrashRecord & { legacy: boolean }) | null> {
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
   const stored = canonical ?? await getJson<BinMeta>(bucket, legacyTrashKey(id));

@@ -38,6 +38,7 @@ type Variables = {
     provider: "password" | "github";
   };
   apiKey?: ApiKey;
+  authorizedBinEtag?: string;
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -52,6 +53,10 @@ const checkBinMutationAccess: MiddlewareHandler<{ Bindings: Env; Variables: Vari
   if (current && !checkResourceAccess(key, { type: "bin", id: current.meta.id, collectionId: current.meta.collectionId })) {
     return c.json({ error: "resource_forbidden" }, 403);
   }
+  // Pin the exact snapshot the resource verdict was computed on. Unpreconditioned
+  // writes (PUT/DELETE without If-Match) must commit against it or fail with 412:
+  // authorizing one read while committing a different one is a TOCTOU bypass.
+  if (current) c.set("authorizedBinEtag", current.etag);
   await next();
 };
 const expiresAtSchema = z.iso.datetime({ offset: true }).refine(value => Date.parse(value) > Date.now(), "expiresAt must be in the future")
@@ -642,7 +647,9 @@ app.put("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) =
       c.env,
       c.req.param("id"),
       parsed.data.value,
-      c.req.header("If-Match"),
+      // Restricted keys commit against the authorized snapshot when the client
+      // sent no precondition (F03); everyone else keeps overwrite-latest semantics.
+      c.req.header("If-Match") ?? c.get("authorizedBinEtag"),
       message,
     );
 
@@ -666,7 +673,7 @@ app.put("/:id", requireAccess("bin:update"), checkBinMutationAccess, async (c) =
 });
 
 app.delete("/:id", requireAccess("bin:delete"), checkBinMutationAccess, async (c) => {
-  const deleted = await deleteBin(c.env, c.req.param("id"), c.req.header("If-Match"));
+  const deleted = await deleteBin(c.env, c.req.param("id"), c.req.header("If-Match") ?? c.get("authorizedBinEtag"));
   if (!deleted) return c.json({ error: "not_found" }, 404);
   await auditRequest(c, "bin.deleted", c.req.param("id"));
   return c.json({ ok: true });
@@ -703,7 +710,24 @@ app.patch("/:id/meta", requireAccess("bin:update"), checkBinMutationAccess, asyn
 });
 
 const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
-  const load = async () => { c.set("bin", await getBinBySlug(c.env, c.req.param("slug")!)); await next(); };
+  // Slug and ID reads authorize the same canonical snapshot: a restricted key
+  // must never widen its resource scope by switching to the /b/:slug entry.
+  const load = async (): Promise<void> => {
+    const record = await getBinBySlug(c.env, c.req.param("slug")!);
+    c.set("bin", record);
+    if (!record) {
+      await next();
+      return;
+    }
+
+    const key = c.get("apiKey");
+    if (key && !checkResourceAccess(key, { type: "bin", id: record.meta.id, collectionId: record.meta.collectionId })) {
+      c.res = c.json({ error: "resource_forbidden" }, 403);
+      return;
+    }
+    await next();
+  };
+  // Explicit credentials keep their authentication and scope semantics on public Bins.
   if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
   const record = await getBinBySlug(c.env, c.req.param("slug")!);
   c.set("bin", record);

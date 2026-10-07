@@ -1959,7 +1959,7 @@ test('audit: restoring into an occupied slug detaches the alias instead of overw
   await bucket.put(`bins/${second.meta.id}/meta.json`, JSON.stringify({ ...second.meta, slug: 'contested-slug' }));
 
   const record = (await (await request('/trash/bins')).json()).items.find(i => i.meta.id === first.meta.id);
-  const restored = await (await request(`/trash/bins/${first.meta.id}/restore`, { method: 'POST', etag: record.etag }));
+  const restored = await request(`/trash/bins/${first.meta.id}/restore`, { method: 'POST', etag: record.etag });
   assert.equal(restored.status, 200);
   const restoredBody = await restored.json();
   // Primary data always wins; only the conflicting alias is given up.
@@ -1968,6 +1968,108 @@ test('audit: restoring into an occupied slug detaches the alias instead of overw
   const slugBody = await (await request('/b/contested-slug')).json();
   assert.equal(slugBody.meta.id, second.meta.id);
   assert.equal((await request(`/bins/${first.meta.id}`)).status, 200);
+});
+
+test('audit: restricted key cannot widen its scope through the /b/:slug entry (F01)', async () => {
+  const allowed = await (await request('/collections', { method: 'POST', value: { name: 'Slug Allowed' } })).json();
+  const secret = await (await request('/bins', { method: 'POST', value: { name: 'Slug Secret', slug: 'restricted-slug-target', value: { private: 'data' } } })).json();
+  const granted = await (await request('/bins', { method: 'POST', value: { name: 'Slug Granted', slug: 'restricted-slug-granted', collectionId: allowed.meta.id, value: { ok: true } } })).json();
+  const byId = await (await request('/bins', { method: 'POST', value: { name: 'Granted By Id', value: { ok: 2 } } })).json();
+  const publicBin = await (await request('/bins', { method: 'POST', value: { name: 'Public Slugged', slug: 'restricted-slug-public', visibility: 'public', value: { open: true } } })).json();
+
+  const emptyKey = await (await request('/keys', { method: 'POST', value: {
+    name: 'slug-empty', scopes: ['bin:read'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [] },
+  } })).json();
+  const auth = `Bearer ${emptyKey.token}`;
+
+  // An empty-scope key is denied on the slug entry exactly like on the ID entry,
+  // across current, published and deep-path reads.
+  assert.equal((await request(`/bins/${secret.meta.id}`, { authorization: auth })).status, 403);
+  for (const path of ['/b/restricted-slug-target', '/b/restricted-slug-target/published', '/b/restricted-slug-target/value/private']) {
+    assert.equal((await request(path, { authorization: auth })).status, 403, path);
+  }
+  // Explicit restricted credentials keep their semantics on public Bins: no
+  // silent fallback to anonymous public access.
+  assert.equal((await request('/b/restricted-slug-public', { authenticated: false })).status, 200);
+  assert.equal((await request('/b/restricted-slug-public', { authorization: auth })).status, 403);
+
+  // Explicit bin grants and collection grants keep working through the slug entry.
+  const binKey = await (await request('/keys', { method: 'POST', value: {
+    name: 'slug-by-id', scopes: ['bin:read'],
+    resourceAccess: { mode: 'restricted', binIds: [byId.meta.id], collectionIds: [] },
+  } })).json();
+  const collectionKey = await (await request('/keys', { method: 'POST', value: {
+    name: 'slug-by-collection', scopes: ['bin:read'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [allowed.meta.id] },
+  } })).json();
+  assert.equal((await request(`/bins/${byId.meta.id}`, { authorization: `Bearer ${binKey.token}` })).status, 200);
+  assert.equal((await request('/b/restricted-slug-granted', { authorization: `Bearer ${collectionKey.token}` })).status, 200);
+  // A bin-granted key stays scoped: another Bin's slug is still denied.
+  assert.equal((await request('/b/restricted-slug-target', { authorization: `Bearer ${binKey.token}` })).status, 403);
+  assert.equal((await request('/b/restricted-slug-public', { authorization: `Bearer ${binKey.token}` })).status, 403);
+});
+
+test('audit: restricted key cannot list, restore or purge out-of-scope trash entries (F02)', async () => {
+  const allowed = await (await request('/collections', { method: 'POST', value: { name: 'Trash Allowed' } })).json();
+  const secret = await (await request('/bins', { method: 'POST', value: { name: 'Trash Secret', value: { private: 1 } } })).json();
+  const granted = await (await request('/bins', { method: 'POST', value: { name: 'Trash Granted', collectionId: allowed.meta.id, value: { ok: 1 } } })).json();
+  assert.equal((await request(`/bins/${secret.meta.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await request(`/bins/${granted.meta.id}`, { method: 'DELETE' })).status, 200);
+
+  const emptyKey = await (await request('/keys', { method: 'POST', value: {
+    name: 'trash-empty', scopes: ['bin:read', 'bin:update', 'history:read', 'bin:delete'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [] },
+  } })).json();
+  const auth = `Bearer ${emptyKey.token}`;
+
+  // The listing leaks neither ids nor ETags of out-of-scope entries.
+  const listed = await (await request('/trash/bins', { authorization: auth })).json();
+  assert.equal(listed.total, 0);
+  assert.deepEqual(listed.items, []);
+
+  // Restore, single purge and batch purge are denied per item and leave data intact.
+  assert.equal((await request(`/trash/bins/${secret.meta.id}/restore`, { method: 'POST', etag: '"never"', authorization: auth })).status, 403);
+  assert.equal((await request(`/trash/bins/${secret.meta.id}`, { method: 'DELETE', etag: '"never"', authorization: auth })).status, 403);
+  const batch = await (await request('/trash/bins/purge', { method: 'POST', value: { items: [{ id: secret.meta.id, etag: '"never"' }] }, authorization: auth })).json();
+  assert.deepEqual(batch.results, [{ id: secret.meta.id, status: 403 }]);
+  assert.ok(await bucket.get(`bins/${secret.meta.id}/versions/000001.json`), 'denied purge must not delete versions');
+  // The denied restore must not have resurrected the Bin: trashed Bins stay
+  // hidden from normal routes for every identity (404, not 403).
+  assert.equal((await request(`/bins/${secret.meta.id}`, { authorization: auth })).status, 404);
+  assert.ok((await (await request('/trash/bins')).json()).items.some(i => i.meta.id === secret.meta.id), 'session still sees the trashed Bin');
+
+  // Unknown ids resolve to 404 for restricted keys: no purged-vs-absent probing oracle.
+  assert.equal((await request(`/trash/bins/${crypto.randomUUID()}`, { method: 'DELETE', etag: '"x"', authorization: auth })).status, 404);
+
+  // A collection grant restores its own trashed Bin and still cannot touch the other one.
+  const collectionKey = await (await request('/keys', { method: 'POST', value: {
+    name: 'trash-collection', scopes: ['bin:read', 'bin:update', 'history:read', 'bin:delete'],
+    resourceAccess: { mode: 'restricted', binIds: [], collectionIds: [allowed.meta.id] },
+  } })).json();
+  const colAuth = `Bearer ${collectionKey.token}`;
+  const visible = await (await request('/trash/bins', { authorization: colAuth })).json();
+  const entry = visible.items.find(i => i.meta.id === granted.meta.id);
+  assert.ok(entry, 'collection-granted key must still see its own trashed Bin');
+  assert.equal(visible.items.some(i => i.meta.id === secret.meta.id), false, 'other entries stay hidden');
+  const restored = await request(`/trash/bins/${granted.meta.id}/restore`, { method: 'POST', etag: entry.etag, authorization: colAuth });
+  assert.equal(restored.status, 200);
+  assert.equal((await request(`/trash/bins/${secret.meta.id}`, { method: 'DELETE', etag: '"never"', authorization: colAuth })).status, 403);
+
+  // Mixed batch: only the granted item is purged, the other reports 403.
+  const restoredBody = await restored.json();
+  assert.equal((await request(`/bins/${granted.meta.id}`, { method: 'DELETE', etag: restoredBody.etag })).status, 200);
+  const trashNow = (await (await request('/trash/bins')).json()).items;
+  const grantedEntry = trashNow.find(i => i.meta.id === granted.meta.id);
+  const secretEntry = trashNow.find(i => i.meta.id === secret.meta.id);
+  const mixed = await (await request('/trash/bins/purge', { method: 'POST', value: { items: [
+    { id: granted.meta.id, etag: grantedEntry.etag },
+    { id: secret.meta.id, etag: secretEntry.etag },
+  ] }, authorization: colAuth })).json();
+  const byIdResult = Object.fromEntries(mixed.results.map(r => [r.id, r.status]));
+  assert.equal(byIdResult[granted.meta.id], 200, 'granted item purges');
+  assert.equal(byIdResult[secret.meta.id], 403, 'out-of-scope item is denied');
+  assert.ok(await bucket.get(`bins/${secret.meta.id}/versions/000001.json`), 'denied item keeps its versions');
 });
 
 test('audit: save-as-template and template instantiation pin the captured schema revision', async () => {

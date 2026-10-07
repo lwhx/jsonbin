@@ -45,3 +45,32 @@ test('bounded settings reads reject actual excess bytes and invalid UTF-8; audit
  assert.equal((await h.request('/system/settings',{method:'PATCH',headers:{'If-Match':etag},value:{defaultVisibility:'public'}},env)).status,200);
  assert.equal((await (await h.request('/system/settings')).json()).settings.defaultVisibility,'public'); assert.ok(!JSON.stringify(diagnostics).includes('audit-secret'));
 });
+test('unpreconditioned restricted writes commit against the authorized snapshot, not a newer one (F03)',async t=>{
+ const h=await harness(t);
+ const colA=await (await h.request('/collections',{method:'POST',value:{name:'Scope A'}})).json();
+ const colB=await (await h.request('/collections',{method:'POST',value:{name:'Scope B'}})).json();
+ const key=await (await h.request('/keys',{method:'POST',value:{name:'f03-snapshot',scopes:['bin:update','bin:delete'],resourceAccess:{mode:'restricted',binIds:[],collectionIds:[colA.meta.id]}}})).json();
+ const auth={Authorization:`Bearer ${key.token}`};
+ // Fire the out-of-scope collection move exactly on the storage commit read
+ // (read #2 for restricted keys: #1 is the middleware's authorization read).
+ const movedBeforeCommit=(binId,targetId,onRead=2)=>{let metaReads=0;return {...h.env,DATA:h.adapt({get:async(k,...args)=>{
+  if(k===`bins/${binId}/meta.json`&&++metaReads===onRead){const stored=await (await h.bucket.get(k)).json();await h.bucket.put(k,JSON.stringify({...stored,collectionId:targetId}));}
+  return h.bucket.get(k,...args);}})};};
+ // PUT without If-Match: the restricted key must not write the moved, out-of-scope snapshot.
+ const putBin=await (await h.request('/bins',{method:'POST',value:{name:'F03 PUT',collectionId:colA.meta.id,value:{secret:false}}})).json();
+ assert.equal((await h.request(`/bins/${putBin.meta.id}`,{method:'PUT',headers:auth,value:{value:{hijacked:true}}},movedBeforeCommit(putBin.meta.id,colB.meta.id))).status,412);
+ const afterPut=await (await h.request(`/bins/${putBin.meta.id}`)).json();
+ assert.deepEqual(afterPut.value,{secret:false},'the out-of-scope write must not land');assert.equal(afterPut.meta.collectionId,colB.meta.id);
+ // A retry now authorizes against the moved Bin and is refused outright.
+ assert.equal((await h.request(`/bins/${putBin.meta.id}`,{method:'PUT',headers:auth,value:{value:{hijacked:true}}})).status,403);
+ // DELETE without If-Match: same binding, the soft delete must not land.
+ const delBin=await (await h.request('/bins',{method:'POST',value:{name:'F03 DELETE',collectionId:colA.meta.id,value:{keep:1}}})).json();
+ assert.equal((await h.request(`/bins/${delBin.meta.id}`,{method:'DELETE',headers:auth},movedBeforeCommit(delBin.meta.id,colB.meta.id))).status,412);
+ assert.equal((await h.request(`/bins/${delBin.meta.id}`)).status,200,'denied delete must not trash the Bin');
+ // The same interleave stays legal for the admin session (overwrite-latest semantics).
+ const adminBin=await (await h.request('/bins',{method:'POST',value:{name:'F03 admin',collectionId:colA.meta.id,value:{a:1}}})).json();
+ assert.equal((await h.request(`/bins/${adminBin.meta.id}`,{method:'PUT',value:{value:{a:2}}},movedBeforeCommit(adminBin.meta.id,colB.meta.id,1))).status,200);
+ // Unchanged in-scope snapshot: PUT without If-Match still succeeds for the restricted key.
+ const stableBin=await (await h.request('/bins',{method:'POST',value:{name:'F03 stable',collectionId:colA.meta.id,value:{ok:1}}})).json();
+ assert.equal((await h.request(`/bins/${stableBin.meta.id}`,{method:'PUT',headers:auth,value:{value:{ok:2}}})).status,200);
+});
