@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 
 type Props = {
@@ -8,9 +8,11 @@ type Props = {
   dismissible?: boolean;
   className?: string;
   focusContainer?: boolean;
+  /** Explicit initial focus target; without it the first focusable in document order wins. */
+  initialFocus?: RefObject<HTMLElement | null>;
 };
 
-export function Dialog({ titleId, children, onClose, dismissible = true, className = "", focusContainer = false }: Props) {
+export function Dialog({ titleId, children, onClose, dismissible = true, className = "", focusContainer = false, initialFocus }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const focusable = () => ref.current?.querySelector<HTMLElement>(
     "[autofocus], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
@@ -20,7 +22,7 @@ export function Dialog({ titleId, children, onClose, dismissible = true, classNa
     const previous = document.activeElement;
     const dialog = ref.current;
     if (!dialog) return;
-    (focusable() ?? dialog).focus();
+    (initialFocus?.current ?? focusable() ?? dialog).focus();
     const containFocus = (event: FocusEvent) => {
       if (event.target instanceof Node && !dialog.contains(event.target)) (focusable() ?? dialog).focus();
     };

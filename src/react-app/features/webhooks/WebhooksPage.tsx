@@ -25,7 +25,9 @@ export function WebhooksPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState<Error | null>(null), [notice, setNotice] = useState("");
 
-  const dirty = Boolean(editing) || Boolean(name || url || secret || events.length || precise);
+  // The create form's resting state is name/url/secret/precise empty plus the
+  // default ["bin.*"] picker selection; only deviations from that count as dirty.
+  const dirty = Boolean(editing) || Boolean(name || url || secret || precise) || events.length !== 1 || events[0] !== "bin.*";
   useEffect(() => { onDirtyChange(dirty || busy); }, [dirty, busy, onDirtyChange]);
   useEffect(() => {
     if (!dirty && !busy) return;

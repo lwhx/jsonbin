@@ -17,6 +17,7 @@ import { JsonTree } from './JsonTree';
 import { JsonFormEditor, type JsonFormState } from "./JsonFormEditor";
 import { Dialog } from "../../components/Dialog";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { CopyButton } from "../../components/CopyButton";
 
 const JsonEditor = lazy(() => import("./JsonEditor"));
 const BinHistory = lazy(() => import("./BinHistory"));
@@ -300,9 +301,9 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     <div className="detail-info"><span>v{record.meta.currentVersion}</span><span>{record.meta.size} B</span>
       <span>更新于 {new Date(record.meta.updatedAt).toLocaleString("zh-CN")}</span><ExpiryLabel expiresAt={record.meta.expiresAt} /></div>
     <div className="detail-id"><code>{id}</code>
-      <button type="button" className="secondary-button" onClick={() => copy(id)}><Copy size={14} />复制 Bin ID</button>
-      <button type="button" className="secondary-button" onClick={() => copy(apiUrl)}><Copy size={14} />复制 API 地址</button>
-      <button type="button" className="secondary-button" onClick={() => copy(draft.text)} title="复制当前 JSON 内容"><Copy size={14} />复制 JSON</button>
+      <CopyButton label="复制 Bin ID" value={id} />
+      <CopyButton label="复制 API 地址" value={apiUrl} />
+      <CopyButton label="复制 JSON" title="复制当前 JSON 内容" value={draft.text} />
       <button type="button" className="secondary-button" onClick={async () => {
         try {
           const res = await fetch(`/api/v1/bins/${id}/clone`, {

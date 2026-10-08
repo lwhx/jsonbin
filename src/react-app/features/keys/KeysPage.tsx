@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createKey, KeyApiError, listKeys, purgeKey, revealKeyToken, revokeKey, scopes, scopeLabels, updateKey } from "./api";
 import type { ApiKey, ApiScope } from "./api";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { CopyButton } from "../../components/CopyButton";
 const defaultScopes: ApiScope[] = ["bin:read"];
 const displayTime = (value: string | null, fallback: string) => value ? new Date(value).toLocaleString("zh-CN") : fallback;
 const toLocalInput = (iso: string) => { const d = new Date(iso); const pad = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -68,11 +69,6 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
       await client.invalidateQueries({ queryKey: ["keys"] });
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
   }
-  async function copy() {
-    if (!disclosure) return;
-    try { await navigator.clipboard.writeText(disclosure.token); if (mounted.current) setNotice("密钥已复制。以后也可以从密钥列表重新查看或复制。"); }
-    catch { if (mounted.current) setError(new Error("无法访问剪贴板，请手动选择并复制密钥。")); }
-  }
   async function toggleReveal(key: ApiKey) {
     if (revealed[key.id]) { hideToken(key.id); return; }
     if (busy || !key.revealable) return;
@@ -81,18 +77,6 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
       const result = await revealKeyToken(key.id);
       if (mounted.current) setRevealed(previous => ({ ...previous, [key.id]: result.token }));
     } catch (caught) { report(caught); } finally { if (mounted.current) setBusy(false); }
-  }
-  async function copyStored(key: ApiKey) {
-    if (busy || !key.revealable) return;
-    setBusy(true); setError(null); setNotice("");
-    try {
-      const token = revealed[key.id] ?? (await revealKeyToken(key.id)).token;
-      await navigator.clipboard.writeText(token);
-      if (mounted.current) setNotice(`密钥“${key.name}”已复制。`);
-    } catch (caught) {
-      if (caught instanceof KeyApiError) report(caught);
-      else if (mounted.current) setError(new Error("无法访问剪贴板，请显示密钥后手动复制。"));
-    } finally { if (mounted.current) setBusy(false); }
   }
   function startEdit(key: ApiKey) {
     setEditing({
@@ -196,7 +180,7 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
     {disclosure && <section className="panel detail-form key-disclosure" aria-label="新密钥明文"><h2>新密钥已创建</h2>
       <p>“{disclosure.key.name}”现在可以直接复制；关闭此提示或刷新页面后，也可以在下方密钥列表中重新显示。</p>
       <label>新 API 密钥<input aria-label="新 API 密钥" readOnly type="text" spellCheck={false} autoComplete="off" value={disclosure.token} onFocus={event => event.target.select()} /></label>
-      <div className="detail-actions"><button className="secondary-button" type="button" onClick={copy}>复制密钥</button>
+      <div className="detail-actions"><CopyButton label="复制密钥" value={disclosure.token} />
         <button className="primary-button" type="button" onClick={() => { setDisclosure(null); setNotice("提示已关闭，需要时可从密钥列表重新查看。"); }}>关闭</button></div>
     </section>}
     <form className="panel detail-form" onSubmit={event => { event.preventDefault(); create(); }}>
@@ -287,8 +271,8 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
           <div className="key-card-actions">
             {key.revealable && <button className="secondary-button" type="button" disabled={busy} onClick={() => toggleReveal(key)}
               aria-label={`${revealed[key.id] ? "隐藏密钥" : "显示密钥"} ${key.name}`}>{revealed[key.id] ? "隐藏密钥" : "显示密钥"}</button>}
-            {key.revealable && <button className="secondary-button" type="button" disabled={busy} onClick={() => copyStored(key)}
-              aria-label={`复制密钥 ${key.name}`}>复制密钥</button>}
+            {key.revealable && <CopyButton label="复制密钥" ariaLabel={`复制密钥 ${key.name}`} disabled={busy}
+              value={async () => revealed[key.id] ?? (await revealKeyToken(key.id)).token} />}
             {!key.revokedAt && <button className="secondary-button" type="button" disabled={busy} onClick={() => editing?.id === key.id ? setEditing(null) : startEdit(key)}
               aria-label={`编辑权限 ${key.name}`}>{editing?.id === key.id ? "取消编辑" : "编辑权限"}</button>}
             <button className="danger-button" disabled={busy || Boolean(key.revokedAt)} onClick={() => revoke(key)} aria-label={`撤销密钥 ${key.name}`}>撤销密钥</button>

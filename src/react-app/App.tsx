@@ -14,6 +14,7 @@ import {
   Database,
   FileJson2,
   KeyRound,
+  Keyboard,
   Webhook,
   LayoutDashboard,
   LockKeyhole,
@@ -52,6 +53,7 @@ import { ActivityPage } from "./features/activity/ActivityPage";
 import { TrashPage } from "./features/trash/TrashPage";
 import { Dialog } from "./components/Dialog";
 import { useConfirm } from "./components/ConfirmDialog";
+import { useToast } from "./components/Toast";
 import { ExpiryLabel, expiryFromInput } from "./features/bins/expiry";
 
 type Health = {
@@ -357,6 +359,7 @@ function LoginScreen({
                 onChange={(event) => setUsername(event.target.value)}
                 placeholder="admin"
                 required
+                autoFocus
               />
             </label>
 
@@ -412,6 +415,7 @@ function AuthenticatedApp({
 }) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const toast = useToast();
   const [route, setRoute] = useState(() => window.location.hash);
   const [detailDirty, setDetailDirty] = useState(false);
   const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/webhooks" ? "Webhooks" : route === "#/analytics" ? "Analytics" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/mcp" ? "Mcp" : route === "#/settings" ? "Settings" : "Overview";
@@ -420,6 +424,7 @@ function AuthenticatedApp({
   const schemaId = schemaIdFromHash(route);
   const setSection = (section: Section) => { window.location.hash = section === "Bins" ? "/bins" : section === "Collections" ? "/collections" : section === "Schemas" ? "/schemas" : section === "Keys" ? "/keys" : section === "Webhooks" ? "/webhooks" : section === "Analytics" ? "/analytics" : section === "Trash" ? "/trash" : section === "Activity" ? "/activity" : section === "Docs" ? "/docs" : section === "Mcp" ? "/mcp" : section === "Settings" ? "/settings" : "/"; };
   const [createOpen, setCreateOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       const isInput = event.target instanceof HTMLElement && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable);
@@ -429,6 +434,9 @@ function AuthenticatedApp({
       } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n' && !isInput) {
         event.preventDefault();
         setCreateOpen(true);
+      } else if (event.key === '?' && !isInput && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setShortcutsOpen(true);
       }
     };
     window.addEventListener('keydown', shortcut); return () => window.removeEventListener('keydown', shortcut);
@@ -581,6 +589,15 @@ function AuthenticatedApp({
             <button
               className="icon-button"
               type="button"
+              onClick={() => setShortcutsOpen(true)}
+              aria-label="键盘快捷键"
+              title="键盘快捷键"
+            >
+              <Keyboard size={17} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               onClick={onToggleTheme}
               aria-label="切换明暗主题"
             >
@@ -657,14 +674,34 @@ function AuthenticatedApp({
       {createOpen && (
         <CreateBinDialog
           onClose={() => setCreateOpen(false)}
-          onCreated={async (id) => {
+          onCreated={async (id, name) => {
             setCreateOpen(false);
             await queryClient.invalidateQueries({ queryKey: ["bins"] });
             await queryClient.invalidateQueries({ queryKey: ["collections"] });
             await queryClient.invalidateQueries({ queryKey: ["collection-bins"] });
+            // The navigation below unmounts this page: only a toast survives it.
+            toast(`数据仓“${name}”已创建，正在打开…`);
             window.location.hash = binHash(id);
           }}
         />
+      )}
+
+      {shortcutsOpen && (
+        <Dialog titleId="shortcuts-dialog-title" onClose={() => setShortcutsOpen(false)}>
+          <div className="confirm-dialog">
+            <h2 id="shortcuts-dialog-title">键盘快捷键</h2>
+            <ul className="shortcut-list">
+              <li><span className="shortcut-keys"><kbd>⌘/Ctrl</kbd><kbd>K</kbd></span><span>打开全局搜索</span></li>
+              <li><span className="shortcut-keys"><kbd>⌘/Ctrl</kbd><kbd>N</kbd></span><span>新建数据仓</span></li>
+              <li><span className="shortcut-keys"><kbd>⌘/Ctrl</kbd><kbd>S</kbd></span><span>保存当前编辑（数据仓详情页）</span></li>
+              <li><span className="shortcut-keys"><kbd>?</kbd></span><span>打开本帮助</span></li>
+              <li><span className="shortcut-keys"><kbd>Esc</kbd></span><span>关闭对话框</span></li>
+            </ul>
+            <div className="dialog-actions">
+              <button type="button" className="primary-button" autoFocus onClick={() => setShortcutsOpen(false)}>知道了</button>
+            </div>
+          </div>
+        </Dialog>
       )}
     </div>
   );
@@ -839,6 +876,8 @@ function BinsPage({
   const [batchTag, setBatchTag] = useState<string>("");
   const [batchBusy, setBatchBusy] = useState(false);
   const client = useQueryClient();
+  const confirm = useConfirm();
+  const toast = useToast();
 
   const allTags = Array.from(new Set(bins.flatMap(b => b.tags ?? []))).sort();
 
@@ -877,50 +916,71 @@ function BinsPage({
 
   async function executeBatch() {
     if (!batchAction || selectedIds.length === 0 || batchBusy) return;
+    // Destructive batch operations get the same guard as a single delete.
+    if (batchAction === "trash" && !await confirm({
+      title: "移入回收站",
+      message: `确定要将选中的 ${selectedIds.length} 个数据仓移入回收站吗？移入后仍可从回收站恢复。`,
+      confirmLabel: "移入回收站",
+      danger: true,
+    })) return;
 
-    // We need etags for these bins. Fetch from API or bin meta if available.
     setBatchBusy(true);
     try {
-      const itemsToProcess: Array<{ id: string; etag: string }> = [];
-      for (const id of selectedIds) {
+      // One parallel round of reads replaces a serial ETag chain.
+      const itemsToProcess = (await Promise.all(selectedIds.map(async id => {
         const binRes = await fetch(`/api/v1/bins/${id}`, { credentials: "include" });
-        if (binRes.ok) {
-          const data = await binRes.json();
-          itemsToProcess.push({ id, etag: data.etag });
-        }
+        return binRes.ok ? { id, etag: (await binRes.json()).etag as string } : null;
+      }))).filter((item): item is { id: string; etag: string } => item !== null);
+
+      if (itemsToProcess.length === 0) {
+        toast("无法读取所选数据仓的最新状态，请刷新列表后重试。", "error");
+        return;
       }
 
-      if (itemsToProcess.length > 0) {
-        let payload: any = undefined;
-        if (batchAction === "add_tags") {
-          payload = { tags: batchTag.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean) };
-        } else if (batchAction === "set_visibility_public") {
-          payload = { visibility: "public" };
-        } else if (batchAction === "set_visibility_private") {
-          payload = { visibility: "private" };
-        }
-
-        const operation =
-          batchAction === "set_visibility_public" || batchAction === "set_visibility_private"
-            ? "set_visibility"
-            : batchAction;
-
-        await fetch("/api/v1/bins/batch", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            operation,
-            items: itemsToProcess,
-            payload,
-          }),
-        });
-
-        setSelectedIds([]);
-        setBatchAction("");
-        setBatchTag("");
-        await client.invalidateQueries({ queryKey: ["bins"] });
+      let payload: any = undefined;
+      if (batchAction === "add_tags") {
+        payload = { tags: batchTag.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean) };
+      } else if (batchAction === "set_visibility_public") {
+        payload = { visibility: "public" };
+      } else if (batchAction === "set_visibility_private") {
+        payload = { visibility: "private" };
       }
+
+      const operation =
+        batchAction === "set_visibility_public" || batchAction === "set_visibility_private"
+          ? "set_visibility"
+          : batchAction;
+
+      const response = await fetch("/api/v1/bins/batch", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation,
+          items: itemsToProcess,
+          payload,
+        }),
+      });
+      if (!response.ok) {
+        toast("批量操作提交失败，请重试。", "error");
+        return;
+      }
+      const results: Array<{ id: string; status: string }> = (await response.json()).results ?? [];
+      const updated = results.filter(result => result.status === "updated").length;
+      const failed = selectedIds.length - updated;
+      toast(
+        failed
+          ? `批量操作完成：${updated} 成功，${failed} 未生效（可能已被修改或处于锁定状态）。`
+          : `批量操作完成：${updated} 个数据仓已更新。`,
+        failed ? "error" : "success",
+      );
+
+      setSelectedIds([]);
+      setBatchAction("");
+      setBatchTag("");
+      await client.invalidateQueries({ queryKey: ["bins"] });
+    } catch {
+      toast("批量操作失败，请重试。", "error");
     } finally {
       setBatchBusy(false);
     }
@@ -1021,6 +1081,7 @@ function BinsPage({
             value={batchAction}
             onChange={(e) => setBatchAction(e.target.value)}
             disabled={batchBusy}
+            aria-label="批量操作"
             style={{
               padding: "6px 10px",
               borderRadius: "6px",
@@ -1167,7 +1228,7 @@ function CreateBinDialog({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: (id: string) => void;
+  onCreated: (id: string, name: string) => void;
 }) {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -1202,6 +1263,7 @@ function CreateBinDialog({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const loggedOut = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const cancel = () => {
@@ -1260,7 +1322,7 @@ function CreateBinDialog({
 
       const created = await response.json() as { meta: BinMeta };
       if (loggedOut.current) return;
-      onCreated(created.meta.id);
+      onCreated(created.meta.id, created.meta.name);
     } catch {
       if (loggedOut.current) return;
       setError("无法连接 Worker API。");
@@ -1272,7 +1334,7 @@ function CreateBinDialog({
   }
 
   return (
-    <Dialog titleId="create-bin-title" onClose={onClose} dismissible={!saving}>
+    <Dialog titleId="create-bin-title" onClose={onClose} dismissible={!saving} initialFocus={nameInputRef}>
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">新建文档</span>
@@ -1344,6 +1406,7 @@ function CreateBinDialog({
             <label>
               名称
               <input
+                ref={nameInputRef}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="cloudflare-config"
