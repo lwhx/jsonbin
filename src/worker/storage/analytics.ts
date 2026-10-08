@@ -53,46 +53,123 @@ export type KeyStat = {
   count429: number;
 };
 
-/**
- * First path segment vocabulary of the mounted API: a route whose root is not
- * one of these is an unmatched/extraneous path and collapses into a single
- * bucket, bounding endpoint cardinality no matter what a client sends.
- */
-const KNOWN_ROUTE_ROOTS = new Set([
-  "b", "bins", "collections", "schemas", "templates", "keys", "webhooks",
-  "trash", "search", "mcp", "system", "activity", "analytics", "auth",
+/** Only actual API templates are allowed as analytics dimensions. Arbitrary request
+ * paths must never leak resource names or create unbounded KV maps. */
+const KNOWN_ROUTES = new Set([
+  "/",
+  "/activity",
+  "/analytics/overview",
+  "/auth/config",
+  "/auth/github",
+  "/auth/github/callback",
+  "/auth/login",
+  "/auth/logout",
+  "/auth/me",
+  "/b/:slug",
+  "/b/:slug/published",
+  "/b/:slug/published/value",
+  "/b/:slug/published/value/*",
+  "/b/:slug/value",
+  "/b/:slug/value/*",
+  "/bins",
+  "/bins/:id",
+  "/bins/:id/clone",
+  "/bins/:id/meta",
+  "/bins/:id/publish",
+  "/bins/:id/published",
+  "/bins/:id/published/value",
+  "/bins/:id/published/value/*",
+  "/bins/:id/rollback",
+  "/bins/:id/save-as-template",
+  "/bins/:id/value",
+  "/bins/:id/value/*",
+  "/bins/:id/versions",
+  "/bins/:id/versions/:version",
+  "/bins/:id/versions/:version/restore",
+  "/bins/batch",
+  "/collections",
+  "/collections/:id",
+  "/collections/:id/bins",
+  "/keys",
+  "/keys/:id",
+  "/keys/:id/purge",
+  "/keys/:id/token",
+  "/mcp",
+  "/mcp/message",
+  "/mcp/sse",
+  "/openapi.json",
+  "/schemas",
+  "/schemas/:id",
+  "/schemas/:id/validate",
+  "/search",
+  "/search/content",
+  "/search/index",
+  "/search/rebuild",
+  "/system/export",
+  "/system/health",
+  "/system/import",
+  "/system/info",
+  "/system/restore",
+  "/system/settings",
+  "/templates",
+  "/templates/:id",
+  "/templates/:id/create-bin",
+  "/trash/bins",
+  "/trash/bins/:id",
+  "/trash/bins/:id/restore",
+  "/trash/bins/purge",
+  "/webhooks",
+  "/webhooks/:id",
+  "/webhooks/:id/deliveries",
+  "/webhooks/:id/test",
 ]);
 const UUID_ROUTE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * Normalizes a URL path into a bounded route template. Deep JSON-path tails
- * (`/value/<arbitrary tokens>`), version numbers and unknown roots collapse
- * into fixed placeholders: request paths must never leak resource content or
- * explode KV cardinality (F08).
- */
 export function normalizeRoute(pathname: string): string {
-  let route = pathname.replace(/^\/api\/v1/, "");
-  if (!route || route === "/") return "/api/v1/";
-
+  if (pathname === "/api/v1" || pathname === "/api/v1/") return "/api/v1/";
+  if (!pathname.startsWith("/api/v1/")) return "/api/v1/unmatched";
+  let route = pathname.slice("/api/v1".length).replace(/\/$/, "");
   const segments = route.slice(1).split("/");
-  // /b/:slug and every UUID-rooted namespace collapse to their template form.
-  if (segments[0] === "b") segments[1] = ":slug";
-  for (const [index, segment] of segments.entries()) {
-    if (UUID_ROUTE.test(segment)) segments[index] = ":id";
+  if (segments[0] === "b" && segments[1]) segments[1] = ":slug";
+  for (let i = 0; i < segments.length; i++) {
+    if (UUID_ROUTE.test(segments[i])) segments[i] = ":id";
   }
-
   route = "/" + segments.join("/");
-  // Deep JSON paths carry attacker-controlled tokens: collapse the tail.
   route = route.replace(/^(\/(?:b\/:slug|bins\/:id)(?:\/published)?)\/value\/.+$/, "$1/value/*");
-  // Numeric version segments are per-bin unbounded: collapse to a placeholder.
   route = route.replace(/^(\/bins\/:id\/versions)\/\d+(\/restore)?$/, "$1/:version$2");
+  return KNOWN_ROUTES.has(route) ? `/api/v1${route}` : "/api/v1/unmatched";
+}
 
-  // Unknown roots or leftover exotic segments cannot be a real endpoint.
-  const finalSegments = route.slice(1).split("/");
-  const bounded = KNOWN_ROUTE_ROOTS.has(finalSegments[0])
-    && finalSegments.length <= 8
-    && finalSegments.every(segment => /^[a-z0-9:_.@*-]+$/i.test(segment));
-  return bounded ? `/api/v1${route}` : "/api/v1/unmatched";
+// Fixed width latency buckets produce bounded and mergeable percentile stats.
+// Existing old-format buckets (first-N samples) remain readable until expiry.
+const DURATION_BOUNDS = [0,1,2,3,5,8,10,20,30,50,75,100,150,200,300,500,750,1000,1500,2000,3000,5000,7500,10000,20000,30000,60000,120000,300000,600000];
+type DurationHistogram = Record<string, number>;
+function observeDuration(hist: DurationHistogram, duration: number) {
+  const value = Number.isFinite(duration) ? Math.max(0, duration) : 600000;
+  const bound = DURATION_BOUNDS.find(b => value <= b) ?? 600000;
+  hist[String(bound)] = (hist[String(bound)] || 0) + 1;
+}
+function mergeDurationHist(target: DurationHistogram, source: DurationHistogram | undefined, legacy: number[] | undefined) {
+  if (source && Object.keys(source).length) {
+    for (const [key, count] of Object.entries(source)) {
+      if (!DURATION_BOUNDS.includes(Number(key)) || !Number.isFinite(count) || count < 0) continue;
+      target[key] = (target[key] || 0) + count;
+    }
+  } else if (Array.isArray(legacy)) {
+    for (const value of legacy) if (typeof value === "number") observeDuration(target, value);
+  }
+}
+function percentile95(hist: DurationHistogram): number {
+  const counts = Object.entries(hist).sort(([a], [b]) => Number(a) - Number(b));
+  const total = counts.reduce((n, [, count]) => n + count, 0);
+  if (!total) return 0;
+  const target = Math.ceil(total * 0.95);
+  let seen = 0;
+  for (const [upper, count] of counts) {
+    seen += count;
+    if (seen >= target) return Number(upper);
+  }
+  return Number(counts[counts.length - 1][0]);
 }
 
 const ANALYTICS_PREFIX = "analytics:agg:";
@@ -113,32 +190,32 @@ export async function recordAnalytics(env: Env, dp: AnalyticsDataPoint): Promise
     const bucket = existing || {
       requests: 0,
       totalDuration: 0,
-      durations: [] as number[],
+      durationHistogram: {} as DurationHistogram,
       statuses: {} as Record<string, number>,
-      endpoints: {} as Record<string, { requests: number; totalDuration: number; errors: number; durations: number[] }>,
+      endpoints: {} as Record<string, { requests: number; totalDuration: number; errors: number; durationHistogram: DurationHistogram }>,
       keys: {} as Record<string, { requests: number; count4xx: number; count429: number }>,
       errors: {} as Record<string, number>,
     };
 
     bucket.requests += 1;
     bucket.totalDuration += dp.durationMs;
-    // Keep a bounded sample of durations for P95 calculation
-    if (bucket.durations.length < 500) {
-      bucket.durations.push(dp.durationMs);
-    }
+    // Histogram includes every processed request, not only the first N per hour.
+    bucket.durationHistogram ??= {};
+    observeDuration(bucket.durationHistogram, dp.durationMs);
 
     const statusStr = String(dp.status);
     bucket.statuses[statusStr] = (bucket.statuses[statusStr] || 0) + 1;
 
     const epKey = `${dp.method} ${dp.route}`;
     if (!bucket.endpoints[epKey]) {
-      bucket.endpoints[epKey] = { requests: 0, totalDuration: 0, errors: 0, durations: [] };
+      bucket.endpoints[epKey] = { requests: 0, totalDuration: 0, errors: 0, durationHistogram: {} };
     }
     const ep = bucket.endpoints[epKey];
     ep.requests += 1;
     ep.totalDuration += dp.durationMs;
     if (dp.status >= 400) ep.errors += 1;
-    if (ep.durations.length < 200) ep.durations.push(dp.durationMs);
+    ep.durationHistogram ??= {};
+    observeDuration(ep.durationHistogram, dp.durationMs);
 
     if (dp.keyId) {
       if (!bucket.keys[dp.keyId]) {
@@ -201,9 +278,9 @@ export async function queryAnalytics(env: Env, hours = 24) {
 
   let totalRequests = 0;
   let totalDuration = 0;
-  let allDurations: number[] = [];
+  const durationsHistogram: DurationHistogram = {};
   const statusMap: Record<string, number> = {};
-  const endpointMap: Record<string, { requests: number; totalDuration: number; errors: number; durations: number[] }> = {};
+  const endpointMap: Record<string, { requests: number; totalDuration: number; errors: number; durationHistogram: DurationHistogram }> = {};
   const keyMap: Record<string, { requests: number; count4xx: number; count429: number }> = {};
   const errorMap: Record<string, number> = {};
 
@@ -211,18 +288,18 @@ export async function queryAnalytics(env: Env, hours = 24) {
     if (!b) continue;
     totalRequests += b.requests || 0;
     totalDuration += b.totalDuration || 0;
-    if (Array.isArray(b.durations)) allDurations.push(...b.durations);
+    mergeDurationHist(durationsHistogram, b.durationHistogram, b.durations);
 
     for (const [st, cnt] of Object.entries(b.statuses || {})) {
       statusMap[st] = (statusMap[st] || 0) + (cnt as number);
     }
     for (const [ep, data] of Object.entries(b.endpoints || {})) {
       const d = data as any;
-      if (!endpointMap[ep]) endpointMap[ep] = { requests: 0, totalDuration: 0, errors: 0, durations: [] };
+      if (!endpointMap[ep]) endpointMap[ep] = { requests: 0, totalDuration: 0, errors: 0, durationHistogram: {} };
       endpointMap[ep].requests += d.requests;
       endpointMap[ep].totalDuration += d.totalDuration;
       endpointMap[ep].errors += d.errors;
-      if (Array.isArray(d.durations)) endpointMap[ep].durations.push(...d.durations);
+      mergeDurationHist(endpointMap[ep].durationHistogram, d.durationHistogram, d.durations);
     }
     for (const [kId, data] of Object.entries(b.keys || {})) {
       const d = data as any;
@@ -236,8 +313,7 @@ export async function queryAnalytics(env: Env, hours = 24) {
     }
   }
 
-  allDurations.sort((a, b) => a - b);
-  const p95 = allDurations.length ? allDurations[Math.floor(allDurations.length * 0.95)] : 0;
+  const p95 = percentile95(durationsHistogram);
   const avgDuration = totalRequests ? Math.round(totalDuration / totalRequests) : 0;
 
   let count4xx = 0;
@@ -255,8 +331,7 @@ export async function queryAnalytics(env: Env, hours = 24) {
   const endpoints: EndpointStat[] = Object.entries(endpointMap)
     .map(([key, d]) => {
       const [method, ...routeParts] = key.split(" ");
-      const epDurations = d.durations.sort((a: number, b: number) => a - b);
-      const epP95 = epDurations.length ? epDurations[Math.floor(epDurations.length * 0.95)] : 0;
+      const epP95 = percentile95(d.durationHistogram);
       return {
         method,
         route: routeParts.join(" "),
