@@ -29,7 +29,7 @@ export async function createSchema(env: Env, input: SchemaInput): Promise<Schema
     currentRevision: 1, createdAt: now, updatedAt: now, status: "active" };
   await putJson(bucket, revisionKey(meta.id, 1), input.schema);
   const stored = await putJson(bucket, metaKey(meta.id), meta);
-  await syncSearchResource(env, 'schema', meta.id);
+  await syncSearchResource(env, 'schema', meta.id, meta);
   return { meta, schema: input.schema, etag: stored.httpEtag };
 }
 export async function updateSchema(env: Env, id: string, input: SchemaInput, etag: string) {
@@ -56,17 +56,18 @@ export async function updateSchema(env: Env, id: string, input: SchemaInput, eta
     currentRevision: revision, updatedAt: new Date().toISOString() };
   const stored = await putJson(bucket, metaKey(id), meta, { onlyIf: { etagMatches: normalize(current.etag) } });
   if (!stored) throw new Error("etag_conflict");
-  await syncSearchResource(env, 'schema', id);
+  await syncSearchResource(env, 'schema', id, meta);
   return { meta, schema: input.schema, etag: stored.httpEtag };
 }
 export async function deleteSchema(env: Env, id: string, etag: string) {
   const current = await getSchema(env, id); if (!current) return false;
   if (normalize(current.etag) !== normalize(etag)) throw new Error("etag_conflict");
   // Archive the model; existing bindings continue to use their immutable revision.
-  const stored = await putJson(requireDataBucket(env), metaKey(id), { ...current.meta, status: "deleted", updatedAt: new Date().toISOString() },
+  const archived = { ...current.meta, status: "deleted" as const, updatedAt: new Date().toISOString() };
+  const stored = await putJson(requireDataBucket(env), metaKey(id), archived,
     { onlyIf: { etagMatches: normalize(current.etag) } });
   if (!stored) throw new Error("etag_conflict");
-  await syncSearchResource(env, 'schema', id);
+  await syncSearchResource(env, 'schema', id, archived);
   return true;
 }
 export async function resolveSchemaBinding(env: Env, id: string | null | undefined, value: unknown) {

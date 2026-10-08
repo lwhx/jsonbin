@@ -11,7 +11,10 @@ import { listCollections } from "../collections/api";
 
 import { listSchemas } from "../schemas/api";
 import { SchemaIssues } from "../schemas/SchemaIssues";
-import { BinApiPanel } from "../docs/BinApiPanel";
+// The API tab drags in the whole docs example catalog; it is the only reason
+// BinDetailPage would need it, so load it on first tab visit instead of at
+// first paint.
+const BinApiPanel = lazy(() => import("../docs/BinApiPanel").then(module => ({ default: module.BinApiPanel })));
 import { ExpiryLabel, expiryFromInput, localDateTime } from "./expiry";
 import { JsonTree } from './JsonTree';
 import { JsonFormEditor, type JsonFormState } from "./JsonFormEditor";
@@ -408,7 +411,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
       {tab === "历史版本" && <Suspense fallback={<p role="status">正在加载版本历史…</p>}>
         <BinHistory record={record} dark={dark} busy={Boolean(busy)} onRestore={restore} onPublish={publish} />
       </Suspense>}
-      {tab === "API" && <BinApiPanel bin={{id: record.meta.id, etag: record.etag, visibility: record.meta.visibility, locked: record.meta.locked, expiresAt: record.meta.expiresAt}} />}
+      {tab === "API" && <Suspense fallback={<p role="status">正在加载 API 文档…</p>}><BinApiPanel bin={{id: record.meta.id, etag: record.etag, visibility: record.meta.visibility, locked: record.meta.locked, expiresAt: record.meta.expiresAt}} /></Suspense>}
       {tab === "设置" && metadata && <form className="detail-form" onSubmit={event => { event.preventDefault(); saveSettings(); }}>
         <label>到期时间<input type="datetime-local" step="1" aria-label="到期时间" value={localDateTime(metadata.expiresAt)} disabled={Boolean(busy) || locked}
           onChange={event => setMetadata({ ...metadata, expiresAt: expiryFromInput(event.target.value) })} /></label>

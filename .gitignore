@@ -12,3 +12,4 @@ dist
 test-results
 playwright-report
 mcp/server.js
+bench-results/

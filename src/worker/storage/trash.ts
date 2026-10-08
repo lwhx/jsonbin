@@ -28,7 +28,13 @@ export async function listTrash(env: Env): Promise<TrashRecord[]> {
   const [canonical, legacy] = await Promise.all([
     listJsonObjects<StoredBinMeta>(bucket, "bins/"), listJsonObjects<BinMeta>(bucket, "trash/bins/"),
   ]);
-  const ids = new Set([...canonical, ...legacy].map(meta => meta.id));
+  // The listed snapshot already proves clearly-active Bins can never be trash
+  // records; only genuine candidates (tombstones, expiry, purging) pay the
+  // authoritative re-read that produces the fresh ETag trash responses need.
+  const candidates = canonical.filter(meta =>
+    isImportMarker(meta) || meta.purgeState || meta.deletedAt || isExpired(meta, Date.now()),
+  ).map(meta => meta.id);
+  const ids = new Set([...candidates, ...legacy.map(meta => meta.id)]);
   const records = await Promise.all([...ids].map(id => readTrash(env, id)));
   return records.filter(record => record !== null).map(({ legacy: _legacy, ...record }) => record)
     .sort((a, b) => b.meta.deletedAt.localeCompare(a.meta.deletedAt));
@@ -104,7 +110,7 @@ export async function restoreTrashBin(env: Env, id: string, expectedEtag: string
     }
     throw new Error("etag_conflict");
   }
-  await syncSearchResource(env, 'bin', id);
+  await syncSearchResource(env, 'bin', id, meta);
   await bucket.delete(legacyTrashKey(id));
   if (collectionId && (await getCollection(env, collectionId))?.meta.status !== "active") {
     await detachBinFromCollection(env, id, collectionId);
@@ -128,7 +134,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
   const bucket = requireDataBucket(env);
   const canonical = await getJson<StoredBinMeta>(bucket, binMetaKey(id));
   if (canonical && !isImportMarker(canonical.value) && canonical.value.purgeState === "purged") {
-    await syncSearchResource(env, 'bin', id);
+    await syncSearchResource(env, 'bin', id, canonical.value);
     await removeContents(bucket, id);
     return { ok: true };
   }
@@ -145,7 +151,7 @@ export async function purgeTrashBin(env: Env, id: string, expectedEtag: string, 
   if (current.meta.slug) {
     await releaseBinAlias(bucket, current.meta.slug, id);
   }
-  await syncSearchResource(env, 'bin', id);
+  await syncSearchResource(env, 'bin', id, current.meta);
   await removeContents(bucket, id);
   const written = await putJson(bucket, binMetaKey(id), { id, deletedAt: current.meta.deletedAt, purgeState: "purged" },
     { onlyIf: { etagMatches: normalizeEtag(etag) } });
@@ -168,9 +174,9 @@ export async function sweepBins(env: Env, now = Date.now(), onTransition?: (even
       if (current.value.purgeState) {
         await purgeTrashBin(env, item.id, current.etag, () => onTransition?.({ action: "bin.purged", id: item.id }) ?? Promise.resolve()); result.purged++;
       } else if (!current.value.deletedAt && isExpired(current.value, now)) {
-        const deleted = { ...current.value, deletedAt: current.value.expiresAt!, deletionReason: "expired" };
+        const deleted: BinMeta = { ...current.value, deletedAt: current.value.expiresAt!, deletionReason: "expired" };
         if (await putJson(bucket, binMetaKey(item.id), deleted, { onlyIf: { etagMatches: normalizeEtag(current.etag) } })) {
-          await syncSearchResource(env, 'bin', item.id);
+          await syncSearchResource(env, 'bin', item.id, deleted);
           result.expired++;
           try { await onTransition?.({ action: "bin.expired", id: item.id }); } catch { console.error("activity_notification_failed"); }
         }

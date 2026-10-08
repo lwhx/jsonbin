@@ -43,10 +43,8 @@ async function inventory(env: Env): Promise<Inventory> {
   entries.sort((a, b) => a.key.localeCompare(b.key));
   return { entries, hash: await digest(JSON.stringify(entries)) };
 }
-async function readRow(env: Env, type: SearchKind, id: string): Promise<IndexRow | null> {
-  const stored = await getJson<StoredBinMeta | CollectionMeta | SchemaMeta>(requireDataBucket(env), metaKey(type, id));
-  if (!stored || isImportMarker(stored.value)) return null;
-  const meta = stored.value;
+function rowFromMeta(type: SearchKind, id: string, meta: StoredBinMeta | CollectionMeta | SchemaMeta): IndexRow | null {
+  if (isImportMarker(meta)) return null;
   if (type === 'bin') {
     if (!isActiveBin(meta as StoredBinMeta)) return null;
     const bin = meta as Extract<StoredBinMeta, { name: string }>;
@@ -56,15 +54,29 @@ async function readRow(env: Env, type: SearchKind, id: string): Promise<IndexRow
   return { type, id, name: (meta as CollectionMeta).name, description: (meta as CollectionMeta).description,
     updatedAt: (meta as CollectionMeta).updatedAt, ...(type === 'collection' ? { slug: (meta as CollectionMeta).slug } : {}) };
 }
-export async function syncSearchResource(env: Env, type: SearchKind, id: string): Promise<boolean> {
+async function readRow(env: Env, type: SearchKind, id: string): Promise<IndexRow | null> {
+  const stored = await getJson<StoredBinMeta | CollectionMeta | SchemaMeta>(requireDataBucket(env), metaKey(type, id));
+  if (!stored) return null;
+  return rowFromMeta(type, id, stored.value);
+}
+/**
+ * Keep the derived KV row for one resource in sync with its canonical R2 meta.
+ * Callers that just wrote (or tombstoned) the metadata SHOULD pass it as
+ * `known`: the sync then costs no extra R2 read of data it already holds.
+ */
+export async function syncSearchResource(env: Env, type: SearchKind, id: string, known?: StoredBinMeta | CollectionMeta | SchemaMeta): Promise<boolean> {
   if (!env.CACHE) return false;
   try {
-    const row = await readRow(env, type, id);
+    const stored = known !== undefined
+      ? { value: known }
+      : await getJson<StoredBinMeta | CollectionMeta | SchemaMeta>(requireDataBucket(env), metaKey(type, id));
+    const row = stored ? rowFromMeta(type, id, stored.value) : null;
     if (row) await env.CACHE.put(indexKey(type, id), JSON.stringify(row));
     else await env.CACHE.delete(indexKey(type, id));
     if (type === 'collection' || type === 'bin') {
-      const meta = row ? null : await getJson<CollectionMeta | BinMeta>(requireDataBucket(env), metaKey(type, id));
-      const slug = row?.slug ?? (meta && !isImportMarker(meta.value) ? meta.value.slug : undefined);
+      // A gone/inactive row still names the slug it used to own: reuse the
+      // snapshot already in hand instead of re-reading the metadata.
+      const slug = row?.slug ?? (stored && !isImportMarker(stored.value) ? (stored.value as BinMeta).slug : undefined);
       if (slug) { if (row) await env.CACHE.put(`idx:slug:${slug}`, id); else await env.CACHE.delete(`idx:slug:${slug}`); }
     }
     return true;

@@ -1,5 +1,3 @@
-import { SettingsPage } from './features/settings/SettingsPage';
-import { SearchPage } from './features/search/SearchPage';
 import { systemApi } from './features/settings/api';
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -31,7 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { BinDetailPage } from "./features/bins/BinDetailPage";
 import { binHash, binIdFromHash } from "./features/bins/navigation";
 import { CollectionsPage } from "./features/collections/CollectionsPage";
@@ -44,13 +42,19 @@ import { listSchemas, schemaHash, schemaIdFromHash } from "./features/schemas/ap
 import { SchemaIssues } from "./features/schemas/SchemaIssues";
 import type { SchemaIssue } from "./features/schemas/api";
 
-import { KeysPage } from "./features/keys/KeysPage";
-import { WebhooksPage } from "./features/webhooks/WebhooksPage";
-import { AnalyticsPage } from "./features/analytics/AnalyticsPage";
-import { DocsPage } from "./features/docs/DocsPage";
-import { McpPage } from "./features/mcp/McpPage";
-import { ActivityPage } from "./features/activity/ActivityPage";
-import { TrashPage } from "./features/trash/TrashPage";
+// Route-level code splitting: the developer/system pages (docs examples,
+// analytics, webhooks, keys, MCP, activity, trash, settings, search) are only
+// reachable by explicit navigation, so they cost their own chunk on first
+// visit instead of first paint.
+const KeysPage = lazy(() => import("./features/keys/KeysPage").then(m => ({ default: m.KeysPage })));
+const WebhooksPage = lazy(() => import("./features/webhooks/WebhooksPage").then(m => ({ default: m.WebhooksPage })));
+const AnalyticsPage = lazy(() => import("./features/analytics/AnalyticsPage").then(m => ({ default: m.AnalyticsPage })));
+const DocsPage = lazy(() => import("./features/docs/DocsPage").then(m => ({ default: m.DocsPage })));
+const McpPage = lazy(() => import("./features/mcp/McpPage").then(m => ({ default: m.McpPage })));
+const ActivityPage = lazy(() => import("./features/activity/ActivityPage").then(m => ({ default: m.ActivityPage })));
+const TrashPage = lazy(() => import("./features/trash/TrashPage").then(m => ({ default: m.TrashPage })));
+const SettingsPage = lazy(() => import("./features/settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
+const SearchPage = lazy(() => import("./features/search/SearchPage").then(m => ({ default: m.SearchPage })));
 import { Dialog } from "./components/Dialog";
 import { useConfirm } from "./components/ConfirmDialog";
 import { useToast } from "./components/Toast";
@@ -626,6 +630,7 @@ function AuthenticatedApp({
         </header>
 
         <div className="content">
+          <Suspense fallback={<section className="panel" role="status">正在加载页面…</section>}>
           {route.startsWith('#/search') ? <SearchPage key={route} route={route} /> : binId ? (
             <BinDetailPage key={binId} id={binId} dark={dark} onDirtyChange={setDetailDirty}
               onBack={() => setSection("Bins")}
@@ -668,6 +673,7 @@ function AuthenticatedApp({
               onOpen={id => { window.location.hash = binHash(id); }}
             />
           )}
+          </Suspense>
         </div>
       </main>
 

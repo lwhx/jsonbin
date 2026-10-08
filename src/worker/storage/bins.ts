@@ -104,7 +104,9 @@ async function appendVersion(bucket: R2Bucket, id: string, currentVersion: numbe
   let nextVersion = currentVersion + 1;
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor, include: ["customMetadata"] });
+    // Only key names matter here: customMetadata would inflate every LIST
+    // response for no consumer (listBinVersions reads it where it is used).
+    const page = await bucket.list({ prefix: `bins/${id}/versions/`, cursor });
     for (const object of page.objects) {
       const number = Number(object.key.split("/").pop()?.replace(/\.json$/, ""));
       if (Number.isSafeInteger(number)) nextVersion = Math.max(nextVersion, number + 1);
@@ -188,7 +190,7 @@ export async function cloneBin(
 
   await putJson(bucket, versionKey(newId, 1), current.value);
   const metaObject = await putJson(bucket, metaKey(newId), meta);
-  await syncSearchResource(env, "bin", newId);
+  await syncSearchResource(env, "bin", newId, meta);
 
   return {
     meta,
@@ -267,7 +269,7 @@ export async function createBin(
   try {
     await putJson(bucket, versionKey(id, 1), input.value);
     const metaObject = await putJson(bucket, metaKey(id), meta);
-    await syncSearchResource(env, 'bin', id);
+    await syncSearchResource(env, 'bin', id, meta);
 
     if (input.collectionId && (await getCollection(env, input.collectionId))?.meta.status !== "active") {
       await detachBinFromCollection(env, id, input.collectionId);
@@ -358,9 +360,11 @@ export async function updateBin(
   value: unknown,
   expectedEtag?: string,
   message?: string,
+  /** A meta snapshot the caller already read and asserts against; skips one R2 GET. */
+  snapshot?: { value: StoredBinMeta; etag: string },
 ): Promise<BinRecord | null> {
   const bucket = requireDataBucket(env);
-  const current = await getJson<StoredBinMeta>(bucket, metaKey(id));
+  const current = snapshot ?? await getJson<StoredBinMeta>(bucket, metaKey(id));
   if (!current || !isActiveBin(current.value)) return null;
   assertWritable(current.value, current.etag, expectedEtag);
   // Validate the FINAL value (post patch/merge/transform), before any
@@ -393,7 +397,7 @@ export async function updateBin(
     throw new Error("etag_conflict");
   }
 
-  await syncSearchResource(env, 'bin', id);
+  await syncSearchResource(env, 'bin', id, nextMeta);
   return {
     meta: nextMeta,
     value,
@@ -406,7 +410,10 @@ export async function transformBin(env: Env, id: string, transform: (value: unkn
   const current = await getBin(env, id);
   if (!current) return null;
   assertWritable(current.meta, current.etag, expectedEtag);
-  return updateBin(env, id, transform(current.value), current.etag);
+  // The snapshot transformBin already loaded IS the CAS baseline: re-reading
+  // the metadata inside updateBin would fetch the identical bytes.
+  return updateBin(env, id, transform(current.value), current.etag, undefined,
+    { value: current.meta, etag: current.etag });
 }
 
 export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
@@ -428,7 +435,7 @@ export async function deleteBin(env: Env, id: string, expectedEtag?: string) {
   }
   // Canonical metadata is now the trash record. Avoid a second mutable archive
   // which a delayed deletion could overwrite after restoration or permanent purge.
-  await syncSearchResource(env, 'bin', id);
+  await syncSearchResource(env, 'bin', id, deleted);
   return true;
 }
 
@@ -568,7 +575,7 @@ export async function updateBinMetadata(
     await detachBinFromCollection(env, id, input.collectionId);
     return getBin(env, id);
   }
-  await syncSearchResource(env, 'bin', id);
+  await syncSearchResource(env, 'bin', id, meta);
   return { meta, value: current.value, etag: written.httpEtag };
 }
 

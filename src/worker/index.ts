@@ -57,15 +57,20 @@ app.use("/api/*", async (c, next) => {
   const keyId = authenticatedKey?.id ?? (c.get("apiKeyId" as any)) ?? null;
 
   // Best-effort metrics: never block the response, never fail the request.
-  const record = recordAnalytics(c.env, {
-    timestamp: new Date().toISOString(),
-    method: c.req.method,
-    route,
-    status,
-    durationMs,
-    authType,
-    keyId,
-  }).catch(() => {});
+  // CORS preflights are browser infrastructure, not business requests: one
+  // precedes every cross-origin write and carries no dashboard signal, so
+  // recording them would double analytics KV traffic for pure noise.
+  const record = c.req.method === "OPTIONS"
+    ? null
+    : recordAnalytics(c.env, {
+        timestamp: new Date().toISOString(),
+        method: c.req.method,
+        route,
+        status,
+        durationMs,
+        authType,
+        keyId,
+      }).catch(() => {});
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
@@ -75,13 +80,15 @@ app.use("/api/*", async (c, next) => {
     waitUntil = undefined;
   }
 
-  if (waitUntil) {
-    // Production: hand the write to the runtime so it outlives the response.
-    waitUntil(record);
-  } else {
-    // No execution context available (e.g. direct worker.fetch invocations):
-    // settle the write so metrics stay observable without surfacing errors.
-    await record;
+  if (record) {
+    if (waitUntil) {
+      // Production: hand the write to the runtime so it outlives the response.
+      waitUntil(record);
+    } else {
+      // No execution context available (e.g. direct worker.fetch invocations):
+      // settle the write so metrics stay observable without surfacing errors.
+      await record;
+    }
   }
 });
 app.use("/api/*", secureHeaders({
