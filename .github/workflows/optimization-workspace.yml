@@ -18,7 +18,7 @@ jobs:
           node-version: 22
       - run: npm ci --no-audit --no-fund
       - name: Package isolated sources and installed dependencies
-        run: tar -czf "$RUNNER_TEMP/jsonbin-workspace.tar.gz" --exclude=.git --exclude=.wrangler --exclude=dist --exclude=test-results --exclude=playwright-report .
+        run: tar -czf "$RUNNER_TEMP/jsonbin-workspace.tar.gz" --exclude=./.git --exclude=./.wrangler --exclude=./dist --exclude=./test-results --exclude=./playwright-report .
       - uses: actions/upload-artifact@v4
         with:
           name: jsonbin-isolated-workspace
