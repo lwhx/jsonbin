@@ -481,9 +481,12 @@ function AuthenticatedApp({
     },
   });
 
+  // Only the views that render this list keep it polling: elsewhere the 30s
+  // timer would keep paying for the server's heaviest read (full bin scan).
+  const binsVisible = section === "Overview" || section === "Bins";
   const bins = useQuery({
     queryKey: ["bins"],
-    refetchInterval: 30_000,
+    refetchInterval: binsVisible ? 30_000 : false,
     queryFn: async (): Promise<BinList> => {
       const response = await fetch("/api/v1/bins", {
         credentials: "include",

@@ -4,6 +4,10 @@ import { version } from "../../../package.json";
 import { readApiKey } from "../storage/keys";
 import { readBoundedJson } from "../lib/system-http";
 import { SystemError } from "../../shared/system";
+// Circular on purpose: index.ts registers this router, and tool calls
+// dispatch back through the same app. The binding is only dereferenced at
+// request time, long after both modules finished evaluating.
+import { app as rootApp } from "../index";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -212,16 +216,6 @@ const MCP_TOOLS = [
   },
 ];
 
-let rootApp: any = null;
-
-async function getRootApp() {
-  if (!rootApp) {
-    const mod = await import("../index");
-    rootApp = mod.app;
-  }
-  return rootApp;
-}
-
 /**
  * Dispatch an internal API request within the Worker while forwarding the client's Authorization header.
  */
@@ -236,14 +230,13 @@ async function internalFetch(c: Context<{ Bindings: Env }>, path: string, option
     headers.set("Authorization", auth);
   }
 
-  const appInstance = await getRootApp();
   let executionCtx: any;
   try {
     executionCtx = c.executionCtx;
   } catch {
     executionCtx = undefined;
   }
-  const res = await appInstance.fetch(new Request(targetUrl, { ...options, headers }), c.env, executionCtx);
+  const res = await rootApp.fetch(new Request(targetUrl, { ...options, headers }), c.env, executionCtx);
 
   const text = await res.text();
   let data: any = null;
