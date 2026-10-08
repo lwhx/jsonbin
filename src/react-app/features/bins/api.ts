@@ -27,14 +27,14 @@ export class BinApiError extends Error {
     this.status = status; this.issues = issues;
   }
 }
-async function request(url: string, init: RequestInit = {}): Promise<Response> {
+async function request(url: string, init: RequestInit = {}, allow304 = false): Promise<Response> {
   let response: Response;
   try { response = await fetch(url, { ...init, credentials: "include" }); }
   catch (error) {
     if (init.signal?.aborted) throw error;
     throw new BinApiError(0);
   }
-  if (!response.ok) {
+  if (!response.ok && !(allow304 && response.status === 304)) {
     const body = await response.json().catch(() => ({})) as { error?: string; issues?: SchemaIssue[] };
     throw new BinApiError(response.status, body.issues?.filter(issue => typeof issue.path === "string") ?? [], body.error);
   }
@@ -47,6 +47,19 @@ async function recordResponse(response: Response): Promise<BinRecord> {
 export async function getBin(id: string, base = endpoint, signal?: AbortSignal) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}`, { signal }));
 }
+/** Revalidate a cached Bin without downloading the unchanged JSON body. */
+export async function getBinIfChanged(id: string, cached: BinRecord | undefined, base = endpoint, signal?: AbortSignal): Promise<BinRecord> {
+  const response = await request(`${base}/${encodeURIComponent(id)}`, {
+    signal,
+    ...(cached?.etag ? { headers: { "If-None-Match": cached.etag } } : {}),
+  }, true);
+  if (response.status === 304) {
+    // Never return an empty 304 as a Bin. A missing local snapshot gets a fresh GET.
+    return cached ?? getBin(id, base, signal);
+  }
+  return recordResponse(response);
+}
+
 export async function saveBin(id: string, value: unknown, etag: string, base = endpoint, message?: string) {
   return recordResponse(await request(`${base}/${encodeURIComponent(id)}`, {
     method: "PUT", headers: {
