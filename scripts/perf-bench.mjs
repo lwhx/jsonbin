@@ -10,6 +10,7 @@
  */
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const label = process.argv[2] ?? 'run';
@@ -146,6 +147,31 @@ await scenario('health', async () => call('/system/health'), { iterations: 30 })
   const t0 = performance.now();
   for (let i = 0; i < 60; i++) await call('/bins/' + bins[3].id);
   results.analytics_mixed = { wallMs: Math.round(performance.now() - t0), ops: diff(before, snapshot()) };
+}
+{
+  // Webhook dispatch cost on the write path: two active hooks, local receiver.
+  const received = [];
+  const server = createServer((req, res) => { req.resume(); req.on('end', () => { received.push(1); res.writeHead(200); res.end('ok'); }); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const hookUrl = `http://127.0.0.1:${server.address().port}/hook`;
+  for (let i = 0; i < 2; i++) {
+    const created = await call0('/webhooks', { method: 'POST', body: JSON.stringify({ name: `bench-hook-${i}`, url: hookUrl, secret: 'bench-secret-0000000000000001', events: ['bin.*'] }) });
+    if (created.status !== 201) throw new Error('webhook seed failed: ' + created.status);
+    await created.arrayBuffer().catch(() => {});
+  }
+  let current = await callJson('/bins/' + bins[11].id);
+  const before = snapshot();
+  const t0 = performance.now();
+  for (let i = 0; i < 15; i++) {
+    const put = await callJson('/bins/' + bins[11].id, { method: 'PUT', headers: { 'If-Match': current.etag }, body: JSON.stringify({ value: smallValue(4000 + i) }) });
+    if (put.meta) current = put;
+  }
+  const writeWallMs = Math.round(performance.now() - t0);
+  // Dispatch runs in waitUntil/background: settle deliveries before the op window closes.
+  const settleStart = Date.now();
+  while (received.length < 30 && Date.now() - settleStart < 15000) await new Promise(r => setTimeout(r, 50));
+  results.webhook_dispatch = { writes: 15, deliveries: received.length, writeWallMs, ops: diff(before, snapshot()) };
+  server.close();
 }
 {
   // Cron: full scheduled maintenance sweep.

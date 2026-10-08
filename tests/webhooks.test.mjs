@@ -209,3 +209,34 @@ test('a losing concurrent attempt never rolls back newer delivery state (F23)',a
  assert.equal(final.attempts,5,'a stale attempt must not reset the counter');
  assert.equal(final.status,'delivered');
 });
+
+test('dispatch reads the KV roster, rebuilds it when absent and management refreshes it', async t => {
+ const h=await withHarness(t),sink=await receiver(t);
+ const created=await (await h.request('/webhooks',{method:'POST',value:validInput(sink.url)})).json();
+ // The management write refreshed the derived roster in KV.
+ const index1=JSON.parse(await h.env.CACHE.get('idx:webhooks'));
+ assert.equal(index1.filter(hook=>hook.id===created.webhook.id).length,1);
+
+ // A deleted roster is rebuilt from R2 on the next dispatch, and delivery works.
+ await h.env.CACHE.delete('idx:webhooks');
+ const bin=await (await h.request('/bins',{method:'POST',value:{name:'缓存重建',value:{k:1}}})).json();
+ assert.ok(await sink.waitUntil(1),'dispatch after cache deletion still delivers');
+ const index2=JSON.parse(await h.env.CACHE.get('idx:webhooks'));
+ assert.equal(index2.filter(hook=>hook.id===created.webhook.id).length,1);
+
+ // A corrupt cache entry is a miss, never a delivery failure.
+ await h.env.CACHE.put('idx:webhooks','{"not":"an array"}');
+ const updated=await (await h.request(`/bins/${bin.meta.id}`,{method:'PUT',headers:{'If-Match':bin.etag},value:{value:{k:2}}})).json();
+ assert.ok(await sink.waitUntil(2),'corrupt cache rebuilds and delivers');
+ const index3=JSON.parse(await h.env.CACHE.get('idx:webhooks'));
+ assert.equal(index3.filter(hook=>hook.id===created.webhook.id).length,1);
+
+ // Deleting the webhook removes it from the roster: no further deliveries.
+ const fresh=(await h.request(`/webhooks/${created.webhook.id}`)).headers.get('etag');
+ assert.equal((await h.request(`/webhooks/${created.webhook.id}`,{method:'DELETE',headers:{'If-Match':fresh}})).status,200);
+ const index4=JSON.parse(await h.env.CACHE.get('idx:webhooks'));
+ assert.equal(index4.filter(hook=>hook.id===created.webhook.id).length,0);
+ await h.request(`/bins/${bin.meta.id}`,{method:'PUT',headers:{'If-Match':updated.etag},value:{value:{k:3}}});
+ await new Promise(r=>setTimeout(r,300));
+ assert.equal(sink.received.length,2,'a deleted webhook receives nothing even from a cached roster path');
+});

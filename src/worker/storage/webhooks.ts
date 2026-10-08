@@ -75,6 +75,46 @@ export async function listWebhooks(env: Env): Promise<Webhook[]> {
   return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * KV mirror of the webhook roster for the per-write dispatch path: without it
+ * every business mutation pays one R2 LIST plus one GET per hook just to learn
+ * whether anyone is subscribed. KV is disposable — management mutations
+ * refresh it, a missing or corrupt entry is rebuilt from authoritative R2,
+ * and management reads never consult it.
+ */
+const WEBHOOK_INDEX_KEY = "idx:webhooks";
+function isWebhook(value: unknown): value is Webhook {
+  return Boolean(value) && typeof value === "object"
+    && typeof (value as Webhook).id === "string"
+    && typeof (value as Webhook).url === "string"
+    && Array.isArray((value as Webhook).events)
+    && typeof (value as Webhook).active === "boolean";
+}
+async function readWebhookIndex(env: Env): Promise<Webhook[] | null> {
+  if (!env.CACHE) return null;
+  try {
+    const raw = await env.CACHE.get(WEBHOOK_INDEX_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.every(isWebhook)) return null;
+    return parsed;
+  } catch { return null; }
+}
+async function refreshWebhookIndex(env: Env): Promise<Webhook[]> {
+  const hooks = await listWebhooks(env);
+  if (env.CACHE) {
+    // Tombstones from an in-flight delete never enter the dispatch roster;
+    // the TTL only bounds orphan growth if a mutation ever fails to refresh.
+    await env.CACHE.put(WEBHOOK_INDEX_KEY, JSON.stringify(hooks.filter(hook => !("deletedAt" in hook))),
+      { expirationTtl: 7 * 86400 }).catch(() => {});
+  }
+  return hooks;
+}
+/** Roster for dispatch: the KV mirror when valid, R2 (and then cached) otherwise. */
+async function dispatchRoster(env: Env): Promise<Webhook[]> {
+  return (await readWebhookIndex(env)) ?? refreshWebhookIndex(env);
+}
+
 export async function getWebhook(env: Env, id: string): Promise<{ webhook: Webhook; etag: string } | null> {
   const stored = await getJson<Webhook>(requireDataBucket(env), metaKey(id));
   if (!stored) return null;
@@ -97,6 +137,7 @@ export async function createWebhook(env: Env, input: WebhookInput): Promise<Webh
     events: Array.from(new Set(input.events)), active: input.active ?? true, createdAt: now, updatedAt: now };
   const created = await putJson(bucket, metaKey(id), webhook, { onlyIf: { etagDoesNotMatch: "*" } });
   if (!created) throw new Error("webhook_conflict");
+  await refreshWebhookIndex(env);
   return webhook;
 }
 
@@ -116,6 +157,7 @@ export async function updateWebhook(env: Env, id: string, input: Partial<Webhook
   };
   const written = await putJson(bucket, metaKey(id), next, { onlyIf: { etagMatches: normalizeEtag(current.etag) } });
   if (!written) throw new Error("etag_conflict");
+  await refreshWebhookIndex(env);
   return next;
 }
 
@@ -135,6 +177,7 @@ export async function deleteWebhook(env: Env, id: string, expectedEtag: string):
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   await bucket.delete(metaKey(id));
+  await refreshWebhookIndex(env);
   return true;
 }
 
@@ -144,10 +187,10 @@ export async function listDeliveries(env: Env, webhookId: string, limit = 20): P
   let cursor: string | undefined;
   do {
     const page = await bucket.list({ prefix: `webhooks/${webhookId}/deliveries/`, cursor, limit: 100 });
-    for (const object of page.objects) {
-      const stored = await getJson<WebhookDelivery>(bucket, object.key);
-      if (stored) items.push(stored.value);
-    }
+    // One bounded round per page replaces a serial GET chain; new-format ids
+    // already list newest-first, so early pages carry the visible window.
+    const batch = await Promise.all(page.objects.map(object => getJson<WebhookDelivery>(bucket, object.key)));
+    for (const stored of batch) if (stored) items.push(stored.value);
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor && items.length < 500);
   return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
@@ -226,7 +269,7 @@ export async function dispatchWebhooks(env: Env, event: {
   test?: { webhookId: string };
 }): Promise<void> {
   try {
-    const webhooks = await listWebhooks(env);
+    const webhooks = await dispatchRoster(env);
     // Explicit test deliveries target one hook regardless of its active flag;
     // real events require an active hook with a matching subscription.
     const targets = webhooks.filter(hook => !("deletedAt" in hook) &&
