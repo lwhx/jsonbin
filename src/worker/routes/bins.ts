@@ -164,6 +164,22 @@ function parseVersion(value: string) {
   return Number.isSafeInteger(version) ? version : null;
 }
 
+// Write bodies are streamed against a byte budget before parsing: a value plus
+// its envelope can never legitimately exceed one business value plus slack.
+const BINS_WRITE_LIMIT = MAX_VALUE_BYTES + 64 * 1024;
+// Metadata-sized envelopes (batch items, metadata patches, publish/rollback
+// instructions, template names) sit far below the value budget and get a
+// proportionally tight cap.
+const BINS_META_LIMIT = 64 * 1024;
+async function parseBoundedBody<T = unknown>(c: { req: { raw: Request } }, limit = BINS_WRITE_LIMIT): Promise<T | null> {
+  try {
+    return await readBoundedJson(c.req.raw, limit) as T;
+  } catch (error) {
+    if (error instanceof SystemError && error.status === 413) throw error;
+    return null;
+  }
+}
+
 app.get("/:id/versions", requireAccess("history:read"), checkBinMutationAccess, async (c) => {
   const versions = await listBinVersions(c.env, c.req.param("id"));
   if (!versions) return c.json({ error: "not_found" }, 404);
@@ -253,7 +269,9 @@ const batchOperationSchema = z.object({
 });
 
 app.post("/batch", async (c) => {
-  const parsed = batchOperationSchema.safeParse(await c.req.json().catch(() => null));
+  // Bound and parse before any authentication work: an unauthenticated caller
+  // must not be able to spend Worker CPU on an arbitrarily large JSON.parse.
+  const parsed = batchOperationSchema.safeParse(await parseBoundedBody(c, BINS_META_LIMIT));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }
@@ -368,7 +386,7 @@ app.post("/:id/save-as-template", managementSession, checkBinMutationAccess, asy
     return c.json({ error: "etag_conflict" }, 412);
   }
 
-  const body = (await c.req.json().catch(() => ({}))) || {};
+  const body = (await parseBoundedBody<any>(c, BINS_META_LIMIT)) || {};
   const name = body.name?.trim() || `${current.meta.name} 模板`;
   const description = body.description !== undefined ? body.description.trim() : (current.meta.description || "");
 
@@ -398,7 +416,7 @@ app.post("/:id/publish", requireAccess("bin:update"), checkBinMutationAccess, as
   if (!ifMatch?.trim()) return c.json({ error: "precondition_required" }, 428);
 
   const id = c.req.param("id");
-  const body = (await c.req.json().catch(() => ({}))) || {};
+  const body = (await parseBoundedBody<any>(c, BINS_META_LIMIT)) || {};
   const version = typeof body.version === "number" ? body.version : undefined;
 
   try {
@@ -422,7 +440,7 @@ app.post("/:id/rollback", requireAccess("bin:update"), checkBinMutationAccess, a
   if (!ifMatch?.trim()) return c.json({ error: "precondition_required" }, 428);
 
   const id = c.req.param("id");
-  const body = (await c.req.json().catch(() => ({}))) || {};
+  const body = (await parseBoundedBody<any>(c, BINS_META_LIMIT)) || {};
   const version = typeof body.version === "number" ? body.version : undefined;
   if (!version) return c.json({ error: "invalid_version" }, 422);
 
@@ -518,18 +536,6 @@ app.post("/:id/clone", requireAccess(["bin:read", "bin:create"]), checkBinMutati
     throw error;
   }
 });
-
-// Write bodies are streamed against a byte budget before parsing: a value plus
-// its envelope can never legitimately exceed one business value plus slack.
-const BINS_WRITE_LIMIT = MAX_VALUE_BYTES + 64 * 1024;
-async function parseBoundedBody(c: { req: { raw: Request } }): Promise<unknown> {
-  try {
-    return await readBoundedJson(c.req.raw, BINS_WRITE_LIMIT);
-  } catch (error) {
-    if (error instanceof SystemError && error.status === 413) throw error;
-    return null;
-  }
-}
 
 app.post("/", requireAccess("bin:create"), async (c) => {
   const parsed = createSchema.safeParse(await parseBoundedBody(c));
@@ -696,7 +702,7 @@ app.delete("/:id", requireAccess("bin:delete"), checkBinMutationAccess, async (c
 });
 
 app.patch("/:id/meta", requireAccess("bin:update"), checkBinMutationAccess, async (c) => {
-  const parsed = metadataSchema.safeParse(await c.req.json().catch(() => null));
+  const parsed = metadataSchema.safeParse(await parseBoundedBody(c, BINS_META_LIMIT));
   if (!parsed.success) {
     return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);
   }

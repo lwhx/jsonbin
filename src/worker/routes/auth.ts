@@ -11,6 +11,7 @@ import {
 import { base64UrlEncode, timingSafeEqualText } from "../lib/crypto";
 import { allowedRequestOrigin } from "../auth/origin";
 import { readBoundedJson } from "../lib/system-http";
+import { countLoginFailure, limitLoginAttempts } from "../storage/rate-limit";
 import { SystemError } from "../../shared/system";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -41,6 +42,10 @@ app.get("/config", (c) => {
 app.post("/login", async (c) => {
   if (!allowedRequestOrigin(c.req.raw, c.env)) return c.json({ error: "origin_not_allowed" }, 403);
   if (!sessionConfigured(c.env)) return c.json({ error: "session_not_configured" }, 503);
+  // Brute-force budget before any credential work; only failed verifications
+  // consume it, so unrelated failures cannot lock the admin out.
+  const limited = await limitLoginAttempts(c.env, c.req.raw);
+  if (limited) return limited;
   let input: unknown;
   try { input = await readBoundedJson(c.req.raw, 4096); }
   catch (error) {
@@ -59,6 +64,7 @@ app.post("/login", async (c) => {
   ]);
 
   if (!usernameMatches || !passwordMatches) {
+    await countLoginFailure(c.env, c.req.raw);
     return loginFailure(c, "invalid_credentials", 401);
   }
 

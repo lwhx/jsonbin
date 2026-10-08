@@ -347,6 +347,23 @@ test('P16: batch operations execute independent CAS and report per-item status',
   assert.equal(duplicateBatch.status, 422);
 });
 
+test('oversized batch, metadata and publish bodies are rejected by the byte budget before parsing', async () => {
+  const oversized = 'x'.repeat(64 * 1024 + 1);
+  // The batch budget applies before authentication: no credentials needed.
+  const batch = await request('/bins/batch', { method: 'POST', authenticated: false, body: oversized });
+  assert.equal(batch.status, 413);
+  assert.deepEqual(await batch.json(), { error: 'payload_too_large' });
+
+  const bin = await create();
+  const meta = await request(`/bins/${bin.meta.id}/meta`, { method: 'PATCH', etag: bin.etag, body: oversized });
+  assert.equal(meta.status, 413);
+  assert.deepEqual(await meta.json(), { error: 'payload_too_large' });
+
+  const publish = await request(`/bins/${bin.meta.id}/publish`, { method: 'POST', etag: bin.etag, body: oversized });
+  assert.equal(publish.status, 413);
+  assert.deepEqual(await publish.json(), { error: 'payload_too_large' });
+});
+
 test('P17: GET /api/v1/openapi.json serves valid OpenAPI 3.1 schema covering routes and security', async () => {
   const res = await request('/openapi.json');
   assert.equal(res.status, 200);
