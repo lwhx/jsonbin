@@ -1,6 +1,15 @@
 import type { MiddlewareHandler } from "hono";
 import { normalizeEtag } from "../storage/bin-state";
 
+/** ETag comparisons shared by the ordinary conditional middleware and the meta-only fast path. */
+export function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
+  const current = normalizeEtag(etag);
+  return ifNoneMatch.split(",").some(candidate => {
+    const trimmed = candidate.trim();
+    return trimmed === "*" || normalizeEtag(trimmed) === current;
+  });
+}
+
 /**
  * RFC 9110 conditional GET: when the client's If-None-Match still matches the
  * ETag the handler produced, replace the 200 with an empty 304 so pollers
@@ -14,12 +23,7 @@ export const conditionalGet: MiddlewareHandler<{ Bindings: Env }> = async (c, ne
   const ifNoneMatch = c.req.header("If-None-Match");
   if (!etag || !ifNoneMatch) return;
 
-  const current = normalizeEtag(etag);
-  const matched = ifNoneMatch.split(",").some(candidate => {
-    const trimmed = candidate.trim();
-    if (trimmed === "*") return true;
-    return normalizeEtag(trimmed) === current;
-  });
+  const matched = matchesIfNoneMatch(ifNoneMatch, etag);
   if (!matched) return;
 
   const headers = new Headers();
