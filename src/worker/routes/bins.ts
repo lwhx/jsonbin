@@ -5,7 +5,7 @@ import { requireAccess } from "../middleware/auth";
 import { managementSession, readBoundedJson } from "../lib/system-http";
 import { SystemError } from "../../shared/system";
 import { MAX_VALUE_BYTES } from "../../shared/backup";
-import { conditionalGet } from "../middleware/conditional";
+import { conditionalGet, matchesIfNoneMatch } from "../middleware/conditional";
 import { limitAnonymousRequest } from "../storage/rate-limit";
 import { detectFormat, formatContentType, serializeContent } from "../lib/format-serializers";
 import {
@@ -13,6 +13,7 @@ import {
   createBin,
   deleteBin,
   getBin,
+  getBinMetadata,
   getBinBySlug,
   getBinVersion,
   listBins,
@@ -70,32 +71,42 @@ app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await n
 app.use("*", conditionalGet);
 
 const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
-  const load = async (): Promise<void> => {
-    const record = await getBin(c.env, c.req.param("id")!);
-    c.set("bin", record);
-    if (!record) {
-      await next();
+  const id = c.req.param("id")!;
+  const serve = async (metadata: Awaited<ReturnType<typeof getBinMetadata>>): Promise<void> => {
+    // This route only: the other read paths still need their value for JSON
+    // pointer processing, published-version resolution, or representation.
+    const isCurrentRecord = /^\/api\/v1\/bins\/[^/]+\/?$/.test(new URL(c.req.url).pathname);
+    const condition = c.req.header("If-None-Match");
+    if (metadata && c.req.method === "GET" && isCurrentRecord && condition && matchesIfNoneMatch(condition, metadata.etag)) {
+      // Authentication, resource-scoped key grants, TTL and public rate limits
+      // have all been checked before returning an empty, metadata-only 304.
+      c.header("ETag", metadata.etag);
+      c.header("X-JSONBin-Version", String(metadata.value.currentVersion));
+      c.res = c.body(null, 304);
       return;
     }
-
+    c.set("bin", metadata ? await getBin(c.env, id, metadata) : null);
+    await next();
+  };
+  // Bearer authentication takes precedence even if the Bin is public.
+  if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, async () => {
+    const metadata = await getBinMetadata(c.env, id);
     const key = c.get("apiKey");
-    if (key && !checkResourceAccess(key, { type: "bin", id: record.meta.id, collectionId: record.meta.collectionId })) {
+    if (key && metadata && !checkResourceAccess(key, { type: "bin", id: metadata.value.id, collectionId: metadata.value.collectionId })) {
       c.res = c.json({ error: "resource_forbidden" }, 403);
       return;
     }
-    await next();
-  };
-  // Explicit credentials keep their authentication and scope semantics on public Bins.
-  if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
-  const record = await getBin(c.env, c.req.param("id")!);
-  c.set("bin", record);
-  if (record?.meta.visibility === "public") {
+    await serve(metadata);
+  });
+  const metadata = await getBinMetadata(c.env, id);
+  if (metadata?.value.visibility === "public") {
     const limited = await limitAnonymousRequest(c.env, c.req.raw);
     if (limited) return limited;
-    return next();
+    return serve(metadata);
   }
-  // The handler uses this exact snapshot, including its visibility and immutable value.
-  return requireAccess("bin:read")(c, next);
+  // The handler uses exactly the snapshot that was authorized, including
+  // public visibility, expiry and the immutable referenced version.
+  return requireAccess("bin:read")(c, () => serve(metadata));
 };
 
 const slugSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9-_]{1,62}[a-z0-9]$/i, "invalid_slug").transform(s => s.toLowerCase()).nullable().optional();
