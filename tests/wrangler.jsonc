@@ -10,6 +10,10 @@
   "kv_namespaces": [
     { "binding": "CACHE", "id": "00000000000000000000000000000000" }
   ],
+  "ratelimits": [
+    { "name": "JSONBIN_KEY_RATE", "namespace_id": "847621195", "simple": { "limit": 120, "period": 60 } },
+    { "name": "JSONBIN_ANON_RATE", "namespace_id": "847621196", "simple": { "limit": 240, "period": 60 } }
+  ],
   "r2_buckets": [
     { "binding": "DATA", "bucket_name": "jsonbin-browser-test" }
   ]
