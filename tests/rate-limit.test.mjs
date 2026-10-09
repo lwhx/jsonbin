@@ -57,7 +57,7 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   const bin = await (await h.request('/bins', { method: 'POST', value: { name: '公开仓', visibility: 'public', value: { open: true } } })).json();
   const ip = '203.0.113.77';
   const anonScope = address => 'a:' + createHmac('sha256', h.env.SESSION_SECRET)
-    .update('public-rate/v1\\0' + address).digest('base64url');
+    .update('public-rate/v1' + String.fromCharCode(0) + address).digest('base64url');
   // Never seed against a window that is about to roll over.
   const msIntoWindow = Date.now() % 60000;
   if (msIntoWindow > 58000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
