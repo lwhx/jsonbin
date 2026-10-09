@@ -196,3 +196,33 @@ test('delayed rollout never invalidates an otherwise unexpired signed legacy Coo
     assert.equal((await me(h, cookie)).status, 401);
   } finally { Date.now = original; }
 });
+
+
+test('revoked caller cannot revoke another device between middleware check and R2 CAS', async t => {
+  const h = await setup(t);
+  const actor = await passwordLogin(h), victim = await passwordLogin(h);
+  const actorId = payload(actor).sid, victimId = payload(victim).sid;
+  let reads = 0, concurrentRevokeCommitted = false;
+  const guardedEnv = { ...h.env, DATA: h.adapt({
+    get: async (key, ...args) => {
+      if (key === 'system/auth/sessions.json' && ++reads === 2) {
+        // Simulate a separate authorized device revoking the caller after
+        // the initial middleware authorization but before the DELETE handler.
+        const record = await h.bucket.get(key);
+        const state = await record.json();
+        assert.ok(state.sessions[actorId]);
+        delete state.sessions[actorId];
+        await h.bucket.put(key, JSON.stringify(state));
+        concurrentRevokeCommitted = true;
+      }
+      return h.bucket.get(key, ...args);
+    },
+  }) };
+  const response = await request(h, '/sessions/' + victimId, {
+    method: 'DELETE', cookie: actor, env: guardedEnv,
+  });
+  assert.equal(concurrentRevokeCommitted, true, 'revoke must race after initial auth');
+  assert.equal(response.status, 401, 'stale caller must never mutate sessions after revocation');
+  assert.equal((await me(h, actor)).status, 401);
+  assert.equal((await me(h, victim)).status, 200, 'the other device must survive');
+});
