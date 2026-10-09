@@ -143,6 +143,7 @@ test('malformed-key scan budgets advance both initial and existing cursors', asy
       const end = Math.min(start + options.limit, objects.length);
       return { objects: objects.slice(start, end), truncated: end < objects.length, cursor: String(end) };
     }, get: async path => {
+      if (path === 'system/auth/sessions.json') return bucket.get(path);
       gets++; assert.ok(path === anchor || path === key);
       return path === key ? { json: async () => entry } : null;
     } }) };
