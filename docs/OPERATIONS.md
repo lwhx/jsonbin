@@ -18,8 +18,20 @@ API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API �
 - 在完全隔离的测试 Worker + R2 + KV 中运行 `npm ci`、`npm run typecheck`、`npm test`、`npm run test:browser`、`npx wrangler deploy --dry-run`。本地 Miniflare 使用 `useSQLite: true`，真实 Cloudflare 边缘会写入 `CF-Connecting-IP`；模拟调用时需显式提供合法测试 IP。
 - 在灰度环境验证：同 Key 第 N 次成功、N+1 次 429、`Retry-After`；两个 Key 不共享计数；不同匿名 IP 不共享计数；无效/撤销/Scope 不足的 Bearer 不能退回匿名；public→private 立即拒绝新匿名请求；有效 Session 读取不占匿名桶；DO binding 故障显式 503。执行少量并发请求确认没有超配额通过。
 - 监控 Worker 的 429/503 占比、DO 请求/存储用量、P95 延迟与业务错误率；`503 rate_limit_unavailable` 需要修复 binding 或服务，**不能**靠删除限流调用来降级。公开读缺少 `CF-Connecting-IP` 返回 `503 anonymous_identity_unavailable`，应核对代理链和可信边缘来源。
-- 出现异常时回滚代码和原 Wrangler 绑定到上一个已验证发布版本，不删除 R2 Key 元数据，也不清空业务数据。旧版本若恢复使用 KV best-effort 限流，必须明确记录临时安全能力下降，并用 Cloudflare WAF/边缘限流缓解流量风险；独立 DO namespace 可暂时保留以方便恢复新版。回滚不重置 Token、Key Scope 或用量统计。
+- **生命周期变更不能直接回滚旧 Worker 版本。** 首次通过 `exports.ApiRateLimiter` 创建 SQLite Durable Object 命名空间后，Cloudflare 不允许跨越这次生命周期变更执行平台版本回滚，也不能恢复旧版 `migrations` 配置。出现严重故障应**向前部署补救版本**：保留同名 `ApiRateLimiter` 类导出、`exports.ApiRateLimiter` 与 `RATE_LIMITER` 绑定，恢复上一版已经验证的其他业务路由逻辑，重新构建并执行 `wrangler deploy`；不要删除 R2、Key、DO 命名空间，也不能只把 Git HEAD reset 到引入 DO 前再直接部署。若临时改回 KV best-effort 计数，必须显式记录安全性下降并启用 Cloudflare WAF 兜底，绝不能默认关闭限流；API Key 的 Token、Scope 和用量保持原状。
 - Durable Object 限流针对应用级请求额度，不替代 Cloudflare WAF、DDoS 防御或账户登录独立 R2 封禁。对全站公开健康/API 文档接口、异常高频探测和大量随机 Bin ID 请求，应另外在 Cloudflare Security 配置并验收 per-IP 规则；不要把内部 HMAC 身份标识与日志关联泄露。
+
+### SEC-002：隔离 Preview 准备（只操作非生产资源）
+
+仓库已设置 `previews.durable_objects.bindings.RATE_LIMITER`，Worker Previews 为每个 Preview 自动分配独立的 DO namespace。预览读取 `previews.r2_buckets.DATA` 指向 **`jsonbin-sec002-preview-data`**，与生产 `jsonbin-data` 不同；本批 Preview 为避免未知 KV ID 误绑生产，暂不配置 `CACHE`（索引/近似统计可能不可用，完整 KV 功能须另建 Preview 专用命名空间再加绑定）。生产配置、Cron 和部署分支均不变。
+
+1. **在 Cloudflare R2 新建空桶** `jsonbin-sec002-preview-data`（仅测试数据）。可运行 `npx wrangler r2 bucket create jsonbin-sec002-preview-data`；不得将 `previews.DATA` 改为生产桶，也不要复制生产数据到 Preview。
+2. 在 Cloudflare Workers → `jsonbin` → Settings → Builds 查看当前分支预览模式。既有项目如仍使用旧 Preview 模式，在 **Set up Worker Previews** 向导中明确核对并执行一次性切换（**不可逆**）。新的 Preview command 必须是 `npx wrangler preview`，**禁止**填 `npx wrangler deploy`，否则可能发布到生产。生产分支仍为 `main`。
+3. 预览不继承生产 secrets。设置独立的 `ADMIN_PASSWORD` 和 `SESSION_SECRET`（至少 32 字符），不要复用生产值。可使用 `npx wrangler preview base-config secret put ADMIN_PASSWORD` 和 `npx wrangler preview base-config secret put SESSION_SECRET`，或在切换向导中创建；非生产管理员用户名已由 `previews.vars.ADMIN_USERNAME` 设置为 `preview-admin`。不必配置 GitHub OAuth。
+4. 重新运行 Preview Build，核查 PR 返回的真实 Preview URL，记录 DO 和 R2 binding。先创建公开/私有测试 Bin、测试 API Key，再实际验证第 N+1 次 429、`Retry-After`、撤销/过期、public→private、503 故障处理。不得用真实 API Key 或生产 Bin 作为测试对象。
+5. 若要进一步验证 KV 搜索与用量统计，单独创建非生产 KV 命名空间后，将**其真实 ID**填到 `previews.kv_namespaces` 的 `CACHE` 项；切勿直接复制顶层生产 `CACHE.id`。测试结束删除专用 Preview 以及测试桶/命名空间之前核对资源归属，切勿误删生产资源。
+
+当前账号的 Cloudflare Build 私有日志/Build 设置未由仓库代码直接访问；仅有 GitHub PR 中的 Failed 状态，不应将预览构建失败归因于某一个未经核实的错误。Cloudflare 官方说明旧 `wrangler versions upload` 不支持 Durable Object 类生命周期变更，Worker Previews 需 Wrangler >=4.135.0；本项目锁定 4.147.0。请以 Workers Builds 的 Preview Build **完整错误日志**确认失败原因，避免未经确认调整生产部署命令。
 
 ## 日常业务备份
 

@@ -113,7 +113,7 @@ npm run cf:types
 
 ## Build and deploy
 
-Cloudflare Workers Builds should use the `main` production branch.
+Cloudflare Workers Builds should use the `main` production branch. For SEC-002 branch previews, the repository config includes a separate test R2 bucket name (`jsonbin-sec002-preview-data`) and a Preview-local `RATE_LIMITER` binding. Create that empty test bucket and set **separate** Preview credentials before switching to Worker Previews (one-time, irreversible). Do not point Preview DATA or CACHE at production. See [SEC-002 Preview setup](docs/OPERATIONS.md#sec-002隔离-preview-准备只操作非生产资源).
 
 Build command:
 

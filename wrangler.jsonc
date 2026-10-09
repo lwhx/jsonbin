@@ -43,5 +43,24 @@
       "type": "durable-object",
       "storage": "sqlite"
     }
+  },
+  "previews": {
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "RATE_LIMITER",
+          "class_name": "ApiRateLimiter"
+        }
+      ]
+    },
+    "r2_buckets": [
+      {
+        "binding": "DATA",
+        "bucket_name": "jsonbin-sec002-preview-data"
+      }
+    ],
+    "vars": {
+      "ADMIN_USERNAME": "preview-admin"
+    }
   }
 }
