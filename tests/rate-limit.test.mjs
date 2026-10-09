@@ -97,29 +97,104 @@ test('an explicit null key rate limit is honored as unlimited (F16)', async t =>
   assert.equal(res.status, 200, 'null must mean unlimited, not the 120 default');
 });
 
-test('failed password attempts are limited per IP and only failures consume the budget', async t => {
+test('password login locks each IP on failure 3, bans on failure 6, and never blocks GitHub OAuth', async t => {
   const h = await harness(t);
-  // Keep every assertion inside one fixed window.
-  const msIntoWindow = Date.now() % 60000;
-  if (msIntoWindow > 55000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
-  const attempt = (ip, password = 'wrong-password') => h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
-    body: JSON.stringify({ username: h.env.ADMIN_USERNAME, password }),
+  const ip = '203.0.113.5', otherIp = '198.51.100.9';
+  const attempt = (address, username = h.env.ADMIN_USERNAME, password = 'wrong-password') =>
+    h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': address },
+      body: JSON.stringify({ username, password }),
+    }), h.env);
+  const inspect = async () => {
+    const objects = (await h.bucket.list({ prefix: 'auth/login-guard/' })).objects;
+    assert.equal(objects.length, 1, 'only the offending IP has an authoritative R2 state');
+    assert.ok(!objects[0].key.includes(ip), 'stored object key must not expose the raw IP');
+    return { key: objects[0].key, record: await (await h.bucket.get(objects[0].key)).json() };
+  };
+
+  // Wrong username and wrong password are indistinguishable to callers.
+  for (const [username, password] of [['somebody-else', h.env.ADMIN_PASSWORD], [h.env.ADMIN_USERNAME, 'bad-password']]) {
+    const response = await attempt(ip, username, password);
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: 'invalid_credentials' });
+  }
+  let response = await attempt(ip);
+  assert.equal(response.status, 429, 'the third wrong verification starts the one-minute lock immediately');
+  assert.deepEqual(await response.json(), { error: 'login_cooldown' });
+  assert.ok(Number(response.headers.get('retry-after')) >= 1 && Number(response.headers.get('retry-after')) <= 60);
+
+  response = await attempt(ip, h.env.ADMIN_USERNAME, h.env.ADMIN_PASSWORD);
+  assert.equal(response.status, 429, 'even correct credentials cannot bypass the cooldown');
+  assert.deepEqual(await response.json(), { error: 'login_cooldown' });
+  assert.equal((await attempt(otherIp, h.env.ADMIN_USERNAME, h.env.ADMIN_PASSWORD)).status, 200);
+
+  const github = { ...h.env, GITHUB_CLIENT_ID: 'client-id', GITHUB_CLIENT_SECRET: 'client-secret', GITHUB_ALLOWED_USER_ID: '123' };
+  const oauthStart = () => h.worker.fetch(new Request('https://example.test/api/v1/auth/github', { headers: { 'CF-Connecting-IP': ip } }), github);
+  assert.equal((await oauthStart()).status, 302, 'GitHub OAuth must be independent of password throttling');
+
+  // Simulate passage of one minute by expiring only the R2 cooldown field.
+  let stored = await inspect();
+  assert.equal(stored.record.failures, 3);
+  await h.bucket.put(stored.key, JSON.stringify({ ...stored.record, cooldownUntil: Date.now() - 1 }));
+  for (const wrong of ['fourth-wrong', 'fifth-wrong']) {
+    response = await attempt(ip, h.env.ADMIN_USERNAME, wrong);
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: 'invalid_credentials' });
+  }
+  response = await attempt(ip);
+  assert.equal(response.status, 429, 'the sixth failure bans password login on that IP');
+  assert.deepEqual(await response.json(), { error: 'login_ip_banned' });
+  assert.ok(Number(response.headers.get('retry-after')) >= 86390);
+  assert.ok(Number(response.headers.get('retry-after')) <= 86400);
+  assert.equal((await attempt(ip, h.env.ADMIN_USERNAME, h.env.ADMIN_PASSWORD)).status, 429);
+  assert.equal((await oauthStart()).status, 302, 'OAuth remains available even after the six-failure ban');
+  assert.equal((await h.request('/bins')).status, 200, 'existing sessions remain valid');
+
+  // A stale ban and 24-hour failure window must expire automatically.
+  stored = await inspect();
+  assert.equal(stored.record.failures, 6);
+  await h.bucket.put(stored.key, JSON.stringify({
+    ...stored.record, bannedUntil: Date.now() - 1,
+    windowStartedAt: Date.now() - 86400001, expiresAt: Date.now() - 1,
+  }));
+  assert.equal((await attempt(ip, h.env.ADMIN_USERNAME, h.env.ADMIN_PASSWORD)).status, 200);
+});
+
+test('successful password login resets the IP failure streak; malformed bodies do not consume attempts', async t => {
+  const h = await harness(t);
+  const ip = '2001:db8::5';
+  const login = (username, password) => h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
+    body: JSON.stringify({ username, password }),
   }), h.env);
 
-  // Five failed verifications exhaust the budget; the sixth is rejected outright.
-  for (let i = 0; i < 5; i++) assert.equal((await attempt('203.0.113.5')).status, 401);
-  const blocked = await attempt('203.0.113.5');
-  assert.equal(blocked.status, 429);
-  assert.deepEqual(await blocked.json(), { error: 'rate_limit_exceeded' });
-  assert.ok(Number(blocked.headers.get('retry-after')) >= 1);
+  const malformed = await h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip }, body: '{',
+  }), h.env);
+  assert.equal(malformed.status, 400);
 
-  // Another IP is a different bucket, and correct credentials still succeed.
-  assert.equal((await attempt('198.51.100.9', h.env.ADMIN_PASSWORD)).status, 200);
+  assert.equal((await login('invalid-account', h.env.ADMIN_PASSWORD)).status, 401);
+  assert.equal((await login(h.env.ADMIN_USERNAME, 'invalid-password')).status, 401);
+  assert.equal((await login(h.env.ADMIN_USERNAME, h.env.ADMIN_PASSWORD)).status, 200, 'valid login clears the first two failures');
 
-  // The budget is disposable KV state: clearing it restores the endpoint.
-  const window = Math.floor(Date.now() / 60000);
-  await h.env.CACHE.delete(`rl:l:203.0.113.5:${window}`);
-  assert.equal((await attempt('203.0.113.5', h.env.ADMIN_PASSWORD)).status, 200);
+  assert.equal((await login(h.env.ADMIN_USERNAME, 'again-1')).status, 401);
+  assert.equal((await login(h.env.ADMIN_USERNAME, 'again-2')).status, 401);
+  const third = await login(h.env.ADMIN_USERNAME, 'again-3');
+  assert.equal(third.status, 429);
+  assert.deepEqual(await third.json(), { error: 'login_cooldown' });
+});
+
+test('unavailable R2 login guard fails closed for passwords without affecting GitHub OAuth', async t => {
+  const h = await harness(t);
+  const github = { ...h.env, DATA: h.adapt({ get: async () => { throw new Error('STORAGE_CANARY'); } }),
+    GITHUB_CLIENT_ID: 'client-id', GITHUB_CLIENT_SECRET: 'client-secret', GITHUB_ALLOWED_USER_ID: '123' };
+  const headers = { 'CF-Connecting-IP': '203.0.113.77' };
+  const response = await h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: h.env.ADMIN_USERNAME, password: h.env.ADMIN_PASSWORD }),
+  }), github);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'login_guard_unavailable' });
+  assert.equal((await h.worker.fetch(new Request('https://example.test/api/v1/auth/github', { headers }), github)).status, 302);
 });
