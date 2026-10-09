@@ -183,3 +183,16 @@ test('OpenAPI documents revocable Session endpoints and names actual signed Cook
   assert.ok(spec.paths['/auth/sessions/{id}'].delete);
   assert.ok(spec.paths['/auth/logout-all'].post);
 });
+
+
+test('delayed rollout never invalidates an otherwise unexpired signed legacy Cookie', async t => {
+  const h = await setup(t);
+  const original = Date.now, delayed = Date.UTC(2026, 10, 4, 12, 0, 0);
+  try {
+    Date.now = () => delayed;
+    const cookie = legacyCookie(h, Math.floor(delayed / 1000) + 3600);
+    assert.equal((await me(h, cookie)).status, 200, 'migration must follow signed cookie expiry, not an arbitrary calendar cutoff');
+    Date.now = () => delayed + 3600000;
+    assert.equal((await me(h, cookie)).status, 401);
+  } finally { Date.now = original; }
+});
