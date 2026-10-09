@@ -109,22 +109,22 @@ export async function revokeCurrentSession<T extends JsonBinContextEnv>(c: Conte
   if (current) await revokeSingleSession(c.env, current.principal);
 }
 
-export async function revokeEverySession<T extends JsonBinContextEnv>(c: Context<T>): Promise<void> {
+export async function revokeEverySession(c: Context<any>): Promise<void> {
   const current = await readSessionContext(c);
   if (!current) throw new SystemError(401, "unauthorized");
   await revokeAllSessions(c.env, current.principal);
 }
 
-export async function listCurrentSessions<T extends JsonBinContextEnv>(c: Context<T>): Promise<SessionSummary[]> {
+export async function listCurrentSessions(c: Context<any>): Promise<SessionSummary[]> {
   const current = await readSessionContext(c);
   if (!current) throw new SystemError(401, "unauthorized");
   return listSessionSummaries(c.env, current.principal.sid);
 }
 
-export async function revokeSessionById<T extends JsonBinContextEnv>(c: Context<T>, sid: string): Promise<boolean> {
+export async function revokeSessionById(c: Context<any>, sid: string): Promise<boolean> {
   return revokeSessionId(c.env, sid);
 }
 
-export async function currentSessionId<T extends JsonBinContextEnv>(c: Context<T>): Promise<string | null> {
+export async function currentSessionId(c: Context<any>): Promise<string | null> {
   return (await readSessionContext(c))?.principal.sid ?? null;
 }
