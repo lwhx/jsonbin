@@ -4,8 +4,13 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   clearSession,
+  currentSessionId,
   issueSession,
+  listCurrentSessions,
   readSession,
+  revokeCurrentSession,
+  revokeEverySession,
+  revokeSessionById,
   sessionConfigured,
 } from "../auth/session";
 import { base64UrlEncode, timingSafeEqualText } from "../lib/crypto";
@@ -13,6 +18,7 @@ import { allowedRequestOrigin } from "../auth/origin";
 import { readBoundedJson } from "../lib/system-http";
 import { checkPasswordLoginGuard, clearPasswordLoginFailures, recordPasswordLoginFailure } from "../storage/login-guard";
 import { SystemError } from "../../shared/system";
+import { requireSession } from "../middleware/auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -95,11 +101,15 @@ app.post("/login", async (c) => {
     return c.json({ error: "login_guard_unavailable" }, 503);
   }
 
-  await issueSession(c, {
-    id: "local-admin",
-    username: configuredUsername!,
-    provider: "password",
-  });
+  try {
+    await issueSession(c, {
+      id: "local-admin",
+      username: configuredUsername!,
+      provider: "password",
+    });
+  } catch {
+    return c.json({ error: "session_state_unavailable" }, 503);
+  }
 
   await auditRequest(c, "auth.login_succeeded", null, { actor: { type: "session", id: "local-admin" }, provider: "password" });
   return c.json({
@@ -112,16 +122,66 @@ app.post("/login", async (c) => {
   });
 });
 
-app.post("/logout", (c) => {
+function sessionError(c: Context<{ Bindings: Env }>, error: unknown) {
+  if (error instanceof SystemError && error.status === 401) return c.json({ error: "unauthorized" }, 401);
+  return c.json({ error: "session_state_unavailable" }, 503);
+}
+
+app.post("/logout", async (c) => {
   if (!allowedRequestOrigin(c.req.raw, c.env)) return c.json({ error: "origin_not_allowed" }, 403);
+  try {
+    await revokeCurrentSession(c);
+  } catch (error) {
+    return sessionError(c, error);
+  }
+  // Clear only once server-side revocation is durably committed.
   clearSession(c);
   return c.json({ ok: true });
 });
 
 app.get("/me", async (c) => {
-  const user = await readSession(c);
-  if (!user) return c.json({ authenticated: false }, 401);
-  return c.json({ authenticated: true, user });
+  try {
+    const user = await readSession(c);
+    if (!user) return c.json({ authenticated: false }, 401);
+    return c.json({ authenticated: true, user });
+  } catch (error) {
+    return sessionError(c, error);
+  }
+});
+
+// Session administration accepts only an authenticated management Cookie,
+// never an API Key or a bearer+cookie fallback.
+app.use("/sessions", async (c, next) => {
+  if (c.req.raw.headers.has("Authorization")) return c.json({ error: "unauthorized" }, 401);
+  await next();
+});
+app.use("/sessions/*", async (c, next) => {
+  if (c.req.raw.headers.has("Authorization")) return c.json({ error: "unauthorized" }, 401);
+  await next();
+});
+
+app.get("/sessions", requireSession, async (c) => {
+  try { return c.json({ items: await listCurrentSessions(c) }); }
+  catch (error) { return sessionError(c, error); }
+});
+app.delete("/sessions/:id", requireSession, async (c) => {
+  try {
+    const id = c.req.param("id");
+    const currentId = await currentSessionId(c);
+    if (!await revokeSessionById(c, id)) return c.json({ error: "not_found" }, 404);
+    if (currentId === id) clearSession(c);
+    return c.json({ ok: true });
+  } catch (error) { return sessionError(c, error); }
+});
+app.post("/logout-all", requireSession, async (c) => {
+  if (c.req.raw.headers.has("Authorization")) return c.json({ error: "unauthorized" }, 401);
+  try {
+    await revokeEverySession(c);
+  } catch (error) {
+    return sessionError(c, error);
+  }
+  clearSession(c);
+  return c.json({ ok: true });
 });
 
 app.get("/github", (c) => {
@@ -236,11 +296,15 @@ app.get("/github/callback", async (c) => {
     return loginFailure(c, "github_user_not_allowed", 403);
   }
 
-  await issueSession(c, {
-    id: String(githubUser.id),
-    username: githubUser.login,
-    provider: "github",
-  });
+  try {
+    await issueSession(c, {
+      id: String(githubUser.id),
+      username: githubUser.login,
+      provider: "github",
+    });
+  } catch {
+    return loginFailure(c, "session_state_unavailable", 503);
+  }
 
   await auditRequest(c, "auth.login_succeeded", null, { actor: { type: "session", id: String(githubUser.id) }, provider: "github" });
   return c.redirect("/");
