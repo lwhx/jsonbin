@@ -122,7 +122,7 @@ app.post("/login", async (c) => {
   });
 });
 
-function sessionError(c: Context<{ Bindings: Env }>, error: unknown) {
+function sessionError(c: Context<any>, error: unknown) {
   if (error instanceof SystemError && error.status === 401) return c.json({ error: "unauthorized" }, 401);
   return c.json({ error: "session_state_unavailable" }, 503);
 }
