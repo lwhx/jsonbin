@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate Cloudflare deployment configuration (dry-run)
+        run: npx wrangler deploy --dry-run --outdir .wrangler/sec002-check
+
       - name: Test
         run: npm run build:sdk && npm run build:mcp && npm run test:only
 
