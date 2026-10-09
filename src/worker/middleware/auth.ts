@@ -14,7 +14,14 @@ export const requireSession: MiddlewareHandler<{
   Bindings: Env;
   Variables: Variables;
 }> = async (c, next) => {
-  const user = await readSession(c);
+  let user: SessionUser | null;
+  try {
+    user = await readSession(c);
+  } catch {
+    // An unavailable R2 revocation record is not a missing/invalid Cookie.
+    // Fail closed and let the browser retry without clearing its session.
+    return c.json({ error: "session_state_unavailable" }, 503);
+  }
   if (!user) return c.json({ error: "unauthorized" }, 401);
   // Browser writes with ambient cookies must originate from this application.
   if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method) && !allowedRequestOrigin(c.req.raw, c.env)) {
