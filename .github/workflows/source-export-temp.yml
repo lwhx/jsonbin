@@ -1,0 +1,20 @@
+name: Temporary source export for isolated performance work
+on:
+  push:
+    branches: [perf/api-key-kv-accounting-20261009]
+    paths: [.github/workflows/source-export-temp.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package repository sources
+        run: tar -czf "$RUNNER_TEMP/jsonbin-sources.tar.gz" --exclude=.git --exclude=node_modules --exclude=dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jsonbin-sources
+          path: ${{ runner.temp }}/jsonbin-sources.tar.gz
+          retention-days: 1
