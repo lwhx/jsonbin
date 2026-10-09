@@ -2348,7 +2348,8 @@ test('fast 304 reads only canonical Bin metadata, not the immutable version body
     const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
   } });
   const cache = await mf.getKVNamespace('CACHE', 'jsonbin-tests');
-  const env = { DATA: data, CACHE: cache, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret };
+  const limiter = await mf.getDurableObjectNamespace('RATE_LIMITER', 'jsonbin-tests');
+  const env = { DATA: data, CACHE: cache, RATE_LIMITER: limiter, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret };
   const worker = (await import('../dist/jsonbin/index.js')).default;
   const url = 'http://localhost/api/v1/bins/' + bin.meta.id;
   const response = await worker.fetch(new Request(url, { headers: { Cookie: cookie, 'If-None-Match': published.etag } }), env);
@@ -2356,7 +2357,7 @@ test('fast 304 reads only canonical Bin metadata, not the immutable version body
   assert.equal(await response.text(), '');
   assert.ok(counts.meta >= 1, 'always check canonical metadata for current authorization/expiry');
   assert.equal(counts.versions, 0, 'unchanged Bin must not fetch the large JSON body');
-  const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag } }), env);
+  const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag, 'CF-Connecting-IP': '203.0.113.95' } }), env);
   assert.equal(rejected.status, 401, 'private Bin still requires a session even with a matching ETag');
 });
 
