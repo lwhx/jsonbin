@@ -21,6 +21,7 @@ import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute } from "./storage/analytics";
 import { settleRecentKeyUsage } from "./storage/key-usage";
+import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
 
@@ -179,6 +180,14 @@ export default {
       pruneActivity(env), sweepWebhookDeliveries(env), settleRecentKeyUsage(env, controller.scheduledTime ?? Date.now()),
     ]);
     if (keyUsage.status === "rejected") console.error("scheduled_key_usage_failed", { requestId });
+    // A daily, bounded pass removes expired authoritative IP lock records.
+    // Never block scheduled Bin/Webhook maintenance if cleanup is unavailable.
+    const scheduledAt = controller.scheduledTime ?? Date.now();
+    const utc = new Date(scheduledAt);
+    if (utc.getUTCHours() === 3 && utc.getUTCMinutes() === 0) {
+      const [loginCleanup] = await Promise.allSettled([pruneExpiredPasswordGuards(env, scheduledAt)]);
+      if (loginCleanup.status === "rejected") console.error("scheduled_login_guard_cleanup_failed", { requestId });
+    }
     if (sweep.status === "rejected" || prune.status === "rejected" || webhookSweep.status === "rejected") {
       console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status, webhooks: webhookSweep.status });
       throw new Error("scheduled_maintenance_failed");
