@@ -1395,7 +1395,10 @@ test('public authorization and response share a snapshot when visibility and JSO
       }
       return object;
     } };
-    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix), { DATA: data });
+    const limiter = await mf.getDurableObjectNamespace('RATE_LIMITER', 'jsonbin-tests');
+    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix, {
+      headers: { 'CF-Connecting-IP': '203.0.113.33' },
+    }), { DATA: data, SESSION_SECRET: sessionSecret, RATE_LIMITER: limiter });
     assert.equal(response.status, 200); assert.equal(changed, true);
     assert.deepEqual((await response.json()).value, suffix ? 'public' : { message: 'public' });
     assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
