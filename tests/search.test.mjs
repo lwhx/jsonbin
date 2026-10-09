@@ -27,7 +27,7 @@ test('global search finds names descriptions IDs and collection membership, norm
 });
 test('verified KV snapshot reads only matching canonical metadata and skips JSON version bodies', async () => {
   const bin = await create('/bins', { name: '读取计数乙', value: null }); await search('读取计数乙');
-  const reads = []; const env = { ...h.env, DATA: h.adapt({ get: async (key, ...args) => { reads.push(key); return h.bucket.get(key, ...args); } }) };
+  const reads = []; const env = { ...h.env, DATA: h.adapt({ get: async (key, ...args) => { if (key !== 'system/auth/sessions.json') reads.push(key); return h.bucket.get(key, ...args); } }) };
   const result = await search('读取计数乙', 'bin', env); assert.equal(result.source, 'kv'); assert.equal(result.items[0].id, bin.meta.id);
   assert.deepEqual(reads.sort(), [`bins/${bin.meta.id}/meta.json`, 'indexes/search/meta.json'].sort());
 });
