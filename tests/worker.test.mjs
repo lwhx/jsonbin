@@ -1072,7 +1072,12 @@ test('API keys are session-only, return a token only on creation and never persi
   assert.ok(!Object.hasOwn(created.key, 'digest')); assert.ok(!Object.hasOwn(created.key, 'digestAlgorithm'));
   const response = await request('/keys'); assert.equal(response.headers.get('cache-control'), 'no-store');
   const listed = await response.json(); const publicRecord = listed.items.find(item => item.id === created.key.id);
-  assert.deepEqual(publicRecord, created.key); assert.ok(!JSON.stringify(listed).includes(created.token));
+  const { usageApproximate, usageAsOf, usageStatus, ...legacyFields } = publicRecord;
+  assert.deepEqual(legacyFields, created.key, 'all pre-existing API Key fields retain their original contract');
+  assert.equal(usageApproximate, true);
+  assert.equal(usageStatus, 'ok');
+  assert.ok(Number.isFinite(Date.parse(usageAsOf)), 'approximate usage indicates snapshot time');
+  assert.ok(!JSON.stringify(listed).includes(created.token));
   assert.ok(!Object.hasOwn(publicRecord, 'token')); assert.ok(!Object.hasOwn(publicRecord, 'digest'));
   for (const [path, method] of [['/keys', 'GET'], ['/keys', 'POST'], ['/keys/' + created.key.id, 'DELETE']]) {
     assert.equal((await bearerRequest(created.token, path, { method, value: method === 'POST' ? { name: 'escalation', scopes: keyScopes } : undefined })).status, 401);
