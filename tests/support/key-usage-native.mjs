@@ -51,7 +51,8 @@ test('key usage: Bearer request path never synchronously commits R2 usage metada
   assert.doesNotMatch(keys, /export async function useApiKey\s*\(/);
   assert.match(auth, /await readApiKey\(c\.env, token\)/, 'credential check must stay in R2');
   assert.match(auth, /authorizeApiKey\(current, required\)/, 'scope check must remain');
-  assert.match(auth, /checkRateLimit\(c\.env\.CACHE/, 'rate limiting must remain');
+  assert.match(auth, /enforceApiKeyRateLimit\(c\.env, current\.key\.id, limit\)/,
+    'rate limiting must remain via native/CAS limiter; never restore KV fail-open');
 });
 
 test('key usage: daily reader bulk-reads 100 at a time, handles legacy shards and sums timestamps', async () => {
