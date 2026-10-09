@@ -1,0 +1,25 @@
+name: GitHub OAuth button UI regression (temporary)
+on:
+  push:
+    branches:
+      - ui/github-oauth-login-button-20261009
+    paths:
+      - '.github/workflows/verify-github-login-ui.yml'
+      - 'tests/browser/github-login.spec.ts'
+      - 'src/react-app/App.tsx'
+      - 'src/react-app/styles.css'
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Verify GitHub login UI
+        run: npx playwright test tests/browser/github-login.spec.ts --reporter=line
