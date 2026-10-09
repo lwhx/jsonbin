@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { createSystemHarness } from './support/system-harness.mjs';
 
 async function withWorker(pepper, fn) {
   const password = randomBytes(32).toString('hex');
@@ -58,12 +59,13 @@ test('a blank optional pepper uses SHA-256 while an explicitly weak pepper preve
   });
 });
 
-test('an empty Authorization header that reaches the Worker entry rejects Cookie fallback for resources and key administration', async () => {
+test('an empty Authorization header that reaches the Worker entry rejects Cookie fallback for resources and key administration', async t => {
   // The local HTTP transport strips empty headers, so exercise the built entry directly.
+  // Use the full R2 test harness: password login must fail closed if R2 is absent.
+  const h = await createSystemHarness('empty-auth-header-' + crypto.randomUUID());
+  t.after(() => h.close());
   const { default: app } = await import('../dist/jsonbin/index.js');
-  const env = { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: randomBytes(32).toString('hex'), SESSION_SECRET: randomBytes(32).toString('hex') };
-  const login = await app.fetch(new Request('https://example.test/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'test', password: env.ADMIN_PASSWORD }) }), env);
-  assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0];
+  const env = h.env, cookie = h.cookie;
   assert.equal((await app.fetch(new Request('https://example.test/api/v1/auth/me', { headers: { Cookie: cookie } }), env)).status, 200);
   for (const path of ['/bins', '/bins/example', '/bins/example/value/key', '/collections', '/schemas', '/keys', '/trash/bins', '/activity']) {
     const response = await app.fetch(new Request('https://example.test/api/v1' + path, { headers: { Cookie: cookie, Authorization: '' } }), env);

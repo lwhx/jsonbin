@@ -4,7 +4,7 @@
 
 ## 配置与安全
 
-部署绑定 DATA 到目标 R2 桶，CACHE 到可丢弃的目标 KV 命名空间。密码、SESSION_SECRET、可选 TOKEN_PEPPER/GITHUB_CLIENT_SECRET 使用 Cloudflare Secrets；SESSION_SECRET 至少 32 字符。登录配置只有具备有效签名 Secret 才显示启用。更换 SESSION_SECRET 使旧登录失效，并使此前加密保存的 API Key 完整明文无法再次解密；API Key 的 digest 认证本身不依赖 SESSION_SECRET，因此原 Token 仍可继续认证。TOKEN_PEPPER 轮换前创建并验证替代 API Key，再撤销旧 Key，否则旧 HMAC Key 失效。
+部署绑定 DATA 到目标 R2 桶，CACHE 到可丢弃的目标 KV 命名空间。密码登录 IP 分级封禁记录存放在 DATA 的 `auth/login-guard/` 下，R2 CAS 防止并发失败计数丢失，存储键是基于 SESSION_SECRET 的 IP HMAC，不包含明文 IP。错误 3 次锁定 60 秒；24 小时失败累计达到 6 次则该 IP 的密码登录封禁 24 小时。OAuth、既有 Session 和 API Key 不受影响；每日 03:00 UTC 的现有 Cron 清理至多 100 个已过期且超过 48 小时未更新的记录。R2 不可用时密码登录返回 503 而不会降级成无限制；密钥轮换会使 IP 锁状态使用新的标识。密码、SESSION_SECRET、可选 TOKEN_PEPPER/GITHUB_CLIENT_SECRET 使用 Cloudflare Secrets；SESSION_SECRET 至少 32 字符。登录配置只有具备有效签名 Secret 才显示启用。更换 SESSION_SECRET 使旧登录失效，并使此前加密保存的 API Key 完整明文无法再次解密；API Key 的 digest 认证本身不依赖 SESSION_SECRET，因此原 Token 仍可继续认证。TOKEN_PEPPER 轮换前创建并验证替代 API Key，再撤销旧 Key，否则旧 HMAC Key 失效。
 
 APP_ORIGIN 默认可省略，浏览器仅允许请求站点自身。显式值必须是完整规范 Origin，例如 `https://json.example.com`，没有路径、末尾斜杠、凭据或通配符；错误配置拒绝 browser Origin。登录、退出、Session 写入也使用该规则。无 Origin 的 curl/Python 仍须有效认证；配置 CORS 不会授予 Scope。
 
