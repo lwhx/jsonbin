@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --no-audit --no-fund
-      - name: Benchmark main then candidate with same 250 requests
+      - name: Benchmark main then candidate with same 100 requests
         run: |
           FEATURE_SHA="$(git rev-parse HEAD)"
           cp scripts/bench-native-rate-limits.mjs /tmp/bench-native-rate-limits.mjs
