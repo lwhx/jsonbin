@@ -58,6 +58,11 @@ test('HTTPS session cookies are HttpOnly, Secure, SameSite Lax and logout expire
   const logout = await h.request('/auth/logout', { method: 'POST', headers: { Origin: 'https://example.test' } });
   assert.equal(logout.status, 200);
   assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
+  // The shared harness must not reuse a deliberately revoked Cookie in later
+  // unrelated origin/CORS tests. Real server logout revokes that SID now.
+  const reauthenticated = await login();
+  assert.equal(reauthenticated.status, 200);
+  h.cookie = reauthenticated.headers.get('set-cookie').split(';')[0];
 });
 
 test('unconfigured session signing disables login cleanly without a server error', async () => {
