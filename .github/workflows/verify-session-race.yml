@@ -8,6 +8,7 @@ on:
       - 'tests/session-revocation.test.mjs'
       - 'src/worker/storage/sessions.ts'
       - 'src/worker/auth/session.ts'
+      - 'src/worker/middleware/auth.ts'
       - 'src/worker/routes/auth.ts'
 permissions:
   contents: read
