@@ -1,0 +1,28 @@
+name: SEC001 logout race regression (temporary)
+on:
+  push:
+    branches:
+      - security/session-revocation-14day-20261009
+    paths:
+      - '.github/workflows/sec001-logout-race.yml'
+      - 'src/react-app/App.tsx'
+      - 'src/react-app/features/settings/ExportPanel.tsx'
+      - 'src/react-app/features/settings/SessionPanel.tsx'
+      - 'src/react-app/features/bins/BinDetailPage.tsx'
+      - 'tests/browser/session-resilience.spec.ts'
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/browser/settings.spec.ts tests/browser/session-resilience.spec.ts --reporter=line
