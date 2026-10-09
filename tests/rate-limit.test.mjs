@@ -58,31 +58,20 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   // Never seed against a window that is about to roll over.
   const msIntoWindow = Date.now() % 60000;
   if (msIntoWindow > 58000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
-  const window = Math.floor(Date.now() / 60000);
   const call = extraIp => h.worker.fetch(new Request(`https://example.test/api/v1/bins/${bin.meta.id}`, {
     headers: { 'CF-Connecting-IP': extraIp ?? ip },
   }), h.env);
 
-  // Seed the IP's current window at the limit instead of spending 240
-  // wall-clock requests: the verdict is deterministic even under CI load.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
+  for (let i = 0; i < 240; i++) await call();
   const limited = await call();
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) >= 1);
-
-  // A different IP is a different bucket.
   assert.equal((await call('198.51.100.21')).status, 200);
+  const spoofed = await h.worker.fetch(new Request(`https://example.test/api/v1/bins/${bin.meta.id}`, {
+    headers: { 'CF-Connecting-IP': ip, 'X-Forwarded-For': '198.51.100.21' },
+  }), h.env);
+  assert.equal(spoofed.status, 429);
 
-  // Only the ACTIVE window counts: a saturated previous window never limits.
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
-  await h.env.CACHE.put(`rl:a:${ip}:${window - 1}`, '240');
-  assert.equal((await call()).status, 200);
-
-  // Counters are disposable KV state: deleting the active window restores access.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
-  assert.equal((await call()).status, 429);
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
-  assert.equal((await call()).status, 200);
 });
 
 test('an explicit null key rate limit is honored as unlimited (F16)', async t => {
@@ -91,8 +80,7 @@ test('an explicit null key rate limit is honored as unlimited (F16)', async t =>
   assert.equal(key.key.rateLimitPerMinute, null);
   // Seed this minute's counter past the 120 default: an unlimited key sails
   // through, while a default-limited key would 429 on this very request.
-  const window = Math.floor(Date.now() / 60000);
-  await h.env.CACHE.put(`rl:k:${key.key.id}:${window}`, '200');
+  for (let i = 0; i < 121; i++) await h.worker.fetch(new Request('https://example.test/api/v1/bins', { headers: { Authorization: `Bearer ${key.token}` } }), h.env);
   const res = await h.worker.fetch(new Request('https://example.test/api/v1/bins', { headers: { Authorization: `Bearer ${key.token}` } }), h.env);
   assert.equal(res.status, 200, 'null must mean unlimited, not the 120 default');
 });
@@ -237,4 +225,20 @@ test('concurrent invalid logins use R2 CAS to enforce exactly three then six fai
   stored = await (await h.bucket.get(entry.key)).json();
   assert.equal(stored.failures, 6);
   assert.ok(stored.bannedUntil > Date.now());
+});
+
+test('SEC-002 denies missing trusted IP and limiter outages, but keeps valid sessions', async t => {
+  const h = await harness(t);
+  const bin = await (await h.request('/bins', { method: 'POST', value: { name: 'public security', visibility: 'public', value: { ok: true } } })).json();
+  const path = `https://example.test/api/v1/bins/${bin.meta.id}`;
+  const noIp = await h.worker.fetch(new Request(path), h.env);
+  assert.equal(noIp.status, 503);
+  assert.deepEqual(await noIp.json(), { error: 'anonymous_identity_unavailable' });
+  const noLimiter = { ...h.env, RATE_LIMITER: undefined };
+  assert.equal((await h.worker.fetch(new Request(path, { headers: { 'CF-Connecting-IP': '198.51.100.8' } }), noLimiter)).status, 503);
+  assert.equal((await h.request(`/bins/${bin.meta.id}`, {}, noLimiter)).status, 200);
+  const key = await (await h.request('/keys', { method: 'POST', value: { name: 'limited', scopes: ['bin:read'] } })).json();
+  const rejected = await h.worker.fetch(new Request(path, { headers: { Authorization: `Bearer ${key.token}` } }), noLimiter);
+  assert.equal(rejected.status, 503);
+  assert.deepEqual(await rejected.json(), { error: 'rate_limit_unavailable' });
 });
