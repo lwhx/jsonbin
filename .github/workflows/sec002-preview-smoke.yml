@@ -35,11 +35,12 @@ jobs:
             case "${status}" in
               completed/success) exit 0 ;;
               completed/failure|completed/cancelled|completed/skipped|completed/timed_out)
-                # Cloudflare may briefly report a failed placeholder check
-                # before the real preview build check starts on the same SHA.
-                # Only fail after three consecutive terminal observations.
+                # Workers Builds can report a failed placeholder for ~30s
+                # before the actual build check starts on the same SHA.
+                # Confirm a terminal failure for >=90s before failing the
+                # smoke job; any queued/in-progress state resets the count.
                 failure_streak=$((failure_streak + 1))
-                if [ "${failure_streak}" -ge 3 ]; then exit 1; fi
+                if [ "${failure_streak}" -ge 9 ]; then exit 1; fi
                 ;;
               *) failure_streak=0 ;;
             esac
