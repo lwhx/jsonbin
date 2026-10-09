@@ -34,7 +34,7 @@ function unavailable(error = "rate_limit_unavailable"): Response {
 async function consume(env: Env, identity: string, limit: number): Promise<Response | null> {
   if (!env.RATE_LIMITER || !Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) return unavailable();
   try {
-    const stub = env.RATE_LIMITER.getByName(identity);
+    const stub = env.RATE_LIMITER.get(env.RATE_LIMITER.idFromName(identity));
     const response = await stub.fetch("https://rate-limit.internal/consume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
