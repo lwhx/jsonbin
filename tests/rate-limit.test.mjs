@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createSystemHarness } from './support/system-harness.mjs';
 
 async function harness(t) {
@@ -55,14 +56,29 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   const h = await harness(t);
   const bin = await (await h.request('/bins', { method: 'POST', value: { name: '公开仓', visibility: 'public', value: { open: true } } })).json();
   const ip = '203.0.113.77';
-  // Never seed against a window that is about to roll over.
+  // The old 240 sequential HTTP calls could straddle a natural minute
+  // boundary under CI contention, incorrectly treating a fresh window as
+  // a bypass. Seed the exact *same* DO identity quickly and finish with
+  // real API reads; leave at least 25s before the window rolls over.
   const msIntoWindow = Date.now() % 60000;
-  if (msIntoWindow > 58000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
+  if (msIntoWindow > 35000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
   const call = extraIp => h.worker.fetch(new Request(`https://example.test/api/v1/bins/${bin.meta.id}`, {
     headers: { 'CF-Connecting-IP': extraIp ?? ip },
   }), h.env);
 
-  for (let i = 0; i < 240; i++) await call();
+  const digest = createHmac('sha256', h.env.SESSION_SECRET)
+    .update(`jsonbin/public/ip/v1:${ip}`).digest('base64url');
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(`anon:${digest}`));
+  const seed = () => stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 240 }),
+  });
+  const reservations = await Promise.all(Array.from({ length: 239 }, seed));
+  assert.ok(reservations.every(response => response.status === 200));
+  assert.ok((await Promise.all(reservations.map(response => response.json())))
+    .every(verdict => verdict.allowed), 'the first 239 reservations fit the active window');
+  assert.equal((await call()).status, 200, 'the 240th request reaches the real HTTP route');
   const limited = await call();
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) >= 1);
