@@ -8,8 +8,11 @@ export async function createSystemHarness(name) {
   const env = { DATA: bucket, CACHE: cache, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: randomBytes(32).toString('hex'), SESSION_SECRET: randomBytes(32).toString('hex') };
   const login = await worker.fetch(new Request('https://example.test/api/v1/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:env.ADMIN_USERNAME,password:env.ADMIN_PASSWORD})}), env);
   if (login.status !== 200) throw new Error('harness_login_failed');
-  const cookie = login.headers.get('set-cookie').split(';')[0];
-  return { worker, env, bucket, cookie, close: () => mf.dispose(),
+  let cookie = login.headers.get('set-cookie').split(';')[0];
+  return { worker, env, bucket,
+    get cookie() { return cookie; },
+    set cookie(value) { cookie = value; },
+    close: () => mf.dispose(),
     adapt(overrides) { return new Proxy(bucket, {get(target,key) { if (key in overrides) return overrides[key]; const value=target[key]; return typeof value==='function' ? value.bind(target) : value; }}); },
     request(path,options={},bindings=env) {
       return worker.fetch(new Request('https://example.test/api/v1'+path, {method:options.method??'GET', headers:{Cookie:cookie,'Content-Type':'application/json',...options.headers}, ...(options.value===undefined ? {} : {body:JSON.stringify(options.value)}), ...(options.body===undefined?{}:{body:options.body})}), bindings);

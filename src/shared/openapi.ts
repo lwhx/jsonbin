@@ -73,7 +73,7 @@ export function generateOpenApiSpec(): Record<string, unknown> {
         CookieAuth: {
           type: "apiKey",
           in: "cookie",
-          name: "jb_session",
+          name: "jsonbin_session",
           description: "控制台管理 Session Cookie（Session-only 端点不接受 Bearer）",
         },
         BearerAuth: {
@@ -214,10 +214,39 @@ export function generateOpenApiSpec(): Record<string, unknown> {
         }),
       },
       "/auth/logout": {
-        post: op("退出登录", { security: PUBLIC, description: "写操作校验 Origin" }),
+        post: op("退出当前设备并即时撤销服务端 Session", {
+          security: PUBLIC,
+          description: "按 Origin 校验 CSRF，成功后注销当前 SID；旧 Cookie 于迁移期内通过 HMAC 指纹拒绝重放。只有服务端 R2 确认撤销后才清除 Cookie。",
+          responses: { ...ok(), "403": { description: "Origin 不允许" }, "503": { description: "session_state_unavailable，撤销未确认，可重试" } },
+        }),
       },
       "/auth/me": {
-        get: op("当前会话用户", { security: SESSION_ONLY, responses: { ...ok(), "401": { description: "未登录" } } }),
+        get: op("校验并获取当前 Session 用户", {
+          security: SESSION_ONLY,
+          description: "已签发 Cookie 默认固定 14 天，关闭浏览器不会退出。R2 会话授权状态不可用时返回 503（不得清除 Cookie）。",
+          responses: { ...ok(), "401": { description: "Session 过期或已撤销" }, "503": { description: "session_state_unavailable" } },
+        }),
+      },
+      "/auth/sessions": {
+        get: op("查看未过期设备会话列表", {
+          security: SESSION_ONLY,
+          description: "仅管理 Cookie；记录包含 SID、登录方式、时间及当前设备标识，不包含 Token/Cookie/Secret。",
+          responses: { ...ok(), "401": { description: "未登录" }, "503": { description: "session_state_unavailable" } },
+        }),
+      },
+      "/auth/sessions/{id}": {
+        delete: op("按 SID 立即撤销一个设备会话", {
+          security: SESSION_ONLY,
+          parameters: [idParameter],
+          responses: { ...ok(), "401": { description: "未登录" }, "403": { description: "Origin 不允许" }, "404": { description: "会话不存在" }, "503": { description: "session_state_unavailable" } },
+        }),
+      },
+      "/auth/logout-all": {
+        post: op("立即撤销所有设备 Session", {
+          security: SESSION_ONLY,
+          description: "递增会话代次并禁用旧版 Cookie，撤销包括当前设备在内的全部会话；保留固定 14 天 Cookie 规则。",
+          responses: { ...ok(), "401": { description: "未登录" }, "403": { description: "Origin 不允许" }, "503": { description: "session_state_unavailable" } },
+        }),
       },
       "/auth/github": {
         get: op("发起 GitHub OAuth 登录", { security: PUBLIC, responses: { "302": { description: "重定向到 GitHub" } } }),

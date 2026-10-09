@@ -6,9 +6,10 @@ import { DefaultsForm } from './DefaultsForm';
 import { ImportPanel } from './ImportPanel';
 import { ExportPanel } from './ExportPanel';
 import { SearchIndexPanel } from '../search/SearchIndexPanel';
+import { SessionPanel } from './SessionPanel';
 const probes = { unconfigured: '未配置', reachable: '读探测通过', unavailable: '读探测失败' };
 const statsLabels = { activeBins: '正常 Bin', trashBins: '回收站 Bin', pendingImports: '未完成恢复', collections: '可用集合', schemas: '可用模型', versions: '保留 JSON 版本', currentValueBytes: '当前 JSON 逻辑字节', storedBytes: '业务对象实际字节（含历史与未完成文件）' };
-export function SettingsPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
+export function SettingsPage({ onDirtyChange, onLoggedOut }: { onDirtyChange: (dirty: boolean) => void; onLoggedOut: () => void }) {
   const client = useQueryClient();
   const info = useQuery({ queryKey: ['system-info'], queryFn: ({ signal }) => systemApi.getInfo(signal), retry: false });
   const settings = useQuery({ queryKey: ['system-settings'], queryFn: ({ signal }) => systemApi.getSettings(signal), retry: false });
@@ -26,6 +27,7 @@ export function SettingsPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean
         <p>此处是只读探测；写入权限、OAuth 登录和定时任务需另外验收。</p>{info.data.statistics.status === 'available' ? <dl className="system-statistics">{Object.entries(info.data.statistics.data).map(([key, value]) => <div key={key}><dt>{statsLabels[key as keyof typeof statsLabels]}</dt><dd>{value.toLocaleString('zh-CN')}</dd></div>)}</dl> : <p role="status">统计暂不可用：{info.data.statistics.error === 'statistics_limit_exceeded' ? '超出扫描上限（10000 对象 / 500 元数据）' : '存储读取失败'}。可稍后刷新。</p>}
         <p>未完成恢复保持隐藏，不自动清理；使用相同备份可继续，关联已修改时请迁移到空实例。</p></>}
     </section>
+    <SessionPanel onLoggedOut={onLoggedOut} />
     <SearchIndexPanel onBusyChange={setIndexBusy} />
     {settings.isPending && <p role="status">正在读取默认设置…</p>}{settings.isError && <p className="detail-error" role="alert">{settings.error.message}<button className="secondary-button" onClick={() => void settings.refetch()}>重试默认设置</button></p>}
     {settings.data && <DefaultsForm record={settings.data} onSaved={saved} onDirtyChange={setDirty} />}

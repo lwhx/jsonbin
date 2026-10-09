@@ -21,6 +21,7 @@ import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute } from "./storage/analytics";
 import { settleRecentKeyUsage } from "./storage/key-usage";
+import { pruneExpiredSessions } from "./storage/sessions";
 import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
@@ -185,8 +186,12 @@ export default {
     const scheduledAt = controller.scheduledTime ?? Date.now();
     const utc = new Date(scheduledAt);
     if (utc.getUTCHours() === 3 && utc.getUTCMinutes() === 0) {
-      const [loginCleanup] = await Promise.allSettled([pruneExpiredPasswordGuards(env, scheduledAt)]);
+      const [loginCleanup, sessionCleanup] = await Promise.allSettled([
+        pruneExpiredPasswordGuards(env, scheduledAt),
+        pruneExpiredSessions(env, scheduledAt),
+      ]);
       if (loginCleanup.status === "rejected") console.error("scheduled_login_guard_cleanup_failed", { requestId });
+      if (sessionCleanup.status === "rejected") console.error("scheduled_session_cleanup_failed", { requestId });
     }
     if (sweep.status === "rejected" || prune.status === "rejected" || webhookSweep.status === "rejected") {
       console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status, webhooks: webhookSweep.status });

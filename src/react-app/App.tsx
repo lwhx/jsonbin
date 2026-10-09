@@ -149,6 +149,7 @@ function apiErrorMessage(status: number, errorCode?: string) {
   if (status === 429 && errorCode === "login_ip_banned") return "该 IP 的密码登录已封禁 24 小时；GitHub 登录仍可使用。";
   if (status === 429) return "登录请求过于频繁，请稍后再试。";
   if (status === 503 && errorCode === "login_guard_unavailable") return "密码登录安全服务暂时不可用，请稍后再试或使用 GitHub 登录。";
+  if (status === 503 && errorCode === "session_state_unavailable") return "会话服务暂时不可用，请稍后重试。";
   if (status === 503) return "当前登录方式尚未配置。";
   return "发生错误，请稍后重试。";
 }
@@ -526,6 +527,14 @@ function AuthenticatedApp({
     return "需要配置存储";
   }, [health.data]);
 
+  function invalidateAuthenticatedView() {
+    window.dispatchEvent(new Event("jsonbin:logout"));
+    setDetailDirty(false);
+    queryClient.setQueryData(["auth-me"], null);
+    void queryClient.cancelQueries();
+    queryClient.clear();
+  }
+
   async function logout() {
     if (detailDirty && !await confirm({
       title: "退出登录？",
@@ -534,15 +543,20 @@ function AuthenticatedApp({
       cancelLabel: "继续编辑",
       danger: true,
     })) return;
-    window.dispatchEvent(new Event("jsonbin:logout"));
-    setDetailDirty(false);
-    await fetch("/api/v1/auth/logout", {
-      method: "POST",
-      credentials: "include",
-    });
-    queryClient.setQueryData(["auth-me"], null);
-    await queryClient.cancelQueries();
-    queryClient.clear();
+    // Cancel sensitive in-flight downloads at logout intent, before network
+    // latency permits them to complete. Do not erase drafts, authentication,
+    // or credentials until server-side revocation is committed.
+    window.dispatchEvent(new Event("jsonbin:logout-pending"));
+    // A logout is only final after R2 has durably revoked this session.
+    // On network/storage errors, preserve the Cookie and current UI for retry.
+    try {
+      const response = await fetch("/api/v1/auth/logout", { method: "POST", credentials: "include" });
+      if (!response.ok) throw new Error("logout_not_committed");
+    } catch {
+      toast("退出登录失败，服务器尚未确认撤销。请稍后重试，当前登录状态已保留。");
+      return;
+    }
+    invalidateAuthenticatedView();
   }
 
   const totalStorage =
@@ -675,7 +689,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Mcp" ? <McpPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
+          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} onLoggedOut={invalidateAuthenticatedView} /> : section === "Docs" ? <DocsPage /> : section === "Mcp" ? <McpPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
             <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}

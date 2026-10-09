@@ -27,7 +27,7 @@ test('global search finds names descriptions IDs and collection membership, norm
 });
 test('verified KV snapshot reads only matching canonical metadata and skips JSON version bodies', async () => {
   const bin = await create('/bins', { name: '读取计数乙', value: null }); await search('读取计数乙');
-  const reads = []; const env = { ...h.env, DATA: h.adapt({ get: async (key, ...args) => { reads.push(key); return h.bucket.get(key, ...args); } }) };
+  const reads = []; const env = { ...h.env, DATA: h.adapt({ get: async (key, ...args) => { if (key !== 'system/auth/sessions.json') reads.push(key); return h.bucket.get(key, ...args); } }) };
   const result = await search('读取计数乙', 'bin', env); assert.equal(result.source, 'kv'); assert.equal(result.items[0].id, bin.meta.id);
   assert.deepEqual(reads.sort(), [`bins/${bin.meta.id}/meta.json`, 'indexes/search/meta.json'].sort());
 });
@@ -143,7 +143,7 @@ test('worst-case rebuild remains below 1000 internal-service calls and abandoned
   let calls = 0, removed = 0; const ids = Array.from({ length: 200 }, () => crypto.randomUUID());
   const DATA = h.adapt({
     list: async ({ prefix }) => { calls++; return { objects: prefix === 'collections/' ? ids.map(id => ({ key: `collections/${id}/meta.json`, etag: 'meta' })) : [], truncated: false }; },
-    get: async key => { calls++; if (key === 'indexes/search/meta.json') return null; const id = key.split('/')[1]; return { httpEtag: '"meta"', uploaded: new Date(), json: async () => ({ id, name: '集合', description: '', status: 'active', slug: 'collection-' + id, updatedAt: new Date().toISOString() }) }; },
+    get: async key => { if (key === 'system/auth/sessions.json') return h.bucket.get(key); calls++; if (key === 'indexes/search/meta.json') return null; const id = key.split('/')[1]; return { httpEtag: '"meta"', uploaded: new Date(), json: async () => ({ id, name: '集合', description: '', status: 'active', slug: 'collection-' + id, updatedAt: new Date().toISOString() }) }; },
     put: async () => { calls++; return { httpEtag: '"published"' }; },
   });
   const CACHE = kv({ put: async () => { calls++; }, delete: async () => { calls++; removed++; }, list: async () => { calls++; return { keys: Array.from({ length: 200 }, (_, i) => ({ name: 'idx:bin:abandoned-' + i })), list_complete: true }; } });

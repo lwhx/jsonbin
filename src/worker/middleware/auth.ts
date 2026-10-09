@@ -2,11 +2,13 @@ import "../activity";
 import { authorizeApiKey, readApiKey, type ApiKey, type ApiScope } from "../storage/keys";
 import { DEFAULT_KEY_RATE_LIMIT, checkRateLimit, rateLimitResponse } from "../storage/rate-limit";
 import type { MiddlewareHandler } from "hono";
-import { readSession, type SessionUser } from "../auth/session";
+import { readSessionContext, type SessionUser } from "../auth/session";
+import type { SessionPrincipal } from "../storage/sessions";
 import { allowedRequestOrigin } from "../auth/origin";
 
 type Variables = {
   user?: SessionUser;
+  sessionPrincipal?: SessionPrincipal;
   apiKey?: ApiKey;
 };
 
@@ -14,15 +16,23 @@ export const requireSession: MiddlewareHandler<{
   Bindings: Env;
   Variables: Variables;
 }> = async (c, next) => {
-  const user = await readSession(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
+  let current: Awaited<ReturnType<typeof readSessionContext>>;
+  try {
+    current = await readSessionContext(c);
+  } catch {
+    // An unavailable R2 revocation record is not a missing/invalid Cookie.
+    // Fail closed and let the browser retry without clearing its session.
+    return c.json({ error: "session_state_unavailable" }, 503);
+  }
+  if (!current) return c.json({ error: "unauthorized" }, 401);
   // Browser writes with ambient cookies must originate from this application.
   if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method) && !allowedRequestOrigin(c.req.raw, c.env)) {
     return c.json({ error: "origin_not_allowed" }, 403);
   }
 
-  c.set("user", user);
-  c.set("activityIdentity", { actor: { type: "session", id: user.id }, provider: user.provider });
+  c.set("user", current.user);
+  c.set("sessionPrincipal", current.principal);
+  c.set("activityIdentity", { actor: { type: "session", id: current.user.id }, provider: current.user.provider });
   await next();
 };
 

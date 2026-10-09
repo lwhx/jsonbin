@@ -37,6 +37,7 @@ system/
   auth/
     admin.json
     github.json
+    sessions.json     # authoritative signed-Session allowlist/generation
 
 collections/
   <collectionId>/
@@ -77,6 +78,10 @@ Restoration validates the existing immutable value against its pinned schema and
 Permanent deletion claims a non-restorable `purging` state with CAS, deletes all version pages and legacy archives, then retains only `{id,deletedAt,purgeState:"purged"}`. Interrupted deletion can resume with its approved ETag or current trash ETag. The minimal terminal marker prevents delayed writes or legacy archive imports from reviving deleted JSON. Batch deletion accepts explicit ID/ETag pairs and reports per-item outcomes.
 
 TTL enforcement happens at request time, independently of cron or caches. A scheduled handler runs every 15 minutes in UTC to archive expired Bins (including locked ones) and resume purges. It rechecks canonical state and conditionally updates metadata, preserving concurrent deadline changes. Terminal cleanup also removes late orphan files after interrupted in-flight writes. The current scan uses R2 directly; future indexes may optimize discovery but cannot replace authoritative access checks.
+
+### Auth Session revocation (SEC-001)
+
+`system/auth/sessions.json` is the authoritative, CAS-updated R2 registry for a single-owner deployment. It records the current generation, active 14-day SIDs and legacy-cookie revocation fingerprints. Every valid signed Cookie causes exactly one R2 GET before management access; there is no KV auth cache because eventual consistency would permit revoked cookies. Login and revocation use conditional writes; ordinary requests never renew the Cookie or change the registry. Legacy cookies are accepted only while their original signed expiry remains valid, without an absolute calendar deadline that could prematurely log out users after a delayed deployment. Logout affects only one SID; global logout bumps the generation and disables legacy access. A bad/unavailable state returns a retryable 503 without clearing the browser Cookie. The fixed Max-Age remains 1209600 seconds; no idle expiry or sliding extension is added.
 
 ### KV: disposable edge cache and indexes
 

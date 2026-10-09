@@ -34,7 +34,7 @@ test('saved current JSON export ignores unrelated history defaults and dependenc
  let changed=false;const env={...h.env,DATA:h.adapt({get:async(key,...args)=>{const stored=await h.bucket.get(key,...args);if(!changed&&key.endsWith('/versions/000001.json')){changed=true;await h.bucket.put(`bins/${id}/meta.json`,JSON.stringify({...input.resource.data.meta,name:'并发修改'}));}return stored;}})};
  r=await h.request(url,{},env);assert.equal(r.status,409);assert.equal((await r.json()).error,'backup_changed');
  await h.bucket.delete(`bins/${id}/versions/000001.json`);assert.equal((await h.request(url)).status,409);
- const failed=await h.request(url,{}, {...h.env,DATA:h.adapt({get:async()=>{throw Error('storage-fault-canary');}})});assert.equal(failed.status,503);assert.equal((await failed.json()).error,'storage_unavailable');
+ const failed=await h.request(url,{}, {...h.env,DATA:h.adapt({get:async(key,...args)=>{if(key==='system/auth/sessions.json')return h.bucket.get(key,...args);throw Error('storage-fault-canary');}})});assert.equal(failed.status,503);assert.equal((await failed.json()).error,'storage_unavailable');
 });
 test('restored safe counter exhaustion rejects Bin and Schema writes without changing history or metadata',async t=>{
  const h=await harness(t),max=Number.MAX_SAFE_INTEGER;

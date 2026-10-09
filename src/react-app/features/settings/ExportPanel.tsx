@@ -8,7 +8,7 @@ import { downloadBytes } from './download';
 export function ExportPanel({ client, onBusyChange }: { client: SystemClient; onBusyChange: (busy: boolean) => void }) {
   const [id, setId] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const mounted = useRef(false), generation = useRef(0), controller = useRef<AbortController | null>(null), running = useRef(false);
-  useEffect(() => { mounted.current = true; const cancel = () => { generation.current++; controller.current?.abort(); running.current = false; setBusy(false); }; window.addEventListener('jsonbin:logout', cancel); return () => { mounted.current = false; generation.current++; controller.current?.abort(); window.removeEventListener('jsonbin:logout', cancel); }; }, []);
+  useEffect(() => { mounted.current = true; const cancel = () => { generation.current++; controller.current?.abort(); running.current = false; setBusy(false); }; window.addEventListener('jsonbin:logout', cancel); window.addEventListener('jsonbin:logout-pending', cancel); return () => { mounted.current = false; generation.current++; controller.current?.abort(); window.removeEventListener('jsonbin:logout', cancel); window.removeEventListener('jsonbin:logout-pending', cancel); }; }, []);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   async function exportFile(scope: 'all' | 'config' | 'bin', format: 'backup' | 'value') {
     if (running.current) return;
