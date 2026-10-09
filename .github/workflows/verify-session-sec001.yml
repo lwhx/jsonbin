@@ -1,0 +1,31 @@
+name: SEC001 session regression (temporary)
+on:
+  push:
+    branches:
+      - security/session-revocation-14day-20261009
+    paths:
+      - '.github/workflows/verify-session-sec001.yml'
+      - 'tests/session-revocation.test.mjs'
+      - 'src/worker/storage/sessions.ts'
+      - 'src/worker/auth/session.ts'
+      - 'src/worker/routes/auth.ts'
+      - 'src/worker/middleware/auth.ts'
+      - 'src/react-app/App.tsx'
+      - 'src/react-app/features/settings/**'
+permissions:
+  contents: read
+jobs:
+  targeted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Session revocation test
+        run: node --test tests/session-revocation.test.mjs
+      - name: Existing session security tests
+        run: node --test tests/security.test.mjs
