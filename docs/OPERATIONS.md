@@ -27,11 +27,11 @@ API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API �
 
 1. **在 Cloudflare R2 新建空桶** `jsonbin-sec002-preview-data`（仅测试数据）。可运行 `npx wrangler r2 bucket create jsonbin-sec002-preview-data`；不得将 `previews.DATA` 改为生产桶，也不要复制生产数据到 Preview。
 2. 在 Cloudflare Workers → `jsonbin` → Settings → Builds 查看当前分支预览模式。既有项目如仍使用旧 Preview 模式，在 **Set up Worker Previews** 向导中明确核对并执行一次性切换（**不可逆**）。新的 Preview command 必须是 `npx wrangler preview`，**禁止**填 `npx wrangler deploy`，否则可能发布到生产。生产分支仍为 `main`。
-3. 预览不继承生产 secrets。设置独立的 `ADMIN_PASSWORD` 和 `SESSION_SECRET`（至少 32 字符），不要复用生产值。可使用 `npx wrangler preview base-config secret put ADMIN_PASSWORD` 和 `npx wrangler preview base-config secret put SESSION_SECRET`，或在切换向导中创建；非生产管理员用户名已由 `previews.vars.ADMIN_USERNAME` 设置为 `preview-admin`。不必配置 GitHub OAuth。
+3. 预览不继承生产 secrets。**当前 SEC-002 Preview 已存在**：需分别运行 `npx wrangler preview secret put ADMIN_PASSWORD --name security-sec-002-api-key-public-rate-limits` 和 `npx wrangler preview secret put SESSION_SECRET --name security-sec-002-api-key-public-rate-limits`，交互输入两个新的预览专用值，至少 32 字符，切勿复用生产。`preview base-config secret put` **只会影响之后新建的 Preview，不能给已经存在的 SEC-002 Preview 补 Secret**。用户名由 `previews.vars.ADMIN_USERNAME` 设置为 `preview-admin`，不必配置 GitHub OAuth。
 4. 重新运行 Preview Build，核查 PR 返回的真实 Preview URL，记录 DO 和 R2 binding。先创建公开/私有测试 Bin、测试 API Key，再实际验证第 N+1 次 429、`Retry-After`、撤销/过期、public→private、503 故障处理。不得用真实 API Key 或生产 Bin 作为测试对象。
 5. 若要进一步验证 KV 搜索与用量统计，单独创建非生产 KV 命名空间后，将**其真实 ID**填到 `previews.kv_namespaces` 的 `CACHE` 项；切勿直接复制顶层生产 `CACHE.id`。测试结束删除专用 Preview 以及测试桶/命名空间之前核对资源归属，切勿误删生产资源。
 
-当前账号的 Cloudflare Build 私有日志/Build 设置未由仓库代码直接访问；仅有 GitHub PR 中的 Failed 状态，不应将预览构建失败归因于某一个未经核实的错误。Cloudflare 官方说明旧 `wrangler versions upload` 不支持 Durable Object 类生命周期变更，Worker Previews 需 Wrangler >=4.135.0；本项目锁定 4.147.0。请以 Workers Builds 的 Preview Build **完整错误日志**确认失败原因，避免未经确认调整生产部署命令。
+SEC-002 的 Preview 构建已于 2026-10-09 在独立测试 R2 桶创建后**成功**：Wrangler 4.147.0 通过 `npx wrangler preview` 发布；Cloudflare 记录为 Success。GitHub Actions 的只读实站测试确认 HTTP 健康状态、预览 R2/无生产 KV、401 鉴权与 CORS。已确认 `GET /api/v1/auth/config` 的 `passwordEnabled:false`，因此**有凭据测试尚未完成**，下一步先单独配置该 Preview 的 Secret。
 
 ### 只读检查 Cloudflare 构建失败原因
 
@@ -47,6 +47,31 @@ GitHub PR 只展示 `Workers Builds: jsonbin` 的失败结果，不包含 Cloudf
 4. 核对实际 `deploy_command`、错误码及失败所在阶段。如果仍为旧版 `wrangler versions upload`，先评估账户级不可逆的 Worker Previews 切换；不要在未确认配置与资源隔离时将 PR 分支命令改为 `wrangler deploy`。
 
 Cloudflare 官方只读日志接口：`GET /accounts/{account_id}/builds/builds/{build_uuid}/logs`。本脚本不会保存 API Token 或日志到磁盘，也不以构建失败状态作为调用失败。
+
+### SEC-002 有凭据 Preview 验收
+
+自动化只读测试（GitHub Actions 的 `SEC-002 Preview Runtime Smoke`）已经通过，证明测试 R2/公开路由/跨域规则可用，但这**不等于**真实 API Key 和 429 限流验收通过。
+
+1. 在本项目 Git 分支 `security/sec-002-api-key-public-rate-limits` 所在目录执行下面两条命令，分别输入与生产完全不同的 Preview Secret（`SESSION_SECRET` 至少 32 字符）。**必须使用单个 Preview 的命令，不要只修改 Base Secret**：
+
+```bash
+npx wrangler preview secret put ADMIN_PASSWORD --name security-sec-002-api-key-public-rate-limits
+npx wrangler preview secret put SESSION_SECRET --name security-sec-002-api-key-public-rate-limits
+```
+
+2. 在 Preview URL 打开 `/api/v1/auth/config`，确认 `passwordEnabled:true`。用户名是 `preview-admin`。不要在 PR、聊天、截图或命令参数中泄露密码。若有新部署，等其完成。
+3. 在本地运行仓库的**可选有凭据验收脚本**：它只接受 SEC-002 Preview 固定域名，要求显式 `--execute` 才会创建临时 Bin/Key；验证公开/私有读、资源作用域、3/min 配额的第 4 次请求返回 429、`Retry-After`、不限流 `null`、撤销、公开转私有；退出时按本次创建的 UUID 尝试清理测试数据。
+
+```powershell
+$secret = Read-Host '输入预览专用 ADMIN_PASSWORD' -AsSecureString
+$env:SEC002_PREVIEW_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+node scripts/check-sec002-preview-auth.mjs --execute
+Remove-Item Env:SEC002_PREVIEW_ADMIN_PASSWORD
+```
+
+4. 验证清理警告并检查 `jsonbin-sec002-preview-data` 对应 Preview 的回收站；出现中断或错误时只清理 `SEC002-` 前缀的本轮测试资源，不清理生产数据。此脚本不验证 240/min 大流量的匿名限流边界；该边界由 Miniflare 原子并发测试覆盖，必要时另在专用测试流量配额下实测。
+
+**上线门槛：** GitHub CI + Cloudflare Preview 部署 + 只读实测已通过；有凭据真实 E2E、发布回滚演练和生产发布审批仍待完成。保持 PR Draft，严禁直接把测试配置部署到 `main`。
 
 ## 日常业务备份
 
