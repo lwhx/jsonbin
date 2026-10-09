@@ -198,3 +198,21 @@ test('unavailable R2 login guard fails closed for passwords without affecting Gi
   assert.deepEqual(await response.json(), { error: 'login_guard_unavailable' });
   assert.equal((await h.worker.fetch(new Request('https://example.test/api/v1/auth/github', { headers }), github)).status, 302);
 });
+
+
+test('daily scheduled housekeeping prunes only expired password-IP security records', async t => {
+  const h = await harness(t);
+  const now = Date.now();
+  const expiry = new Date(now + 3 * 86400000);
+  expiry.setUTCHours(3, 0, 0, 0);
+  const sweepAt = expiry.getTime() > now + 2 * 86400000 ? expiry.getTime() : expiry.getTime() + 86400000;
+  const staleKey = 'auth/login-guard/test-stale.json';
+  const activeKey = 'auth/login-guard/test-active.json';
+  const state = { failures: 3, windowStartedAt: now - 86400000, cooldownUntil: null, bannedUntil: null, expiresAt: now - 1000 };
+  await h.bucket.put(staleKey, JSON.stringify(state));
+  await h.bucket.put(activeKey, JSON.stringify({ ...state, expiresAt: sweepAt + 1000 }));
+
+  await h.worker.scheduled({ scheduledTime: sweepAt }, h.env);
+  assert.equal(await h.bucket.get(staleKey), null, 'expired IP state should not accumulate forever in R2');
+  assert.ok(await h.bucket.get(activeKey), 'non-expired IP state must survive housekeeping');
+});
