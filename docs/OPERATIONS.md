@@ -10,6 +10,16 @@ APP_ORIGIN 默认可省略，浏览器仅允许请求站点自身。显式值必
 
 API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API 来自 Worker；Monaco 的 inline style/self/blob worker 是 CSP 的已验证需求，脚本不允许 unsafe-eval。应用异常日志仅有固定事件、请求 ID 和方法。不要把密码、Token、Cookie、OAuth code/state 或用户 JSON 放入 URL、命令行、共享日志。平台级访问日志可能记录 URL，另行设置可访问人员和保留时间；排查通过响应 `X-Request-ID` 关联应用日志。
 
+## SEC-001：可撤销 Session 与 14 天固定有效期
+
+- 新版本的 Cookie 仍为 HttpOnly、HTTPS 下 Secure、SameSite=Lax，`Max-Age=1209600`，固定有效期 14 天。浏览器关闭、系统重启、刷新网页及普通请求均不会自动登出或续期。
+- 服务端权威会话注册表：R2 `system/auth/sessions.json`。每次合法 Cookie 鉴权执行 **一次 R2 GET**，不产生写入；签名正确但已被撤销/不在注册表中的 SID 返回 401。退出当前设备与“退出所有设备”以 R2 ETag CAS 更新注册表；后者同时轮换会话代次和禁用旧版 Cookie。
+- **兼容迁移：** 2026-10-25 00:00 UTC 前可接受升级前已签发、仍在其原始过期时间内的合法旧 Cookie。旧 Cookie 没有 SID，不进入设备列表，但其服务器端撤销散列仍会保存；主动退出会立即失效，管理员全设备退出立即禁用旧 Cookie。截止时间不会延长其原本期限。超过迁移窗口后的旧 Cookie 必须重新登录。
+- R2 失联、权限错误或策略文件损坏：受保护请求返回 503 `session_state_unavailable`，不发放新 Cookie，不把暂时错误当作用户退出。用户待 R2 恢复后重试。管理端“退出”只有服务端提交成功后才清理页面登录态。
+- 所有 Session 统一依赖 R2；Secret 轮换依旧会使旧 Cookie 立即失效。**回滚到 SEC-001 之前的 Worker 版本会重新允许只验证 HMAC 的 Cookie，属于安全降级**，应优先回滚到含服务端校验的兼容版，必要时经批准轮换签名 Secret。恢复旧 R2 快照也可能恢复已撤销的 SID，必须考虑密钥轮换与会话重新登录。
+- Cron 每日 UTC 03:00 清理过期的会话条目；所有 session 元数据都不会写入 KV、活动正文或业务导出。保留 R2 备份与回滚计划；不要手工删除 R2 policy。
+- **合成性能对照：** [GitHub Actions 同机运行](https://github.com/lwhx/jsonbin/actions/runs/37880653901)，Miniflare、300 次顺序调用有效 Cookie 的 `GET /api/v1/auth/me`，旧代码对照 R2 GET=0、PUT=0，SEC-001 新代码 R2 GET=300、PUT=0；P50 **4.19ms → 10.44ms**，P95 **13.10ms → 14.01ms**。这是隔离合成结果，不可视为生产性能保证；按用户规模观察实际 Workers/R2 指标，再考虑在**不牺牲撤销即时性**的前提下降低 R2 单次读取成本。
+
 ## 日常业务备份
 
 1. 管理 Session 登录设置页，导出全部业务备份；也可 `GET /api/v1/system/export?scope=all&format=backup`。ZIP 仅由浏览器包装，包含 manifest.json/backup.json、SHA-256 和 CRC32。
