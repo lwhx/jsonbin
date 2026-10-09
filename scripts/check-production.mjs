@@ -19,6 +19,10 @@ try {
   const health = await request('/api/v1/system/health');
   const info = await health.json();
   check('health service/version/bindings', health.status === 200 && info.ok === true && info.service === 'jsonbin' && info.version === version && info.storage?.r2 === true && info.storage?.kv === true && info.rateLimiterConfigured === true);
+  const authConfigResponse = await request('/api/v1/auth/config');
+  const authConfig = authConfigResponse.status === 200 ? await authConfigResponse.json() : null;
+  check('at least one administrator auth provider configured', authConfigResponse.status === 200 &&
+    (authConfig?.passwordEnabled === true || authConfig?.githubEnabled === true));
   check('API security headers', health.headers.get('cache-control') === 'no-store' && health.headers.get('x-content-type-options') === 'nosniff' && health.headers.get('x-frame-options') === 'DENY' && health.headers.get('content-security-policy')?.includes("default-src 'none'") && /^[\da-f-]{36}$/.test(health.headers.get('x-request-id') ?? ''));
   const html = await request('/');
   const csp = html.headers.get('content-security-policy') ?? '';
