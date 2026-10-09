@@ -13,6 +13,7 @@ export type AnalyticsDataPoint = {
   durationMs: number;
   authType: "session" | "api_key" | "anonymous" | "system";
   keyId?: string | null;
+  qualifiedKeyUse?: boolean;
   resourceType?: string;
   error?: string | null;
 };
@@ -172,8 +173,9 @@ function percentile95(hist: DurationHistogram): number {
   return Number(counts[counts.length - 1][0]);
 }
 
-const ANALYTICS_PREFIX = "analytics:agg:";
-const SHARDS_COUNT = 4;
+export const ANALYTICS_PREFIX = "analytics:agg:";
+export const ANALYTICS_SHARDS_COUNT = 4;
+const SHARDS_COUNT = ANALYTICS_SHARDS_COUNT;
 
 /**
  * Record a single request metrics data point in KV.
@@ -225,6 +227,12 @@ export async function recordAnalytics(env: Env, dp: AnalyticsDataPoint): Promise
       kStat.requests += 1;
       if (dp.status >= 400 && dp.status < 500) kStat.count4xx += 1;
       if (dp.status === 429) kStat.count429 += 1;
+      if (dp.qualifiedKeyUse) {
+        kStat.authorizedUses = (kStat.authorizedUses || 0) + 1;
+        if (!kStat.lastAuthorizedAt || kStat.lastAuthorizedAt < dp.timestamp) {
+          kStat.lastAuthorizedAt = dp.timestamp;
+        }
+      }
     }
 
     if (dp.error) {

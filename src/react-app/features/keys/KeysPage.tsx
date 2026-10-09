@@ -227,9 +227,14 @@ export function KeysPage({ onDirtyChange }: { onDirtyChange: (dirty: boolean) =>
           <p>最后使用：{displayTime(key.lastUsedAt, "尚未使用")}{key.revokedAt && ` · 撤销：${displayTime(key.revokedAt, "—")}`}</p>
           <p>限流：{key.rateLimitPerMinute === null ? "不限" : `${key.rateLimitPerMinute ?? 120} 次/分钟`}</p>
           <div style={{ marginTop: "8px", padding: "6px 10px", background: "var(--border)", borderRadius: "4px", fontSize: "12px", display: "flex", gap: "16px" }}>
-            <span>已授权总请求：<strong>{key.usageTotal ?? 0}</strong> 次</span>
-            <span>今日已授权：<strong>{key.usageDaily?.[new Date().toISOString().slice(0, 10)] ?? 0}</strong> 次</span>
+            <span>已授权总请求：<strong>约 {key.usageTotal ?? 0}</strong> 次</span>
+            <span>今日已授权：<strong>约 {key.usageDaily?.[new Date().toISOString().slice(0, 10)] ?? 0}</strong> 次</span>
           </div>
+          <p className="usage-note">使用统计为近似值，可能延迟；不参与权限或限流判定。
+            {key.usageStatus === "unavailable" ? " 当前统计暂不可用，展示已保存的历史数字。" :
+              key.usageStatus === "delayed" ? " 历史增量正在等待日结。" :
+              key.usageAsOf ? ` 最近读取：${displayTime(key.usageAsOf, "—")}。` : ""}
+          </p>
           {revealed[key.id] && <label className="key-revealed">完整密钥<input aria-label={`API 密钥 ${key.name}`} readOnly type="text" spellCheck={false} autoComplete="off" value={revealed[key.id]} onFocus={event => event.target.select()} /></label>}
           {!key.revealable && <p className="key-unavailable">此密钥创建于旧版本，完整明文当时没有保存；它仍可继续用于 API，若需要查看完整值请新建替代密钥。</p>}
         </div>

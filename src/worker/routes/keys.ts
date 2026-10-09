@@ -2,7 +2,8 @@ import { auditRequest } from "../activity";
 import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../middleware/auth";
-import { API_SCOPES, createKey, listKeys, purgeKey, revealKey, revokeKey, updateKey } from "../storage/keys";
+import { listKeysWithEstimatedUsage } from "../storage/key-usage";
+import { API_SCOPES, createKey, purgeKey, revealKey, revokeKey, updateKey } from "../storage/keys";
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
@@ -41,7 +42,7 @@ app.onError((error, c) => {
   if (error.message === "key_revoked") return c.json({ error: "key_revoked" }, 409);
   throw error;
 });
-app.get("/", async c => { const items = await listKeys(c.env); return c.json({ items, total: items.length }); });
+app.get("/", async c => { const items = await listKeysWithEstimatedUsage(c.env); return c.json({ items, total: items.length }); });
 app.post("/", async c => {
   const parsed = input.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "validation_failed", issues: parsed.error.issues }, 422);

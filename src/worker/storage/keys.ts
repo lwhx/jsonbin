@@ -15,6 +15,9 @@ export type ApiKey = {
   resourceAccess?: ResourceAccess;
   usageTotal?: number;
   usageDaily?: Record<string, number>;
+  usageApproximate?: true;
+  usageStatus?: "ok" | "delayed" | "unavailable";
+  usageAsOf?: string | null;
   createdAt: string;
   expiresAt: string | null;
   revokedAt: string | null;
@@ -29,6 +32,8 @@ type StoredKey = Omit<ApiKey, "revealable"> & {
   tokenEncryption?: "aes-gcm-v1";
   tokenIv?: string;
   tokenCiphertext?: string;
+  /** Private, bounded idempotency checkpoint for approximate KV usage settlement. */
+  usageAppliedDays?: string[];
 };
 export type KeyInput = {
   name: string;
@@ -43,7 +48,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function publicKey(stored: StoredKey): ApiKey {
-  const { digest: _digest, digestAlgorithm: _algorithm, tokenEncryption: _encryption, tokenIv: _iv, tokenCiphertext: _ciphertext, ...key } = stored;
+  const { digest: _digest, digestAlgorithm: _algorithm, tokenEncryption: _encryption, tokenIv: _iv, tokenCiphertext: _ciphertext, usageAppliedDays: _usageAppliedDays, ...key } = stored;
   return {
     ...key,
     resourceAccess: stored.resourceAccess ?? { mode: "all" },
@@ -96,9 +101,14 @@ async function decryptToken(env: Env, stored: StoredKey) {
     return null;
   }
 }
-export async function listKeys(env: Env) {
+export type KeyWithUsageState = { key: ApiKey; usageAppliedDays: string[] };
+export async function listKeysWithUsageState(env: Env): Promise<KeyWithUsageState[]> {
   const items = await listJsonObjects<StoredKey>(requireDataBucket(env), "keys/");
-  return items.map(publicKey).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return items.map(stored => ({ key: publicKey(stored), usageAppliedDays: stored.usageAppliedDays ?? [] }))
+    .sort((a, b) => b.key.createdAt.localeCompare(a.key.createdAt));
+}
+export async function listKeys(env: Env): Promise<ApiKey[]> {
+  return (await listKeysWithUsageState(env)).map(item => item.key);
 }
 export async function createKey(env: Env, input: KeyInput) {
   if (env.TOKEN_PEPPER && env.TOKEN_PEPPER.length < 32) throw new Error("token_pepper_invalid");
@@ -225,36 +235,37 @@ export function authorizeApiKey(initial: NonNullable<Awaited<ReturnType<typeof r
   return "ok";
 }
 
-/** Commits one authorized usage atomically; best-effort and never throws into a finalized response. */
-export async function useApiKey(env: Env, token: string, initial: NonNullable<Awaited<ReturnType<typeof readApiKey>>>, required: ApiScope[]) {
+/** Checkpoint an approximate UTC daily usage delta without modifying any auth fields.
+ * The marker and counts are committed atomically through the R2 ETag CAS. */
+export async function applyAuthorizedUsageDay(
+  env: Env, keyId: string, utcDay: string, increment: number, lastAuthorizedAt: string | null,
+): Promise<"applied" | "already_applied" | "missing" | "busy"> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(utcDay) || !Number.isSafeInteger(increment) || increment < 0) return "busy";
   const bucket = requireDataBucket(env);
-  let current: typeof initial | null = initial;
+  const path = keyPath(keyId);
+  const today = new Date().toISOString().slice(0, 10);
+  const cutoffDaily = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const cutoffApplied = new Date(Date.now() - 34 * 86400000).toISOString().slice(0, 10);
   for (let attempt = 0; attempt < 8; attempt++) {
-    if (!current || current.key.revokedAt || (current.key.expiresAt && Date.parse(current.key.expiresAt) <= Date.now())) return "unauthorized";
-
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const prevDaily = current.stored.usageDaily || {};
-
-    // Keep only last 31 days
-    const dailyKeys = Object.keys(prevDaily).sort();
-    const cutoff = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
-    const usageDaily: Record<string, number> = {};
-    for (const d of dailyKeys) {
-      if (d >= cutoff) usageDaily[d] = prevDaily[d];
+    const current = await getJson<StoredKey>(bucket, path);
+    if (!current) return "missing";
+    const appliedDays = current.value.usageAppliedDays ?? [];
+    if (appliedDays.includes(utcDay) || increment === 0) return "already_applied";
+    const nextDaily: Record<string, number> = {};
+    for (const [day, count] of Object.entries(current.value.usageDaily ?? {})) {
+      if (day >= cutoffDaily && day <= today) nextDaily[day] = count;
     }
-    usageDaily[today] = (usageDaily[today] || 0) + 1;
-
+    if (utcDay >= cutoffDaily && utcDay <= today) nextDaily[utcDay] = (nextDaily[utcDay] ?? 0) + increment;
     const next: StoredKey = {
-      ...current.stored,
-      usageTotal: (current.stored.usageTotal || 0) + 1,
-      usageDaily,
-      lastUsedAt: now.toISOString(),
+      ...current.value,
+      usageTotal: (current.value.usageTotal ?? 0) + increment,
+      usageDaily: nextDaily,
+      lastUsedAt: lastAuthorizedAt && (!current.value.lastUsedAt || current.value.lastUsedAt < lastAuthorizedAt)
+        ? lastAuthorizedAt : current.value.lastUsedAt,
+      usageAppliedDays: Array.from(new Set([...appliedDays.filter(day => day >= cutoffApplied && day <= today), utcDay])).sort(),
     };
-
-    // CAS prevents touching an outdated or revoked record; a lost race retries against the latest.
-    if (await putJson(bucket, keyPath(current.key.id), next, { onlyIf: { etagMatches: normalize(current.etag) } })) return "ok";
-    current = await readApiKey(env, token);
+    const written = await putJson(bucket, path, next, { onlyIf: { etagMatches: normalize(current.etag) } });
+    if (written) return "applied";
   }
   return "busy";
 }

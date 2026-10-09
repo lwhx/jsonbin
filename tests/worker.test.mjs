@@ -1072,7 +1072,12 @@ test('API keys are session-only, return a token only on creation and never persi
   assert.ok(!Object.hasOwn(created.key, 'digest')); assert.ok(!Object.hasOwn(created.key, 'digestAlgorithm'));
   const response = await request('/keys'); assert.equal(response.headers.get('cache-control'), 'no-store');
   const listed = await response.json(); const publicRecord = listed.items.find(item => item.id === created.key.id);
-  assert.deepEqual(publicRecord, created.key); assert.ok(!JSON.stringify(listed).includes(created.token));
+  const { usageApproximate, usageAsOf, usageStatus, ...legacyFields } = publicRecord;
+  assert.deepEqual(legacyFields, created.key, 'all pre-existing API Key fields retain their original contract');
+  assert.equal(usageApproximate, true);
+  assert.equal(usageStatus, 'ok');
+  assert.ok(Number.isFinite(Date.parse(usageAsOf)), 'approximate usage indicates snapshot time');
+  assert.ok(!JSON.stringify(listed).includes(created.token));
   assert.ok(!Object.hasOwn(publicRecord, 'token')); assert.ok(!Object.hasOwn(publicRecord, 'digest'));
   for (const [path, method] of [['/keys', 'GET'], ['/keys', 'POST'], ['/keys/' + created.key.id, 'DELETE']]) {
     assert.equal((await bearerRequest(created.token, path, { method, value: method === 'POST' ? { name: 'escalation', scopes: keyScopes } : undefined })).status, 401);
@@ -1168,11 +1173,12 @@ test('authorized external clients can CRUD models, collections and Bins while re
   assert.equal((await bearerRequest(key.token, `/collections/${collection.meta.id}`, { method: 'DELETE', etag: collection.etag })).status, 200);
   assert.equal((await bearerRequest(key.token, `/schemas/${schema.meta.id}`, { method: 'DELETE', etag: schema.etag })).status, 200);
 });
-test('last-used time is recorded for permitted authentication only, expiry and revocation reject future requests', async () => {
+test('request-time key R2 metadata is unchanged, expiry and revocation reject future requests', async () => {
   const key = await apiKey();
   const path = `keys/${key.key.id}/meta.json`, stored = () => bucket.get(path).then(object => object.json());
   assert.equal((await bearerRequest(key.token, '/collections')).status, 403); assert.equal((await stored()).lastUsedAt, null);
-  assert.equal((await bearerRequest(key.token, '/bins')).status, 200); assert.ok((await stored()).lastUsedAt);
+  assert.equal((await bearerRequest(key.token, '/bins')).status, 200);
+  assert.equal((await stored()).lastUsedAt, null, 'usage bookkeeping must not write R2 per request');
   let value = await stored();
   await bucket.put(path, JSON.stringify({ ...value, expiresAt: '2000-01-01T00:00:00Z' }));
   assert.equal((await bearerRequest(key.token, '/bins')).status, 401); assert.equal((await stored()).lastUsedAt, value.lastUsedAt);
@@ -2347,4 +2353,50 @@ test('fast 304 reads only canonical Bin metadata, not the immutable version body
   assert.equal(counts.versions, 0, 'unchanged Bin must not fetch the large JSON body');
   const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag } }), env);
   assert.equal(rejected.status, 401, 'private Bin still requires a session even with a matching ETag');
+});
+
+
+test('key usage: 1000 authorized Bearer reads avoid R2 usage writes and keep authentication checks', async t => {
+  const { createSystemHarness } = await import('./support/system-harness.mjs');
+  const h = await createSystemHarness('usage-r2-write-' + crypto.randomUUID());
+  t.after(() => h.close());
+  const createdRes = await h.request('/keys', {
+    method: 'POST', value: { name: 'isolated-usage-test', scopes: ['bin:read'], rateLimitPerMinute: null },
+  });
+  assert.equal(createdRes.status, 201);
+  const created = await createdRes.json();
+  const path = `keys/${created.key.id}/meta.json`;
+  const initial = await (await h.env.DATA.get(path)).json();
+  const metrics = { r2KeyGets: 0, r2KeyPuts: 0, kvPuts: 0 };
+  const r2 = h.adapt({
+    get: async (key, ...args) => {
+      if (key === path) metrics.r2KeyGets++;
+      return h.bucket.get(key, ...args);
+    },
+    put: async (key, ...args) => {
+      if (key === path) metrics.r2KeyPuts++;
+      return h.bucket.put(key, ...args);
+    },
+  });
+  const cache = new Proxy(h.env.CACHE, { get(target, prop) {
+    if (prop === 'put') return async (...args) => { metrics.kvPuts++; return target.put(...args); };
+    const value = target[prop]; return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const env = { ...h.env, DATA: r2, CACHE: cache };
+  for (let i = 0; i < 1000; i++) {
+    const response = await h.request('/bins', { headers: { Authorization: `Bearer ${created.token}` } }, env);
+    assert.equal(response.status, 200);
+  }
+  assert.equal(metrics.r2KeyGets >= 1000, true, 'each authorized request must check canonical R2 credentials');
+  assert.equal(metrics.r2KeyPuts, 0, 'usage writes to R2 must not occur on the request path');
+  assert.equal(metrics.kvPuts, 1000, 'reuse the existing Analytics write, not a second KV write');
+  const final = await (await h.env.DATA.get(path)).json();
+  assert.deepEqual(final, initial, 'request analytics cannot rewrite authority metadata');
+  const adminRes = await h.request('/keys');
+  const admin = (await adminRes.json()).items.find(key => key.id === created.key.id);
+  assert.equal(admin.usageApproximate, true);
+  assert.ok(admin.usageTotal >= 1 && admin.usageTotal <= 1000);
+  assert.ok(admin.lastUsedAt);
+  assert.equal(Object.hasOwn(admin, 'usageAppliedDays'), false);
+  assert.equal((await h.request('/bins', {headers:{ Authorization:'Bearer invalid-token'}},env)).status, 401);
 });
