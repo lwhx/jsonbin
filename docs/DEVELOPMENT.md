@@ -292,6 +292,7 @@ SEC-002 起使用 SQLite-backed Durable Object `RATE_LIMITER` 对同一身份执
 - 未认证的 Bin ID / Slug 读取入口在 R2 查询之前按 Cloudflare 写入的 `CF-Connecting-IP` 统一限流 **240 次/分钟**，包括私有和不存在的 Bin 探测；避免随机 ID/Slug 绕过配额并消耗大量 R2 查询。身份以 `SESSION_SECRET` 派生 HMAC，不把真实 IP 写入对象标识；不信任 `X-Forwarded-For`。有效管理 Session 不计入匿名额度；显式 Bearer 始终先鉴权并使用自己的 Key 配额，不能通过公开仓降级。对于超过阈值的未认证探测，现在返回 429 而不是原先可能出现的 401。
 - 超限返回 `429 {error:"rate_limit_exceeded"}` + `Retry-After`（窗口剩余秒数）；429 未到达资源层，不计入 Key 使用统计（与 401/403 同规则）。允许跨域来源可读取 `Retry-After`。
 - 缺失 `RATE_LIMITER`、内部 RPC 故障或匿名请求没有可信 Cloudflare IP 时返回 `503`（`rate_limit_unavailable` / `anonymous_identity_unavailable`），绝不改回使用不可靠的 KV 计数或静默无限放行。显式 `rateLimitPerMinute:null` 仍无须调用 DO。
+- 每个匿名 IP/Key 只保留当前分钟的 SQLite 计数，并由 DO Alarm 定期检查是否闲置；超过两个完整分钟窗口未活动时执行 `storage.deleteAll()`，清除 SQLite 表、底层元数据及 Alarm，避免每个独立 IP 永久占用存储。活跃对象复用单个 Alarm、在新请求窗口仍活跃时延后清理，避免每个请求重复写 Alarm。该定期清理会产生少量额外的 DO Alarm 调用。
 - 需在 `wrangler.jsonc` 声明 `durable_objects.bindings` 和 SQLite `exports`，并为 Worker Preview 显式提供独立的 `previews.durable_objects.bindings` 与独立 R2。Miniflare 测试必须使用 `useSQLite: true`。引入额外 DO 请求和 SQLite 行写入，业务量上升时应跟踪 Cloudflare 配额/延迟。**Durable Object 首次创建属于不可跨越的版本回滚边界**，紧急恢复必须保留 DO 类/exports 并向前部署兼容补救版本；发布和 Preview 安全步骤见 `docs/OPERATIONS.md`。
 
 ### Webhook 事件推送

@@ -353,3 +353,26 @@ test('SEC-002 rate-limits private and missing anonymous Bin/Slug probes BEFORE R
     headers: { 'CF-Connecting-IP': ip, Authorization: 'Bearer ' + key.token },
   }), h.env)).status, 200, 'Bearer uses its separate per-Key rate limit');
 });
+
+// An identity's table and internal metadata must not live forever after its
+// single sixty-second rate window. The alarm later invokes deleteAll().
+test('SEC-002 schedules idle SQLite cleanup without resetting live quotas', async t => {
+  const h = await harness(t);
+  const identity = 'ttl-' + crypto.randomUUID();
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(identity));
+  const consume = () => stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 1 }),
+  });
+  const accepted = await (await consume()).json();
+  assert.equal(accepted.allowed, true);
+  const storage = await h.getLimiterStorage(identity);
+  const alarm = await storage.getAlarm();
+  const remaining = alarm - Date.now();
+  assert.ok(remaining > 30_000 && remaining <= 120_000,
+    'one bounded idle cleanup alarm is scheduled for the identity');
+  const denied = await (await consume()).json();
+  assert.equal(denied.allowed, false);
+  assert.equal(await storage.getAlarm(), alarm,
+    'a second request must not rewrite the cleanup alarm or reset the quota');
+});
