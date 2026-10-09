@@ -526,6 +526,14 @@ function AuthenticatedApp({
     return "需要配置存储";
   }, [health.data]);
 
+  function invalidateAuthenticatedView() {
+    window.dispatchEvent(new Event("jsonbin:logout"));
+    setDetailDirty(false);
+    queryClient.setQueryData(["auth-me"], null);
+    void queryClient.cancelQueries();
+    queryClient.clear();
+  }
+
   async function logout() {
     if (detailDirty && !await confirm({
       title: "退出登录？",
@@ -534,15 +542,16 @@ function AuthenticatedApp({
       cancelLabel: "继续编辑",
       danger: true,
     })) return;
-    window.dispatchEvent(new Event("jsonbin:logout"));
-    setDetailDirty(false);
-    await fetch("/api/v1/auth/logout", {
-      method: "POST",
-      credentials: "include",
-    });
-    queryClient.setQueryData(["auth-me"], null);
-    await queryClient.cancelQueries();
-    queryClient.clear();
+    // A logout is only final after R2 has durably revoked this session.
+    // On network/storage errors, preserve the Cookie and current UI for retry.
+    try {
+      const response = await fetch("/api/v1/auth/logout", { method: "POST", credentials: "include" });
+      if (!response.ok) throw new Error("logout_not_committed");
+    } catch {
+      toast("退出登录失败，服务器尚未确认撤销。请稍后重试，当前登录状态已保留。");
+      return;
+    }
+    invalidateAuthenticatedView();
   }
 
   const totalStorage =
@@ -675,7 +684,7 @@ function AuthenticatedApp({
               onSaved={id => { setDetailDirty(false); const next = schemaHash(id); window.history.pushState(null, "", next); setRoute(next); }}
               onDeleted={() => { setDetailDirty(false); window.history.pushState(null, "", "#/schemas"); setRoute("#/schemas"); }} />
             : <SchemasPage onCreate={() => { window.location.hash = "/schemas/new"; }} onOpen={id => { window.location.hash = schemaHash(id); }} />
-          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} /> : section === "Docs" ? <DocsPage /> : section === "Mcp" ? <McpPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
+          ) : section === "Settings" ? <SettingsPage onDirtyChange={setDetailDirty} onLoggedOut={invalidateAuthenticatedView} /> : section === "Docs" ? <DocsPage /> : section === "Mcp" ? <McpPage /> : section === "Activity" ? <ActivityPage /> : section === "Keys" ? <KeysPage onDirtyChange={setDetailDirty} /> : section === "Webhooks" ? <WebhooksPage onDirtyChange={setDetailDirty} /> : section === "Analytics" ? <AnalyticsPage /> : section === "Trash" ?
             <TrashPage onDirtyChange={setDetailDirty} onOpen={id => { window.location.hash = binHash(id); }} /> : section === "Overview" ? (
             <Overview
               bins={bins.data?.items ?? []}
