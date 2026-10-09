@@ -122,10 +122,18 @@ export async function listCurrentSessions(c: Context<any>): Promise<SessionSumma
   return listSessionSummaries(c.env, current.principal.sid);
 }
 
+// requireSession stores the already HMAC-verified request principal.
+// Mutating operations must check this principal again inside the R2 CAS.
+function middlewarePrincipal(c: Context<any>): SessionPrincipal {
+  const principal = c.get("sessionPrincipal" as any) as SessionPrincipal | undefined;
+  if (!principal) throw new SystemError(401, "unauthorized");
+  return principal;
+}
+
 export async function revokeSessionById(c: Context<any>, sid: string): Promise<boolean> {
-  return revokeSessionId(c.env, sid);
+  return revokeSessionId(c.env, sid, middlewarePrincipal(c));
 }
 
 export async function currentSessionId(c: Context<any>): Promise<string | null> {
-  return (await readSessionContext(c))?.principal.sid ?? null;
+  return middlewarePrincipal(c).sid ?? null;
 }
