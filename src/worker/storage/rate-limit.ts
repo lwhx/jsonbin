@@ -46,33 +46,3 @@ export async function limitAnonymousRequest(env: Env, request: Request, limit = 
   if (!verdict || verdict.allowed) return null;
   return rateLimitResponse(verdict.retryAfterSeconds);
 }
-
-/** Failed password verifications per IP before the login endpoint stops verifying. */
-export const LOGIN_FAILURE_LIMIT = 5;
-
-/**
- * Per-IP brute-force budget for the login endpoint, checked before credential
- * work. Only failed verifications consume slots via countLoginFailure, so
- * successes, malformed requests and config errors never lock the admin out.
- */
-export async function limitLoginAttempts(env: Env, request: Request, limit = LOGIN_FAILURE_LIMIT): Promise<Response | null> {
-  if (!env.CACHE) return null;
-  const ip = request.headers.get("CF-Connecting-IP")?.trim() || "anonymous";
-  const window = Math.floor(Date.now() / WINDOW_MS);
-  const current = Number((await env.CACHE.get(`rl:l:${ip}:${window}`).catch(() => null)) ?? "0");
-  if (Number.isFinite(current) && current >= limit) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((((window + 1) * WINDOW_MS) - Date.now()) / 1000));
-    return rateLimitResponse(retryAfterSeconds);
-  }
-  return null;
-}
-
-/** Records one failed credential verification in the caller's current window. */
-export async function countLoginFailure(env: Env, request: Request): Promise<void> {
-  if (!env.CACHE) return;
-  const ip = request.headers.get("CF-Connecting-IP")?.trim() || "anonymous";
-  const window = Math.floor(Date.now() / WINDOW_MS);
-  const key = `rl:l:${ip}:${window}`;
-  const current = Number((await env.CACHE.get(key).catch(() => null)) ?? "0");
-  await env.CACHE.put(key, String((Number.isFinite(current) ? current : 0) + 1), { expirationTtl: Math.ceil(WINDOW_MS / 1000) * 2 }).catch(() => {});
-}
