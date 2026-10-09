@@ -343,3 +343,25 @@ test('SEC002: concurrent dynamic per-key requests never exceed exact R2 limit=3,
     headers: { Authorization: 'Bearer ' + other.token },
   }), h.env)).status, 200);
 });
+
+
+test('SEC002: stale in-flight request never rewinds a newer UTC quota window', async t => {
+  const h = await harness(t);
+  const custom = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'monotonic-window', scopes: ['bin:read'], rateLimitPerMinute: 3,
+  } })).json();
+  const path = 'auth/key-rate/' + custom.key.id + '.json';
+  const advancedWindow = Math.floor(Date.now() / 60000) + 1;
+  // A later-minute request won CAS already; an earlier-minute request
+  // may arrive after it due to network/R2 scheduling. It must not
+  // resurrect the old window or reset the newer counter to zero.
+  await h.bucket.put(path, JSON.stringify({ window: advancedWindow, count: 3 }));
+  const response = await h.worker.fetch(new Request('https://example.test/api/v1/bins', {
+    headers: { Authorization: 'Bearer ' + custom.token },
+  }), h.env);
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: 'rate_limit_exceeded' });
+  const persisted = await (await h.bucket.get(path)).json();
+  assert.equal(persisted.window, advancedWindow);
+  assert.equal(persisted.count, 3);
+});
