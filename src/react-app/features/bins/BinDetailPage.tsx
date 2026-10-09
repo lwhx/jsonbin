@@ -1,6 +1,6 @@
 import { systemApi } from '../settings/api';
 import { downloadBytes } from '../settings/download';
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, Save, Trash2, Braces, RefreshCw } from "lucide-react";
 import { BinApiError, getBin, getBinIfChanged, removeBin, saveBin, saveBinMetadata, restoreBinVersion } from "./api";
@@ -79,7 +79,8 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
     setDraft(previous => previous && (isDirty(previous) || dirtyRef.current) ? previous : previous ? receiveRecord(previous, query.data!) : createDraft(query.data!));
     if (!dirty) setMetadata(metadataOf(query.data));
   }, [query.data]);
-  useEffect(() => { onDirtyChange(dirty || Boolean(busy)); }, [dirty, busy, onDirtyChange]);
+  // Propagate draft protection before paint so a rapid browser Back cannot race a passive effect.
+  useLayoutEffect(() => { onDirtyChange(dirty || Boolean(busy)); }, [dirty, busy, onDirtyChange]);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isLocked = Boolean(draft?.record.meta.locked);
