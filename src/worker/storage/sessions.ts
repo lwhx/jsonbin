@@ -133,9 +133,13 @@ export async function revokeSingleSession(env: Env, principal: SessionPrincipal)
   });
 }
 
-export async function revokeSessionId(env: Env, id: string): Promise<boolean> {
+export async function revokeSessionId(env: Env, id: string, caller: SessionPrincipal): Promise<boolean> {
   if (!sidPattern.test(id)) return false;
   return mutate(env, draft => {
+    // The caller may have been revoked after Hono's initial middleware check.
+    // Reauthorize against the SAME R2 snapshot used for this CAS update.
+    // CAS retries will reevaluate the caller on every newer snapshot.
+    if (!registryAuthorizes(draft, caller)) throw new SystemError(401, "unauthorized");
     if (!Object.hasOwn(draft.sessions, id)) return { value: false, write: false };
     delete draft.sessions[id];
     return { value: true, write: true };
