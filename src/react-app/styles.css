@@ -932,6 +932,47 @@ button.activity-row:focus-visible {
   color: var(--text);
 }
 
+/* Keep the OAuth button distinct from generic secondary actions. */
+.github-login {
+  min-height: 44px;
+  padding: 0 16px;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, var(--border));
+  border-radius: 11px;
+  background: var(--panel-solid);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.05);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.github-login .github-mark {
+  display: block;
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+}
+
+.github-login:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.github-login:active {
+  transform: translateY(0);
+}
+
+.github-login:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+:root.dark .github-login {
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+}
+
 .login-footnote {
   margin-top: 22px;
   color: var(--muted-2);
