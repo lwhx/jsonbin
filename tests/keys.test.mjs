@@ -7,7 +7,7 @@ import { createSystemHarness } from './support/system-harness.mjs';
 async function withWorker(pepper, fn) {
   const password = randomBytes(32).toString('hex');
   const mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
-    name: 'pepper-tests', modules: true, scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
+    name: 'pepper-tests', modules: true, scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } },
     bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex'), ...(pepper === undefined ? {} : { TOKEN_PEPPER: pepper }) },
   }] }));
   try {
@@ -15,7 +15,7 @@ async function withWorker(pepper, fn) {
     assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0];
     const request = async (path, { method = 'GET', value, token, etag } = {}) => {
       const result = await mf.dispatchFetch('http://localhost/api/v1' + path, {
-      method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : { Cookie: cookie }), ...(etag ? { 'If-Match': etag } : {}) },
+      method, headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.32', ...(token ? { Authorization: `Bearer ${token}` } : { Cookie: cookie }), ...(etag ? { 'If-Match': etag } : {}) },
       ...(value === undefined ? {} : { body: JSON.stringify(value) }),
       });
       await result.waitUntil?.();

@@ -12,6 +12,7 @@ export async function request(path, { method = 'GET', value, etag, authenticated
     method,
     headers: {
       'Content-Type': contentType,
+      'CF-Connecting-IP': '203.0.113.28',
       ...(authenticated && cookie ? { Cookie: cookie } : {}),
       ...(etag ? { 'If-Match': etag } : {}),
       ...(authorization !== undefined ? { Authorization: authorization } : {}),
@@ -29,7 +30,7 @@ async function create(value = { hello: 'world' }) {
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
     name: 'jsonbin-tests', modules: true, scriptPath: 'dist/jsonbin/index.js',
-    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: 'ApiRateLimiter' },
+    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } },
     bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret },
   }] }));
   bucket = await mf.getR2Bucket('DATA', 'jsonbin-tests');

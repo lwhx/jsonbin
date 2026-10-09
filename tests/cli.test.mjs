@@ -11,11 +11,11 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 const password = randomBytes(32).toString('hex');
 const mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
   name: 'cli-tests', modules: true, scriptPath: 'dist/jsonbin/index.js',
-  compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
+  compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } },
   bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex') },
 }] }));
 const app = (await import('../dist/jsonbin/index.js')).default;
-const env = { DATA: await mf.getR2Bucket('DATA', 'cli-tests'), CACHE: await mf.getKVNamespace('CACHE', 'cli-tests'),
+const env = { DATA: await mf.getR2Bucket('DATA', 'cli-tests'), CACHE: await mf.getKVNamespace('CACHE', 'cli-tests'), RATE_LIMITER: await mf.getDurableObjectNamespace('RATE_LIMITER', 'cli-tests'),
   ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex') };
 
 // A real HTTP origin so the CLI's fetch can reach the worker.
@@ -25,7 +25,7 @@ let onBinGet = null;
 const server = createServer(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
-  const response = await app.fetch(new Request(origin + req.url, { method: req.method, headers: req.headers, ...(body ? { body } : {}) }), env);
+  const response = await app.fetch(new Request(origin + req.url, { method: req.method, headers: { ...req.headers, 'CF-Connecting-IP': '203.0.113.25' }, ...(body ? { body } : {}) }), env);
   if (req.method === 'GET' && /^\/api\/v1\/bins\/[0-9a-f-]{36}$/.test(req.url) && response.ok && onBinGet) {
     const hook = onBinGet; onBinGet = null;
     await hook(req.url, response.headers.get('etag'));
