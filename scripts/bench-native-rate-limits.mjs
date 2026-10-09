@@ -1,5 +1,5 @@
 /**
- * Baseline/candidate same-load rate limiting microbenchmark for Workers.
+ * Baseline/candidate same-load rate limiting microbenchmark (100 below baseline 120/min budget) for Workers.
  * Prints limiter-only KV and R2 call counts, and response p50/p95.
  * Run in GitHub Actions against both main and this feature branch.
  */
@@ -37,7 +37,7 @@ try {
     JSONBIN_KEY_RATE: { limit: async () => { observations.nativeCalls++; return { success: true }; } },
   };
   const durations = [];
-  for (let i = 0; i < 250; i++) {
+  for (let i = 0; i < 100; i++) {
     const request = new Request("https://example.test/api/v1/bins", {
       headers: { Authorization: "Bearer " + generated.token },
     });
