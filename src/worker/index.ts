@@ -20,6 +20,7 @@ import { generateOpenApiSpec } from "../shared/openapi";
 import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute } from "./storage/analytics";
+import { settleRecentKeyUsage } from "./storage/key-usage";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
 
@@ -70,6 +71,7 @@ app.use("/api/*", async (c, next) => {
         durationMs,
         authType,
         keyId,
+        qualifiedKeyUse: Boolean(authenticatedKey) && ![401, 403, 429].includes(status),
       }).catch(() => {});
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
@@ -164,7 +166,7 @@ app.onError((error, c) => {
 
 export default {
   fetch: app.fetch,
-  async scheduled(_controller: ScheduledController, env: Env) {
+  async scheduled(controller: ScheduledController, env: Env) {
     const requestId = crypto.randomUUID();
     const [sweep] = await Promise.allSettled([sweepBins(env, Date.now(), async ({ action, id }) => {
       await Promise.allSettled([
@@ -173,7 +175,10 @@ export default {
       ]);
     })]);
     // Prune after system events settle, even when Bin maintenance failed.
-    const [prune, webhookSweep] = await Promise.allSettled([pruneActivity(env), sweepWebhookDeliveries(env)]);
+    const [prune, webhookSweep, keyUsage] = await Promise.allSettled([
+      pruneActivity(env), sweepWebhookDeliveries(env), settleRecentKeyUsage(env, controller.scheduledTime ?? Date.now()),
+    ]);
+    if (keyUsage.status === "rejected") console.error("scheduled_key_usage_failed", { requestId });
     if (sweep.status === "rejected" || prune.status === "rejected" || webhookSweep.status === "rejected") {
       console.error("scheduled_maintenance_failed", { requestId, bins: sweep.status, activity: prune.status, webhooks: webhookSweep.status });
       throw new Error("scheduled_maintenance_failed");

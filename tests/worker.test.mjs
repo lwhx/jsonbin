@@ -1168,11 +1168,12 @@ test('authorized external clients can CRUD models, collections and Bins while re
   assert.equal((await bearerRequest(key.token, `/collections/${collection.meta.id}`, { method: 'DELETE', etag: collection.etag })).status, 200);
   assert.equal((await bearerRequest(key.token, `/schemas/${schema.meta.id}`, { method: 'DELETE', etag: schema.etag })).status, 200);
 });
-test('last-used time is recorded for permitted authentication only, expiry and revocation reject future requests', async () => {
+test('request-time key R2 metadata is unchanged, expiry and revocation reject future requests', async () => {
   const key = await apiKey();
   const path = `keys/${key.key.id}/meta.json`, stored = () => bucket.get(path).then(object => object.json());
   assert.equal((await bearerRequest(key.token, '/collections')).status, 403); assert.equal((await stored()).lastUsedAt, null);
-  assert.equal((await bearerRequest(key.token, '/bins')).status, 200); assert.ok((await stored()).lastUsedAt);
+  assert.equal((await bearerRequest(key.token, '/bins')).status, 200);
+  assert.equal((await stored()).lastUsedAt, null, 'usage bookkeeping must not write R2 per request');
   let value = await stored();
   await bucket.put(path, JSON.stringify({ ...value, expiresAt: '2000-01-01T00:00:00Z' }));
   assert.equal((await bearerRequest(key.token, '/bins')).status, 401); assert.equal((await stored()).lastUsedAt, value.lastUsedAt);
