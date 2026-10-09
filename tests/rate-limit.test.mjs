@@ -216,3 +216,25 @@ test('daily scheduled housekeeping prunes only expired password-IP security reco
   assert.equal(await h.bucket.get(staleKey), null, 'expired IP state should not accumulate forever in R2');
   assert.ok(await h.bucket.get(activeKey), 'non-expired IP state must survive housekeeping');
 });
+
+
+test('concurrent invalid logins use R2 CAS to enforce exactly three then six failures', async t => {
+  const h = await harness(t);
+  const ip = '203.0.113.44';
+  const attempt = () => h.worker.fetch(new Request('https://example.test/api/v1/auth/login', {
+    method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: h.env.ADMIN_USERNAME, password: 'wrong-password' }),
+  }), h.env);
+  const first = await Promise.all([attempt(), attempt(), attempt()]);
+  assert.deepEqual(first.map(r => r.status).sort(), [401, 401, 429]);
+  const [entry] = (await h.bucket.list({ prefix: 'auth/login-guard/' })).objects;
+  assert.ok(entry);
+  let stored = await (await h.bucket.get(entry.key)).json();
+  assert.equal(stored.failures, 3, 'concurrent credentials cannot overwrite prior failures');
+  await h.bucket.put(entry.key, JSON.stringify({ ...stored, cooldownUntil: Date.now() - 1 }));
+  const next = await Promise.all([attempt(), attempt(), attempt()]);
+  assert.deepEqual(next.map(r => r.status).sort(), [401, 401, 429]);
+  stored = await (await h.bucket.get(entry.key)).json();
+  assert.equal(stored.failures, 6);
+  assert.ok(stored.bannedUntil > Date.now());
+});
