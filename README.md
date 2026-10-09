@@ -1,289 +1,299 @@
-# JSONBin v3
+# JSONBin
 
-A private, Cloudflare-native JSON storage and configuration platform.
+**基于 Cloudflare 的私有 JSON 数据仓与配置管理平台。**  
+一个账号、一套控制台、一组 API，让 JSON 数据的存储、编辑、版本管理和自动化接入更简单。
 
-This repository started from Remy Sharp's original JSONBin project. The legacy code is preserved on the **`legacy-v2.6.4`** branch. The modern implementation lives on **`main`** and is a clean Cloudflare rewrite.
+[![GitHub Actions](https://github.com/lwhx/jsonbin/actions/workflows/v3-ci.yml/badge.svg)](https://github.com/lwhx/jsonbin/actions/workflows/v3-ci.yml)
+![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 
-## Direction
+[功能概览](#核心功能) · [快速开始](#快速开始) · [API 示例](#api-使用示例) · [SDK / CLI / MCP](#开发者接入) · [部署与安全](#部署到-cloudflare) · [详细文档](#相关文档)
 
-JSONBin v3 is designed for a single owner and for scripts, automation, Workers, VPS tools and small applications that need a reliable JSON/configuration API.
+---
 
-### Stack
+## 项目介绍
 
-- Cloudflare Workers
-- Cloudflare R2 — canonical durable storage
-- Cloudflare KV — cache and rebuildable indexes
-- Hono + TypeScript
-- React + Vite
-- Cloudflare Vite Plugin
-- Tailwind CSS
+JSONBin 是面向**个人开发者、小型项目和自动化脚本**的自托管 JSON 服务。通过网页控制台管理数据，也可以通过 HTTP API、SDK、CLI 或 MCP 让程序和 AI Agent 访问经过授权的配置。
 
-No MongoDB, D1, Redis or standalone server is required.
+适合以下场景：
 
-## Current status
+- **应用配置中心**：集中保存脚本、网站、Cloudflare Workers、VPS 工具等使用的 JSON。
+- **自动化数据仓**：通过 Bearer API Key 读取、修改或发布配置。
+- **配置版本发布**：保留编辑历史，区分工作版本与已发布版本，按需回退发布指针。
+- **AI 工具集成**：借助 MCP Server 或 SDK，让 Agent 在权限范围内读写指定数据。
 
-The `main` branch currently has a deployable Cloudflare-native v3 foundation with:
+> **定位说明**：这是单管理员、自托管的 JSON 数据与配置平台，不是多租户 SaaS，也不以替代 PostgreSQL、MongoDB 等通用数据库为目标。
 
-- Cloudflare Worker + Hono API
-- React dashboard with Chinese UI
-- username/password login and signed sessions
-- optional GitHub OAuth
-- R2 + KV bindings
-- basic Bin list/create/read/update/delete backend
-- ETag / If-Match groundwork
-- GitHub Actions typecheck + production build
-- Cloudflare automatic deployment
+## 核心功能
 
-The P1 implementation adds a Bin detail page with a locally bundled Monaco JSON editor, metadata settings, save/delete actions, refreshable links, and unsaved-draft protection. P2 adds version history, read-only comparison of any two versions and restoration into a new immutable version. P3 adds collections, member counts and Bin membership settings. Collection deletion detaches members and preserves their JSON and version history. P4 adds Draft 7 JSON Schema management, sample validation and Bin bindings to immutable model revisions. Creation, updates and historical restoration validate against the pinned revision; model locks protect binding changes, and deleting a model retains existing constraints. P5 adds API key administration, one-time token disclosure, expiry/revocation and scoped Bearer authentication for resource APIs. P6 adds JSON Merge Patch, deep-path reads/writes, data-lock controls and anonymous current reads for public Bins. See the development plan for local, CI and production acceptance status.
+| 分类 | 主要能力 |
+| --- | --- |
+| **数据仓管理** | JSON Bin 创建、读取、编辑、删除；自定义 Slug、标签、收藏、置顶、集合、批量操作 |
+| **编辑与校验** | Monaco JSON 编辑器、结构化表单、树形视图、Draft 7 JSON Schema 校验、数据锁与模型锁 |
+| **版本与发布** | 不可变历史版本、Diff、历史恢复、版本备注、配置发布与发布指针回滚、ETag 并发保护 |
+| **高级 JSON API** | RFC 7396 JSON Merge Patch、RFC 6902 JSON Patch、JSON Pointer 深层读写、条件读取、部分格式导出 |
+| **资产与生命周期** | Bin 克隆、JSON 模板、TTL 自动过期、回收站、恢复与永久清理、业务备份与导入 |
+| **检索与管理** | 元数据搜索、按标签筛选、可选的 JSON 内容搜索、活动记录、系统设置 |
+| **开发者接口** | OpenAPI 3.1、在线 API 调试器、资源级 API Key、TypeScript / Python SDK、CLI、MCP Server、Webhook |
+| **可观测性** | API 请求统计与趋势、Endpoint 排行、状态码与延迟分析、密钥使用统计、限流响应 |
 
-The Bin detail **树形视图** tab is now available: inspect the current JSON draft, expand objects/arrays, navigate with the keyboard and copy a selected node's complete JSON. Viewing retains unsaved editor/settings changes and never writes or changes versions. Invalid JSON prompts correction in the editor; locked Bins remain readable. Large trees display 200 visible nodes per batch and long text previews retain the full value for copying. See [tree view design](docs/superpowers/specs/2026-10-04-json-tree-design.md). Functional delivery `1772135` passed typecheck/build, 162 automated tests, 57 Chromium tests, [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37170670891) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/32de9dca-2800-4027-bce8-784e78a554ca).
+所有写入操作遵循资源权限、锁定规则与适用的条件更新要求；具体能力和端点请以 [开发文档](docs/DEVELOPMENT.md) 与 [OpenAPI](#api-使用示例) 为准。
 
-P7 adds request-time TTL and resumable trash/restore/purge maintenance. P8–P10 add activity, generated API documentation, defaults and bounded business backup/import/export. P11 adds authenticated global metadata search, collection-name matching, Ctrl/Cmd+K navigation, disposable KV indexes with R2 fallback, and a Settings action to rebuild indexes. See [development progress](docs/DEVELOPMENT.md), [architecture](docs/ARCHITECTURE.md) and [P11 design](docs/superpowers/specs/2026-10-04-p11-search-design.md) for limits and acceptance evidence. Production functional acceptance for v3.0.0 was completed on `https://js.gnn.im`.
+## 技术架构
 
-P12 hardens Session parsing, login/OAuth, CORS, security headers and error logging, and validates the production build's CSP with Chromium. [Operations and release acceptance](docs/OPERATIONS.md) records the completed v3.0.0 production acceptance and keeps the release checklist for future versions.
+```mermaid
+flowchart LR
+    C["Web 控制台 / CLI / SDK / MCP 客户端"] --> W["Cloudflare Workers + Hono API"]
+    W --> R[("Cloudflare R2<br/>数据与历史版本")]
+    W --> K[("Cloudflare KV<br/>缓存、索引、统计")]
+    W --> D[("Durable Objects · SQLite<br/>限流计数")]
+    W --> U["React + Vite 前端资源"]
+```
 
-### Stable Release Acceptance (`3.0.0`)
-On 2026-10-04, JSONBin v3 successfully completed full production acceptance on `https://js.gnn.im`:
-- Overview metric card dynamic collections count updated, removing placeholder labels.
-- Added `package-lock.json` and converted GitHub Actions CI to deterministic `npm ci`.
-- Production probe `node scripts/check-production.mjs https://js.gnn.im` all PASS (Health, CSP, CORS, X-Request-ID, 401 barriers).
-- Real-machine business flows verified: Auth, Collections, Draft 7 JSON Schema validation & rejection, Bin CRUD with RFC 7396 Merge Patch, scoped API Keys with Bearer token authentication, and global `⌘K` search.
-- Verified request-time TTL auto-archival and trash lifecycles.
-- Exported production business backups and successfully restored 100% of IDs and historical versions in a pristine, empty R2 test environment.
-- Promoted version from `3.0.0-alpha.4` to `3.0.0` stable release.
-- Release metadata is synchronized across `package.json`, `package-lock.json`, Worker API status and dashboard fallback.
+- **Cloudflare Workers**：运行 HTTP API、认证与定时维护任务。
+- **Cloudflare R2**：Bin、历史版本、模型与业务元数据的**权威数据源**。
+- **Cloudflare KV**：可重建的缓存、搜索索引及近似统计；不负责最终一致性要求高的业务判定。
+- **SQLite-backed Durable Objects**：API Key 与匿名读取的原子固定窗口限流。
+- **Hono + TypeScript / React + Vite + Tailwind CSS**：后端与中文管理界面。
 
-## Local development
+无需自建传统应用服务器，也不依赖 D1、MongoDB 或 Redis。数据模型、条件写入和故障恢复约定见 [架构文档](docs/ARCHITECTURE.md)。
+
+## 快速开始
+
+### 运行环境
+
+- **Node.js 22 或更高版本**，建议配合 npm 使用。
+- 本地开发可使用 Wrangler / Miniflare 模拟 Cloudflare 绑定。
+- 部署需要已启用 **Workers、R2、KV、Durable Objects** 的 Cloudflare 账号；请确认相应套餐的配额。
+
+### 本地开发
 
 ```bash
-npm install
+git clone https://github.com/lwhx/jsonbin.git
+cd jsonbin
+npm ci
 cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Health check:
+Windows PowerShell 复制环境文件可使用 `Copy-Item .dev.vars.example .dev.vars`。
 
-```text
-GET /api/v1/system/health
-```
+启动前，打开 `.dev.vars` 并填写**仅供本地使用**的管理员密码和会话密钥：
 
-
-### Login configuration
-
-For personal single-user use, configure these Worker variables/secrets:
-
-```text
+```dotenv
+APP_ORIGIN=http://localhost:5173
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-password
-SESSION_SECRET=a-random-string-at-least-32-characters
+ADMIN_PASSWORD=请设置一个独立的强密码
+SESSION_SECRET=请替换为至少32字符的随机字符串
 ```
 
-Store `ADMIN_PASSWORD` and `SESSION_SECRET` as Cloudflare Secrets. Do not commit their real values to Git.
+浏览器访问终端输出的本地地址（默认 `http://localhost:5173`）。不要将真实 `.dev.vars`、密码或 Token 提交至 Git。
 
-`SESSION_SECRET` must have at least 32 characters; otherwise login is disabled with 503 and existing sessions are unauthenticated. Password login accepts at most 4 KiB of actual UTF-8 request body. Cookies last 14 days and use HttpOnly, Secure on HTTPS, and SameSite=Lax; rotating the signing secret invalidates existing sessions.
+### 常用开发命令
 
-Password-login brute-force protection uses authoritative R2 conditional writes, keyed by an HMAC of Cloudflare's `CF-Connecting-IP` (never the literal IP in R2). Only incorrect, syntactically valid username/password attempts count: the third failure locks password login for **60 seconds**, and the sixth within the rolling 24-hour failure window blocks that IP's **password login for 24 hours**. A successful password login resets the failure streak. `429` replies include `Retry-After` and `login_cooldown` / `login_ip_banned`; if the R2 guard cannot be read or written, password login fails closed with `503 login_guard_unavailable`. GitHub OAuth, already authenticated Sessions and Bearer clients are not blocked. Rotating `SESSION_SECRET` also changes IP-key HMAC identifiers, resetting existing IP lockout tracking. The scheduled Worker performs a bounded cleanup at 03:00 UTC; login guard records are temporary and outside normal business exports.
+| 命令 | 用途 |
+| --- | --- |
+| `npm run dev` | 启动本地开发环境 |
+| `npm run typecheck` | TypeScript 类型检查 |
+| `npm run build` | 构建 Worker 与前端 |
+| `npm test` | 构建 SDK / MCP 并执行 Node 测试 |
+| `npm run test:browser` | 执行 Playwright 浏览器测试 |
+| `npm run cf:types` | 根据 Wrangler 绑定生成类型 |
+| `npm run check:production -- https://your-domain.example` | 对已部署站点执行只读发布检查 |
 
-Browser CORS defaults to the request's own origin. Optional `APP_ORIGIN` must be one exact canonical HTTP(S) origin, such as `https://json.example.com`, without credentials, path or trailing slash. Foreign/opaque origins are denied; invalid configuration fails closed. Login, logout and Session writes apply the same rule. Non-browser clients may omit Origin but still need authentication and scopes. Every API response is no-store and includes `X-Request-ID` for safe log correlation. See [production checks](docs/OPERATIONS.md#stable-发布门槛).
+第一次运行浏览器测试，可先执行 `npx playwright install chromium`。项目 GitHub Actions 会自动执行类型检查、构建、Wrangler dry-run、Node 测试与浏览器测试。
 
-## Cloudflare resources
+## 部署到 Cloudflare
 
-Create the resources before enabling the bindings in `wrangler.jsonc`.
+### 1. 准备存储资源
 
-Example:
+在自己的 Cloudflare 账号中登录 Wrangler：
 
 ```bash
+npx wrangler login
+
+# 仅首次创建；已经存在时不要重复创建
 npx wrangler r2 bucket create jsonbin-data
 npx wrangler kv namespace create CACHE
 ```
 
-Then place the generated KV namespace ID in `wrangler.jsonc` and enable:
+在 `wrangler.jsonc` 中核对或修改绑定：
 
-- `DATA` -> R2 bucket
-- `CACHE` -> KV namespace (rebuildable caches / analytics only)
-- `RATE_LIMITER` -> SQLite-backed Durable Object `ApiRateLimiter` (provisioned by Wrangler's `exports` declaration at deploy time)
+| Binding | 服务 | 用途 |
+| --- | --- | --- |
+| `DATA` | R2 Bucket | 持久化 JSON、版本历史、业务元数据 |
+| `CACHE` | KV Namespace | 可重建索引、缓存和使用统计 |
+| `RATE_LIMITER` | SQLite Durable Object | API Key 与匿名访问限流 |
 
-SEC-002 uses an atomic per-client/per-API-key 60-second counter stored in the SQLite Durable Object, not KV. Bearer keys default to 120 requests/minute (customizable, or `null` to opt out); unauthenticated Bin ID and Slug reads (including private/missing probes) use a shared 240/minute quota per trusted Cloudflare IP, enforced before any R2 lookup. Missing limiter bindings, storage failures or missing edge IP cause an explicit `503` instead of unlimited access. Authenticated administrator Session reads are exempt from the anonymous quota, while explicit Bearer credentials are always checked before permitting public reads. This adds one Durable Object call per limited request and consumes plan-specific Durable Objects quotas; review [operations](docs/OPERATIONS.md#sec-002-%E9%99%90%E6%B5%81%E5%8F%91%E5%B8%83%E4%B8%8E%E5%9B%9E%E6%BB%9A) before enabling production traffic.
+**重要：** 仓库中的 `wrangler.jsonc` 带有原项目使用的 R2 桶名和 KV Namespace ID。自行部署或 Fork 时必须替换为**你自己的资源**；不要直接复用现有 KV ID。
 
-Generate Worker types after bindings change:
+`ApiRateLimiter` 的 Durable Object 绑定与 SQLite 类导出已写入配置。首次上线前务必了解 [Durable Object 生命周期与恢复限制](docs/OPERATIONS.md)。
 
-```bash
-npm run cf:types
-```
+### 2. 配置管理员与密钥
 
-## Build and deploy
-
-Cloudflare Workers Builds should use the `main` production branch. For SEC-002 branch previews, the repository config includes a separate test R2 bucket name (`jsonbin-sec002-preview-data`) and a Preview-local `RATE_LIMITER` binding. Create that empty test bucket and set **separate** Preview credentials before switching to Worker Previews (one-time, irreversible). Do not point Preview DATA or CACHE at production. See [SEC-002 Preview setup](docs/OPERATIONS.md#sec-002隔离-preview-准备只操作非生产资源).
-
-Build command:
+在 Cloudflare Worker 变量或 `wrangler.jsonc` 的 `vars` 中设置 `ADMIN_USERNAME`（例如 `admin`），然后为生产环境配置 Secret：
 
 ```bash
-npm run build
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put SESSION_SECRET
 ```
 
-Deploy command:
+`SESSION_SECRET` 必须至少 **32 个字符**。如 Worker 尚未创建，可在首次部署后立即写入 Secret，并在启用外部访问前确认认证配置正常。
 
-```bash
-npx wrangler deploy
-```
+可选配置：
 
-Local verification:
+| 配置 | 说明 |
+| --- | --- |
+| `APP_ORIGIN` | 固定应用访问 Origin，例如 `https://json.example.com`（不要加末尾 `/`） |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `GITHUB_ALLOWED_USER_ID` | 启用仅限指定 GitHub 用户的 OAuth 登录 |
+| `TOKEN_PEPPER` | 可选的 API Key HMAC Pepper；启用后请稳定保存，避免误轮换导致旧 Key 失效 |
+
+不要把真实 Secret 写入 `wrangler.jsonc` 或提交到仓库。
+
+### 3. 构建和发布
 
 ```bash
 npm run typecheck
-npm run build
-npm test
-npm run test:browser
+npm run deploy
 ```
 
-Browser tests start an isolated local Worker with disposable R2/KV and in-memory test credentials. They use system Chromium when available; otherwise install it with `npx playwright install chromium`. No Cloudflare production credentials or resources are used.
+`npm run deploy` 会先执行构建，再运行 `wrangler deploy`。如使用 **Cloudflare Workers Builds + GitHub**，也可以由 `main` 分支自动部署；**不要在同一次发布中同时使用自动部署与手动部署**。
 
-In the cloud workspace, export `XDG_CONFIG_HOME=/workspace/.cloud-config` and `WRANGLER_SEND_METRICS=false` before Wrangler/Vite commands so tool state stays in a writable directory.
-
-Bin metadata is updated through `PATCH /api/v1/bins/:id/meta` with `If-Match` and a JSON object containing `name`, `description`, and/or `visibility`. Metadata updates preserve the JSON version. JSON saves use `PUT /api/v1/bins/:id`, reserve immutable version objects, and conditionally update canonical metadata; conflicts return 412. Orphan versions from failed concurrent writes are retained and their numbers are skipped on subsequent saves.
-
-Version history is available through `GET /api/v1/bins/:id/versions` and `GET /api/v1/bins/:id/versions/:version`. Lists include all retained version objects, including orphans, with R2 upload timestamps and stored file sizes. `POST /api/v1/bins/:id/versions/:version/restore` appends the selected value as a new version while preserving current metadata. Send the current Bin ETag in `If-Match`, rather than the historical object's ETag; missing preconditions return 428, stale ETags return 412 and locked Bins return 423. These endpoints accept a signed session or scoped Bearer token and cannot read deleted Bins. History reads require `history:read`; restoration also requires `bin:update`. See the detail page's history tab for JSON viewing and Diff.
-
-Collections use `GET/POST /api/v1/collections`, `GET/PATCH/DELETE /api/v1/collections/:id` and `GET /api/v1/collections/:id/bins`. Creation and editing accept a name and optional description; stable slugs are generated automatically. PATCH and DELETE require the collection ETag in `If-Match`. Assign a Bin with `collectionId` during creation or through its metadata endpoint, and set it to `null` to remove it from a collection. Deletion blocks new members and clears only the association, including for locked Bins. If cleanup is interrupted, the collection remains visible as deleting and the same DELETE request can resume it. Completed deletions retain an internal tombstone and disappear from normal collection APIs.
-
-## Partial updates and public reads
-
-`PATCH /api/v1/bins/:id` accepts a raw RFC 7396 Merge Patch document. Object members merge, `null` removes a member, and arrays/scalars replace the target. `GET /api/v1/bins/:id/value/settings/theme` reads a nested value; `PUT` to that path accepts `{"value":"dark"}`. `/value` addresses the root; `/value/` addresses an empty key. Segments are URL-decoded once, then use JSON Pointer escaping (`~1` for `/`, `~0` for `~`). Array indexes start at zero; a final `-` appends. Parent nodes must exist.
-
-Both partial-write endpoints require `bin:update` for Bearer clients and the current Bin ETag in `If-Match`. Missing preconditions return 428, stale ETags return 412, and missing paths return 404. They validate the complete resulting JSON against the pinned schema before appending an immutable version. Deep reads return `{id, path, value, etag, version}`; writes return a full BinRecord. See the detail page's API tab or the [P6 development notes](docs/DEVELOPMENT.md#p6-高级-bin-api) for examples and edge cases.
-
-Set `locked` through the metadata endpoint with `If-Match`, or use the detail settings controls. Data locks block JSON/settings changes, historical restoration and ordinary deletion. Unlock with a separate `{"locked":false}` request; the schema lock stays unchanged. Bin DELETE accepts optional `If-Match` and conditionally marks canonical metadata as deleted, preserving historical files and preventing concurrent updates from reviving deleted data. The deleted metadata is the authoritative trash record.
-
-Public Bins allow anonymous GET of their current record (JSON and metadata) and deep paths. Lists, history and writes still require authentication. Private Bins require a session or scoped key for every read. An explicit Authorization header must always be valid and sufficiently scoped, even on public Bins. All Bin responses use `Cache-Control: no-store`; new anonymous reads fail after switching to private. An already authorized in-flight read can return its original public snapshot. Existing APP_ORIGIN/CORS settings still govern browser cross-origin requests.
-
-## TTL and trash
-
-P7 supports `expiresAt` on Bin creation and metadata updates. Use a future ISO timestamp with a timezone, or `null` for no expiry. Metadata changes to this field require `If-Match`. Dashboard creation/settings use local time and show remaining time in the Bin list and detail page. Once expired, Bins immediately disappear from normal reads/writes, history and collection counts, including public access. Data locks do not extend a configured TTL.
-
-The Worker runs a scheduled task every 15 minutes (`*/15 * * * *` in UTC) to mark expired Bins as deleted and resume interrupted permanent deletion. Request-time expiry checks and the trash list work before the scheduled task runs. No extra service or secret is required.
-
-The dashboard's 回收站 page provides restore, permanent deletion, batch empty, timestamps and retry states:
-
-| Endpoint | Bearer scopes | Request |
-| --- | --- | --- |
-| `GET /api/v1/trash/bins` | `bin:read` | Returns `{items,total}`, each item includes metadata, ETag and status |
-| `POST /api/v1/trash/bins/:id/restore` | `bin:update` + `history:read` | Current trash ETag in `If-Match` |
-| `DELETE /api/v1/trash/bins/:id` | `bin:delete` | Current trash ETag in `If-Match` |
-| `POST /api/v1/trash/bins/purge` | `bin:delete` | `{"items":[{"id":"UUID","etag":"current ETag"}]}`; 1–100 unique items |
-
-All endpoints also accept an admin session and reject anonymous access. Restore validates the saved JSON against its pinned schema, keeps the same ID and immutable versions, clears expiry and returns the Bin to **private** visibility. Data/schema locks remain; unavailable collection associations are detached. Missing preconditions return 428, stale ETags 412, and missing records 404. Restore returns 409 for a record being purged or missing historical/model files and 422 for schema violations.
-
-Permanent deletion claims a `purging` state before deleting all versions and legacy archives, so it cannot race a successful restore. Failed cleanup is resumable through the API or cron. Completion retains only an internal `{id,deletedAt,purgeState:"purged"}` marker to prevent resurrection; JSON and descriptive metadata are removed. Batch responses use HTTP 200 with a status for each item; check every result. The dashboard deletes only the snapshots included in its confirmation, preserving newly trashed records and reporting conflicts.
-
-Legacy `trash/bins/<id>/meta.json` records remain readable and are conditionally migrated when restored or purged. New deletions use canonical metadata only. See the [P7 development notes](docs/DEVELOPMENT.md#p7-ttl-与回收站) for concurrency, cleanup and acceptance details.
-
-## API keys
-
-Create a key from the dashboard's API 密钥 page and select only the needed scopes. New tokens are encrypted for later display/copy while digest/HMAC verification remains the authentication path. Key management requires a signed admin session; Bearer credentials cannot administer keys. Revocation keeps the record but invalidates authentication, while `DELETE /api/v1/keys/:id/purge` permanently removes the R2 key record and cannot be recovered.
-
-For scripts, keep the token in an environment variable:
+上线后检查：
 
 ```bash
-curl "$JSONBIN_ORIGIN/api/v1/bins" \
+curl https://your-domain.example/api/v1/system/health
+
+npm run check:production -- https://your-domain.example
+```
+
+健康检查应返回 `ok: true`，并确认 `storage.r2`、`storage.kv`、`rateLimiterConfigured` 为 `true`。该字段只能证明绑定存在，不能代替真实的 API Key 限流测试。
+
+**Preview 环境必须与生产隔离。** 仓库包含独立 Preview R2 配置；Fork 或新部署时应调整为自己的测试桶，绝不能让 Preview 共用生产 R2/KV。详细操作及回退限制见 [运维手册](docs/OPERATIONS.md)。
+
+## API 使用示例
+
+所有 HTTP 接口以 `/api/v1` 为前缀。可以在控制台 **「API 密钥」** 页面创建拥有适当 Scope 的 Key，或使用浏览器管理员 Session。
+
+### 查询数据仓
+
+```bash
+export JSONBIN_URL="https://your-domain.example"
+export JSONBIN_TOKEN="你的 API Key"
+
+curl "$JSONBIN_URL/api/v1/bins" \
   -H "Authorization: Bearer $JSONBIN_TOKEN"
 ```
 
-Existing resources accept `bin:read/create/update/delete`, `collection:read/write`, `schema:read/write`, and `history:read`. Listing collection members requires both `collection:read` and `bin:read`; restoring history requires `bin:update` and `history:read`. Authentication errors return 401, missing scopes return 403, and existing ETag, lock and schema constraints still apply. See the [P5 development notes](docs/DEVELOPMENT.md#p5-api-密钥与外部-api-认证) for the complete mapping.
-
-By default, 256 random secret bits are stored as a SHA-256 digest. To add a pepper for new keys, configure `TOKEN_PEPPER` as a Cloudflare Secret with at least 32 characters:
+### 创建一个 JSON Bin
 
 ```bash
-npx wrangler secret put TOKEN_PEPPER
+curl -X POST "$JSONBIN_URL/api/v1/bins" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"app-config","visibility":"private","value":{"theme":"dark","enabled":true}}'
 ```
 
-Keep the pepper stable: replacing or removing it invalidates existing HMAC keys. Adding it preserves older SHA-256 keys. Create replacement keys before rotation and revoke old ones. No pepper is needed to run the existing local setup; `.dev.vars.example` includes the optional setting.
+创建需要 `bin:create` 权限。保存返回的 `meta.id` 和 `ETag`，后续修改时使用当前 ETag 防止覆盖他人的更新。
 
-## Documentation
+### 使用 JSON Patch 修改配置
 
-- [Development plan](docs/DEVELOPMENT.md) — step-by-step implementation order and acceptance criteria
-- [Architecture](docs/ARCHITECTURE.md) — storage, runtime and security architecture
-- [Operations](docs/OPERATIONS.md) — R2/KV backup, isolated recovery and stable release gates
+```bash
+curl -X PATCH "$JSONBIN_URL/api/v1/bins/<BIN_ID>" \
+  -H "Authorization: Bearer $JSONBIN_TOKEN" \
+  -H "Content-Type: application/json-patch+json" \
+  -H 'If-Match: <当前 ETag>' \
+  -d '[{"op":"replace","path":"/theme","value":"light"}]'
+```
 
-## Stable v3 capabilities
+写操作需要 `bin:update` 权限及对应的条件请求头。JSON Patch 遵循 RFC 6902；Merge Patch 可使用 `application/merge-patch+json`。
 
-v3.0.0 includes:
+### 常用接口速查
 
-- single-user username/password login
-- GitHub OAuth restricted to one GitHub account
-- JSON Bin CRUD
-- collections
-- schemas and validation
-- API keys and scoped permissions
-- deep-path access
-- JSON Merge Patch RFC 7396
-- JSON Patch RFC 6902
-- immutable version history
-- diff and restore
-- ETag / If-Match conflict protection
-- data/schema locks
-- TTL
-- trash
-- import/export
-- search
-- published configuration release and rollback
-- custom slug aliases, tags, favorites and pinned ordering
-- resource-scoped API keys
-- batch operations
-- clone and JSON templates
-- OpenAPI 3.1 and interactive API debugger
-- API key usage counters
-- bounded JSON content search
-- webhooks
-- rate limiting
-- version change notes
-- YAML / TOML / .env content negotiation
-- TypeScript SDK
-- Python SDK
-- MCP Server
-- API request analytics
-- polished desktop/mobile dashboard
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/system/health` | 公开健康检查 |
+| `GET` | `/api/v1/openapi.json` | OpenAPI 3.1 描述 |
+| `GET / POST` | `/api/v1/bins` | 列表 / 创建 |
+| `GET / PUT / PATCH / DELETE` | `/api/v1/bins/:id` | 当前值及数据仓操作 |
+| `GET` | `/api/v1/b/:slug` | 通过自定义别名访问 |
+| `GET` | `/api/v1/bins/:id/versions` | 查询不可变历史版本 |
+| `POST` | `/api/v1/bins/:id/publish` | 发布配置版本 |
+| `POST` | `/api/v1/bins/:id/rollback` | 移动已发布版本指针 |
+| `GET` | `/api/v1/bins/:id/published` | 读取已发布版本 |
+| `POST` | `/api/v1/bins/batch` | 批量管理操作 |
+| `POST` | `/api/v1/mcp` | Remote MCP（Streamable HTTP） |
 
+> 接口权限并不相同：公开 Bin 允许匿名读取当前值，但管理、历史和修改操作需要认证。更完整的参数、响应和错误码请查看运行中的 `/api/v1/openapi.json` 或控制台 **「API 文档」**。
 
-## Activity records
+## 开发者接入
 
-P8 adds the Chinese **活动记录** dashboard at `/#/activity`, with refresh, operation/resource filters and cursor pagination. `GET /api/v1/activity` requires a management Session; explicit Authorization headers are rejected even with a valid Cookie. API Keys cannot read this list.
+### CLI
 
-Records are immutable R2 objects containing fixed action summaries, safe resource/user/key IDs, timestamps and server-generated request IDs. Passwords, Cookie/Authorization values, tokens or digests, OAuth code/state, names/descriptions, JSON values and field paths are excluded. Successful management operations and anonymous credential/body-validation failures are recorded; Origin rejection, oversized login bodies and disabled login configuration do not write activity; partial trash batches record only successful items.
+仓库内置零额外运行时依赖的命令行客户端，支持数据仓查询、拉取、推送、Diff 与发布。
 
-Business commits and activity writes are separate. A failed activity write preserves the business result and may leave a missing record; this is a recent operation list, not a guaranteed audit chain. The existing 15-minute Cron retries cleanup to the newest 2000 records, with temporary overflow possible. Queries are bounded and may return fewer items or empty pages with a continuation cursor.
+```bash
+export JSONBIN_URL="https://your-domain.example"
+export JSONBIN_TOKEN="你的 API Key"
 
-Local typecheck/build, 84 Worker/client tests and 36 Chromium tests pass. The feature commit `2ea35a6` passed [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37136840897) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/53499be9-9162-4b9c-ab17-46c98afad16c); production interaction and real Cron execution remain unverified. See [P8 development notes](docs/DEVELOPMENT.md#p8-活动记录). P9 documentation is described below.
+node cli/jsonbin.mjs whoami
+node cli/jsonbin.mjs list
+node cli/jsonbin.mjs pull <BIN_ID> -o config.json
+node cli/jsonbin.mjs diff config.json <BIN_ID>
+```
 
+### TypeScript / Python SDK
 
-## API documentation
+- [TypeScript SDK](sdk/typescript)：`@jsonbin/client`，支持认证、Bin API、ETag 与常见异常处理。
+- [Python SDK](sdk/python)：`jsonbin-client`，使用 Python 标准库实现。
 
-P9 adds the Chinese **API 文档** dashboard at `/#/docs` and shared examples in each Bin’s **API** tab. It documents authentication, scopes, resource requests/responses, ETags, Merge Patch, JSON Pointer paths and errors. Copyable curl, JavaScript fetch and Python requests examples use the current deployment origin. Replace the marked credentials and demo resource IDs before running them.
+两个 SDK 的源码和构建配置都在仓库中；是否已发布到公共包仓库，请以对应包仓库的实际情况为准。
 
-Bin examples use the saved ID/ETag/state and fixed demo JSON; they never include saved JSON, names, descriptions or drafts. Public current reads can omit credentials, while history and writes retain their authentication requirements. Viewing or copying examples executes no business requests and preserves editor drafts.
+### MCP Server
 
-The sequential example creates a demo Bin and reads fresh ETags before both writes. It requires bin:create/read/update; its curl version also needs Python 3 for JSON parsing. Python samples require requests on the caller’s machine and explicitly encode JSON as UTF-8 bytes.
+JSONBin 支持通过 MCP 让 **Claude Desktop、Cursor、Windsurf、Codex** 等兼容客户端在 API Key 的权限范围内管理配置。
 
-Local typecheck/build, 91 Worker/client tests and 40 Chromium tests pass. The feature commit `1073436` passed [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37141128306) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/b37a3f07-8da5-4def-9ab2-d277d323dc3d). Production authentication/CORS, deployed browser behavior and real Cron execution remain unverified because the public production URL and suitable credentials are unavailable; deployment configuration differences remain unverified. See [P9 development notes](docs/DEVELOPMENT.md#p9-api-文档). P10 settings, import and export are described below.
+推荐使用部署后的 Remote MCP 地址：
 
+```text
+https://your-domain.example/api/v1/mcp
+```
 
-## Settings, JSON import and business backups
+支持无状态 Streamable HTTP；也可以构建本地 stdio 服务。密钥 Scope、Resource Access 和 ETag 规则同样适用，不存在绕过授权的 MCP 管理后门。
 
-P10 adds the Chinese **设置** page at `/#/settings`. System information reports package version, read-only R2/KV probes, OAuth configuration and bounded business statistics. These probes do not verify storage writes, OAuth login or actual Cron execution. Statistics scan at most 10000 objects and read 500 metadata records; failures or excess return unavailable statistics instead of partial totals.
+完整连接示例、工具列表与安全约束见 [MCP 接入指南](docs/MCP.md)，或管理界面的 **「开发者 → MCP 接入」**。
 
-Default settings live in `system/settings.json`. An absent object returns private/no-expiry defaults without writing. Settings updates require the returned ETag in `If-Match` (428 when absent, 412 on conflict). Visibility and TTL apply only to omitted creation fields; an explicit `expiresAt:null` disables expiry. TTL is null or an integer from 1 to 31536000 seconds, calculated when the server creates the Bin. Existing Bins remain unchanged.
+## 安全与限流
 
-New `/api/v1/system/info`, `/settings`, `/import`, `/export` and `/restore` endpoints require a management Session and reject every explicit Authorization header, including Bearer plus Cookie. Writes check Origin; responses are no-store. Public `/system/health` remains available. The API documentation page includes curl, JavaScript and Python examples.
+- **身份认证**：单管理员密码登录，可选指定 GitHub 用户 OAuth；签名 Session Cookie 有效期为 14 天。
+- **API Key**：支持 Scope、指定 Bin / Collection 的资源级授权、有效期、撤销及物理删除。显式无效 Bearer 不会回退为公开匿名权限。
+- **并发控制**：写入时使用 ETag / `If-Match` 与 R2 条件操作；缺少前置条件通常返回 `428`，过期 ETag 返回 `412`。
+- **公开读取**：仅公开 Bin 的当前读取允许匿名访问；私有 Bin、历史及管理接口不会因此开放。
+- **速率限制**：API Key 默认 **120 次/分钟**（可单独设置 1–10,000，`null` 表示主动不限流）；未认证 Bin ID / Slug 读取按照可信 Cloudflare IP 共享 **240 次/分钟** 配额，包含不存在或私有资源探测。
+- **原子限流**：使用 SQLite Durable Objects；超限返回 `429` 与 `Retry-After`，限流服务不可用则显式返回 `503`，不依赖 KV 的非原子计数降级放行。
+- **数据治理**：私有优先、可选 TTL、回收站、不可变历史、模型验证、业务备份及隔离恢复。
+- **审计与监控**：提供活动记录、API 分析与错误状态；不会有意记录 Token、Cookie、密码或完整用户 JSON 内容。
 
-Ordinary JSON import previews each complete UTF-8 file (BOM accepted) as one value, including arrays, false and null. Each file and serialized value are limited to 1 MiB; a batch is at most 100 items and 10 MiB, with business nesting at most 64 levels. Invalid structure produces no writes; valid batches report each created/failed item. Writes are not automatically retried. Network interruption may already have committed data: check the list before importing again. Files stay in page memory.
+**生产注意事项**：首次创建 Durable Object 类涉及不可跨越的部署生命周期变更，不能简单回滚到创建该类之前的 Worker 版本。发布前请先阅读 [SEC-002 运维与恢复说明](docs/OPERATIONS.md)。
 
-`GET /api/v1/system/export` accepts only `scope=all|config&format=backup`, or `scope=bin&id=<UUID>&format=value|backup`. Current-value downloads use only the saved current snapshot, retain editor drafts and do not depend on all history, associations or defaults. Configuration exports contain only defaults and format metadata, with empty resource arrays. Versioned `jsonbin-backup` JSON includes defaults, collections, all retained model revisions and Bin versions, trash/expired metadata and terminal purge markers. System credentials, API Keys/digests, activity, KV, internal receipts and unknown namespaces are excluded; user JSON values remain intact. Canonical records take precedence over legacy trash. Missing dependencies/files or transitional states return 409; metadata/history changes during export return `backup_changed`. Snapshots are consistent per captured resource; newly created resources after scanning starts may be absent.
+## 相关文档
 
-Backups are bounded to 100 resources, 250 logical objects (each metadata/terminal marker, revision/version and settings counts once) and 10 MiB UTF-8 JSON; value/schema depth excludes wrappers. The 1 MiB per-value limit applies to ordinary JSON import; backup values share the 10 MiB package budget. Models retain the existing 64 KiB limit. Browser ZIP uses uncompressed STORE with exactly `manifest.json` and `backup.json`, CRC32 and manifest SHA-256/byte count; total ZIP size is at most 10 MiB + 64 KiB. Arbitrary, compressed, encrypted, ZIP64, descriptor, extra/path entries and malformed archives are rejected. Standard ZIP tools can read these exports; the Worker accepts individually validated JSON resources rather than arbitrary ZIP uploads.
+| 文档 | 内容 |
+| --- | --- |
+| [开发文档](docs/DEVELOPMENT.md) | 功能设计、已实现阶段、API 约束与验收记录 |
+| [架构说明](docs/ARCHITECTURE.md) | R2 / KV / Durable Objects 数据模型、安全与一致性策略 |
+| [运维手册](docs/OPERATIONS.md) | 发布检查、备份恢复、Preview 隔离与故障处理 |
+| [MCP 指南](docs/MCP.md) | Remote MCP / stdio 配置、工具和权限 |
+| [TypeScript SDK](sdk/typescript) | TypeScript Client 源码与构建 |
+| [Python SDK](sdk/python) | Python Client 源码与使用示例 |
 
-Restore preserves IDs, visibility, TTL, locks, deletion state, pinned model revisions and history. Existing active/deleted/purged/legacy/orphan targets are skipped without overwrite; conflicting dependencies skip their Bins. Settings require a separate ETag update. Collections and models publish first; each resource conditionally claims hidden pending metadata, creates immutable files, verifies dependencies and then publishes with CAS. Interrupted imports remain hidden and are not cleaned by Cron; the same backup can resume, while changed content cannot take ownership. A repeated completed receipt returns unchanged; ordinary edits invalidate receipts. If dependencies changed, retry cannot overwrite them; migrate the original backup to an empty instance. Expired restored Bins immediately follow trash rules. A concurrent collection deletion may detach membership after publication; cleanup failure reports a warning while retaining created data. Cancellation stops waiting and does not undo commits.
+---
 
-No established legacy JSONBin export protocol/sample is available, so legacy-format import is currently not applicable. Ordinary JSON is never auto-unpacked based on a `format` field. See [P10 development notes](docs/DEVELOPMENT.md#p10-设置导入与导出) and the [approved design](docs/superpowers/specs/2026-10-04-p10-settings-backup-design.md).
+## 项目说明
 
-P10 is merged and pushed to main at functional delivery commit `804fa4b`. Local typecheck/build, all 132 Worker/client tests and all 48 Chromium tests pass, with no failures or skipped tests. The independent whole-branch review's three Important findings have verified fixes and both Minor documentation findings are corrected; none are deferred. [GitHub CI](https://github.com/lwhx/jsonbin/actions/runs/37163198650) and [Workers Builds](https://dash.cloudflare.com/7946c64d5ff82047528862a11ccd2157/workers/services/view/jsonbin/production/builds/9d2ef383-8491-4acf-8dea-d9cc69a8b982) passed for the exact functional commit. Subsequent documentation-only commits have their own checks. Production authentication/CORS, deployed browser behavior and real Cron remain unverified because the production URL and suitable credentials are unavailable. P11 search and KV indexes are delivered; P12 security and release acceptance is the current phase.
+- **当前版本**：`v3.2.0`（具体以 `package.json` 和部署版本为准）。
+- **项目方向**：个人自托管、中文界面、Cloudflare 原生、API 优先。
+- **历史来源**：项目最初源于 Remy Sharp 的 JSONBin；旧实现保留于 [`legacy-v2.6.4` 分支](https://github.com/lwhx/jsonbin/tree/legacy-v2.6.4)。当前 `main` 为基于 Cloudflare 的重构版本。
 
-For development on another computer, use the remote main branch and follow [the development handoff](docs/DEVELOPMENT.md#11-在另一台电脑接续开发), [P12 design](docs/superpowers/specs/2026-10-04-p12-release-design.md) and [operations guide](docs/OPERATIONS.md).
+欢迎通过 [Issues](https://github.com/lwhx/jsonbin/issues) 反馈问题或建议。使用时请自行评估 Cloudflare 配额、备份策略与 API Key 权限。
