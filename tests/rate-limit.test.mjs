@@ -354,25 +354,85 @@ test('SEC-002 rate-limits private and missing anonymous Bin/Slug probes BEFORE R
   }), h.env)).status, 200, 'Bearer uses its separate per-Key rate limit');
 });
 
-// An identity's table and internal metadata must not live forever after its
-// single sixty-second rate window. The alarm later invokes deleteAll().
-test('SEC-002 schedules idle SQLite cleanup without resetting live quotas', async t => {
-  const h = await harness(t);
-  const identity = 'ttl-' + crypto.randomUUID();
-  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(identity));
-  const consume = () => stub.fetch('https://rate-limit.internal/consume', {
+// The real SQLite concurrency/quota path is exercised by Miniflare tests.
+// Alarm lifecycle is tested with a deterministic DurableObjectState fake,
+// because this Miniflare version does not export getDurableObjectStorage().
+test('SEC-002 idle DO alarm safely delays active cleanup and reclaims stale SQLite state', async () => {
+  const { ApiRateLimiter } = await import('../dist/jsonbin/index.js');
+  assert.equal(typeof ApiRateLimiter, 'function');
+
+  let tableExists = false;
+  let tableCreations = 0;
+  let windowId = -1;
+  let used = 0;
+  let alarmTime = null;
+  let deleteCount = 0;
+  const cursor = rows => ({ toArray: () => rows });
+  const storage = {
+    sql: {
+      exec(sql, ...args) {
+        if (sql.startsWith('CREATE TABLE')) {
+          tableExists = true;
+          tableCreations++;
+          return cursor([]);
+        }
+        if (sql.includes('INSERT INTO minute_quota')) {
+          assert.equal(tableExists, true);
+          const [nextWindow, limit] = args;
+          if (windowId !== nextWindow) { windowId = nextWindow; used = 0; }
+          if (used < limit) { used++; return cursor([{ used }]); }
+          return cursor([]);
+        }
+        if (sql.includes('SELECT window_id')) {
+          return cursor(tableExists && used > 0 ? [{ window_id: windowId }] : []);
+        }
+        throw Error('Unexpected SQL in mock: ' + sql);
+      },
+    },
+    getAlarm: async () => alarmTime,
+    setAlarm: async timestamp => { alarmTime = timestamp; },
+    deleteAll: async () => {
+      tableExists = false;
+      used = 0;
+      windowId = -1;
+      alarmTime = null;
+      deleteCount++;
+    },
+  };
+  let serializedAlarms = 0;
+  const state = {
+    storage,
+    async blockConcurrencyWhile(task) {
+      serializedAlarms++;
+      return task();
+    },
+  };
+  const limiter = new ApiRateLimiter(state, {});
+  const consume = async () => (await limiter.fetch(new Request('https://rate-limit.internal/consume', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ limit: 1 }),
-  });
-  const accepted = await (await consume()).json();
-  assert.equal(accepted.allowed, true);
-  const storage = await h.getLimiterStorage(identity);
-  const alarm = await storage.getAlarm();
-  const remaining = alarm - Date.now();
-  assert.ok(remaining > 30_000 && remaining <= 120_000,
-    'one bounded idle cleanup alarm is scheduled for the identity');
-  const denied = await (await consume()).json();
-  assert.equal(denied.allowed, false);
-  assert.equal(await storage.getAlarm(), alarm,
-    'a second request must not rewrite the cleanup alarm or reset the quota');
+  }))).json();
+
+  assert.equal((await consume()).allowed, true);
+  const firstAlarm = alarmTime;
+  assert.ok(firstAlarm > Date.now() + 30_000 && firstAlarm <= Date.now() + 120_000);
+  assert.equal((await consume()).allowed, false);
+  assert.equal(alarmTime, firstAlarm, 'rate-limited requests do not rewrite the alarm');
+
+  await limiter.alarm();
+  assert.equal(serializedAlarms, 1);
+  assert.equal(deleteCount, 0, 'current-window quota is not cleared by an alarm');
+  assert.ok(alarmTime > firstAlarm, 'recent activity reschedules a cleanup alarm');
+  assert.equal((await consume()).allowed, false, 'active quota remains authoritative');
+
+  // Simulate a persisted counter from an identity not used in five minutes.
+  windowId = Math.floor(Date.now() / 60_000) - 5;
+  await limiter.alarm();
+  assert.equal(serializedAlarms, 2);
+  assert.equal(deleteCount, 1, 'idle cleanup calls deleteAll to reclaim DB metadata');
+  assert.equal(alarmTime, null);
+  assert.equal(tableExists, false);
+  assert.equal((await consume()).allowed, true, 'new traffic recreates a fresh table after cleanup');
+  assert.equal(tableCreations, 2);
+  assert.ok(alarmTime > Date.now(), 'new table schedules the next idle cleanup alarm');
 });
