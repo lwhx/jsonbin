@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createSystemHarness } from './support/system-harness.mjs';
 
 async function harness(t) {
@@ -55,6 +56,8 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   const h = await harness(t);
   const bin = await (await h.request('/bins', { method: 'POST', value: { name: '公开仓', visibility: 'public', value: { open: true } } })).json();
   const ip = '203.0.113.77';
+  const anonScope = address => 'a:' + createHmac('sha256', h.env.SESSION_SECRET)
+    .update('public-rate/v1\\0' + address).digest('base64url');
   // Never seed against a window that is about to roll over.
   const msIntoWindow = Date.now() % 60000;
   if (msIntoWindow > 58000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
@@ -65,7 +68,7 @@ test('anonymous public reads are limited per IP and the window resets', async t 
 
   // Seed the IP's current window at the limit instead of spending 240
   // wall-clock requests: the verdict is deterministic even under CI load.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
+  await h.env.CACHE.put(`rl:${anonScope(ip)}:${window}`, '240');
   const limited = await call();
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) >= 1);
@@ -74,14 +77,14 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   assert.equal((await call('198.51.100.21')).status, 200);
 
   // Only the ACTIVE window counts: a saturated previous window never limits.
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
-  await h.env.CACHE.put(`rl:a:${ip}:${window - 1}`, '240');
+  await h.env.CACHE.delete(`rl:${anonScope(ip)}:${window}`);
+  await h.env.CACHE.put(`rl:${anonScope(ip)}:${window - 1}`, '240');
   assert.equal((await call()).status, 200);
 
   // Counters are disposable KV state: deleting the active window restores access.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
+  await h.env.CACHE.put(`rl:${anonScope(ip)}:${window}`, '240');
   assert.equal((await call()).status, 429);
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
+  await h.env.CACHE.delete(`rl:${anonScope(ip)}:${window}`);
   assert.equal((await call()).status, 200);
 });
 
