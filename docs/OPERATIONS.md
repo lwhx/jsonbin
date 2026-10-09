@@ -33,6 +33,21 @@ API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API �
 
 当前账号的 Cloudflare Build 私有日志/Build 设置未由仓库代码直接访问；仅有 GitHub PR 中的 Failed 状态，不应将预览构建失败归因于某一个未经核实的错误。Cloudflare 官方说明旧 `wrangler versions upload` 不支持 Durable Object 类生命周期变更，Worker Previews 需 Wrangler >=4.135.0；本项目锁定 4.147.0。请以 Workers Builds 的 Preview Build **完整错误日志**确认失败原因，避免未经确认调整生产部署命令。
 
+### 只读检查 Cloudflare 构建失败原因
+
+GitHub PR 只展示 \`Workers Builds: jsonbin\` 的失败结果，不包含 Cloudflare 账户内的原始构建日志。使用仓库脚本检索对应构建的错误摘要；它只执行 Cloudflare API 的 \`GET\`，不会触发部署、重试、修改 R2/KV/DO 或切换预览模式。
+
+1. 在 Cloudflare 创建仅具备 **Workers CI Read** 权限的临时 API Token，并在运行终端的环境变量 \`CLOUDFLARE_API_TOKEN\` 中设置。不要在命令行参数、仓库、截图或聊天中直接传递 Token。
+2. 从 GitHub PR 的 Workers Builds 检查结果打开 Cloudflare 构建详情，复制浏览器的 Build URL。例如：
+   \`\`\`bash
+   node scripts/inspect-cloudflare-build.mjs --url "https://dash.cloudflare.com/<account>/workers/services/view/jsonbin/production/builds/<build-uuid>"
+   \`\`\`
+   如果只有 Build UUID，可以设置 \`CLOUDFLARE_ACCOUNT_ID\` 后使用 \`--build <build-uuid>\`。
+3. 脚本读取构建元信息和分页日志，默认仅显示错误或部署相关行；\`--all\` 可读取最近 100 行，\`--json\` 便于复制结构化诊断结果。脚本会尽力遮蔽常见凭据，但**分享日志前仍必须人工检查**是否包含 URL 参数、Token 或其它敏感信息。
+4. 核对实际 \`deploy_command\`、错误码及失败所在阶段。如果仍为旧版 \`wrangler versions upload\`，先评估账户级不可逆的 Worker Previews 切换；不要在未确认配置与资源隔离时将 PR 分支命令改为 \`wrangler deploy\`。
+
+Cloudflare 官方只读日志接口：\`GET /accounts/{account_id}/builds/builds/{build_uuid}/logs\`。本脚本不会保存 API Token 或日志到磁盘，也不以构建失败状态作为调用失败。
+ 
 ## 日常业务备份
 
 1. 管理 Session 登录设置页，导出全部业务备份；也可 `GET /api/v1/system/export?scope=all&format=backup`。ZIP 仅由浏览器包装，包含 manifest.json/backup.json、SHA-256 和 CRC32。
