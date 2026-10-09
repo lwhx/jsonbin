@@ -78,6 +78,12 @@ Permanent deletion claims a non-restorable `purging` state with CAS, deletes all
 
 TTL enforcement happens at request time, independently of cron or caches. A scheduled handler runs every 15 minutes in UTC to archive expired Bins (including locked ones) and resume purges. It rechecks canonical state and conditionally updates metadata, preserving concurrent deadline changes. Terminal cleanup also removes late orphan files after interrupted in-flight writes. The current scan uses R2 directly; future indexes may optimize discovery but cannot replace authoritative access checks.
 
+### Rate-limit enforcement (SEC-002)
+
+Bearer default-key (120/min) and anonymous public-read (240/min) limits use dedicated Cloudflare Workers Rate Limiting bindings, each scoped to a stable key ID / HMAC of source IP. They are fast and do not incur per-request KV writes, but their per-location cached counters are approximate, not globally strict.
+
+Custom per-Key numeric limits other than default use `auth/key-rate/<key-id>.json` as one R2 CAS fixed-minute counter per key. This is the authoritative (globally consistent) quota with R2 GET+conditional PUT on each accepted custom-Key request. `null` is unlimited. KV's 1-write-per-second-per-key and eventual consistency make it unsuitable for strict quotas; if a native binding is unavailable in a local/test runtime, a backwards-compatible KV limiter is best effort and fails closed when reads/writes error. Counters are not billable usage stats and do not affect Session or GitHub OAuth.
+
 ### KV: disposable edge cache and indexes
 
 P11 implements disposable `idx:bin:<id>`, `idx:collection:<id>`, `idx:schema:<id>` metadata rows, `idx:slug:<slug>` collection lookup, and immutable `search:snapshot:<generation>` summaries (24-hour TTL). Resource writes, detach, restore, import, deletion and scheduled expiry maintain rows; KV failures do not roll back business writes.
