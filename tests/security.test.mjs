@@ -37,9 +37,13 @@ test('signed sessions validate identity, provider and finite integer expiry', as
 
 test('sessions expire at the boundary and rotation invalidates previously issued sessions', async () => {
   const now = Date.now;
-  Date.now = () => 2_000_000_000_000;
+  // Legacy-cookie acceptance intentionally ends after a 14-day migration.
+  // Exercise expiry boundaries inside that window, not in year 2033.
+  const base = Date.UTC(2026, 9, 10, 12, 0, 0);
+  const seconds = Math.floor(base / 1000);
+  Date.now = () => base;
   try {
-    for (const [exp, status] of [[2_000_000_000, 401], [1_999_999_999, 401], [2_000_000_001, 200]]) {
+    for (const [exp, status] of [[seconds, 401], [seconds - 1, 401], [seconds + 1, 200]]) {
       assert.equal((await h.request('/auth/me', { headers: { Cookie: signedCookie({ ...validPayload(), exp }) } })).status, status);
     }
   } finally { Date.now = now; }
