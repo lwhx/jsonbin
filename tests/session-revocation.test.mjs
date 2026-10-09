@@ -144,3 +144,18 @@ test('fixed 14-day Cookie survives simulated day 7/day 13 and expires at day 14;
     assert.equal((await me(h, cookie)).status, 401);
   } finally { Date.now = clock; }
 });
+
+
+test('legacy signed-session boundary accepts plus-one-second expiry during migration', async t => {
+  const h = await setup(t);
+  const original = Date.now;
+  const timestamp = Date.UTC(2026, 9, 10, 12, 0, 0);
+  Date.now = () => timestamp;
+  try {
+    const second = Math.floor(timestamp / 1000);
+    const invalid = await me(h, legacyCookie(h, second));
+    assert.equal(invalid.status, 401);
+    const valid = await me(h, legacyCookie(h, second + 1));
+    assert.equal(valid.status, 200, 'pre-upgrade HMAC session should survive within original expiration');
+  } finally { Date.now = original; }
+});
