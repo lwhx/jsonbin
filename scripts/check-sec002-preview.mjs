@@ -58,6 +58,7 @@ export async function runPreviewSmoke({
     add('Worker identity and version', health?.ok === true && health?.service === 'jsonbin' &&
         health?.version === expectedVersion);
     add('Preview isolated R2 bound', health?.storage?.r2 === true);
+    add('Preview limiter binding present', health?.rateLimiterConfigured === true);
     add('No production KV on Preview', health?.storage?.kv === false,
         'Preview intentionally has no KV binding');
     add('No-store response', healthResponse.headers.get('cache-control') === 'no-store');

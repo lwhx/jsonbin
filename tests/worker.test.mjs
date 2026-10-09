@@ -45,6 +45,7 @@ test('health reports package version and local storage bindings', async () => {
   const pkg = JSON.parse(await readFile('package.json', 'utf8'));
   assert.equal(health.version, pkg.version);
   assert.deepEqual(health.storage, { r2: true, kv: true });
+  assert.equal(health.rateLimiterConfigured, true);
 });
 test('unauthenticated requests are rejected', async () => {
   assert.equal((await request('/bins', { authenticated: false })).status, 401);

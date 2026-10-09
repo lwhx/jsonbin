@@ -145,6 +145,9 @@ app.get("/api/v1/system/health", (c) => {
       r2: Boolean(c.env.DATA),
       kv: Boolean(c.env.CACHE),
     },
+    // Binding-presence signal, not proof the Durable Object RPC/SQLite works.
+    // The release gate must still exercise a real Key and 429 in production.
+    rateLimiterConfigured: Boolean(c.env.RATE_LIMITER),
     timestamp: new Date().toISOString(),
   });
 });

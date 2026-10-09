@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { runPreviewSmoke, previewOrigin, SEC002_PREVIEW_ORIGIN } from '../scripts/check-sec002-preview.mjs';
 
 const requestId = 'f550edb6-75ee-4cbb-98d7-2fb6ed87d450';
-function mockService({ kv = false, passwordEnabled = false, denyCORS = false } = {}) {
+function mockService({ kv = false, passwordEnabled = false, denyCORS = false, limiterBound = true } = {}) {
   const requests = [];
   const transport = async (url, init) => {
     const u = new URL(url);
@@ -28,7 +28,7 @@ function mockService({ kv = false, passwordEnabled = false, denyCORS = false } =
     }
     if (u.pathname === '/api/v1/system/health') {
       return Response.json({ ok: true, service: 'jsonbin', version: '3.2.0',
-        storage: { r2: true, kv } }, { headers });
+        storage: { r2: true, kv }, rateLimiterConfigured: limiterBound }, { headers });
     }
     if (u.pathname === '/api/v1/auth/config') {
       return Response.json({ passwordEnabled, githubEnabled: false }, { headers });
@@ -61,7 +61,10 @@ test('SEC-002 preview smoke is non-mutating and checks isolated bindings, auth a
   assert.ok(requests.some(x => x.headers.Authorization === 'Bearer invalid-sec002-smoke-token'));
 });
 
-test('SEC-002 preview smoke fails on unsafe inherited production KV or bad CORS', async () => {
+test('SEC-002 preview smoke fails on an absent limiter, unsafe inherited production KV or bad CORS', async () => {
+  const missingLimiter = await runPreviewSmoke({ fetchImpl: mockService({ limiterBound: false }).transport });
+  assert.equal(missingLimiter.ok, false);
+  assert.ok(missingLimiter.checks.some(x => x.name === 'Preview limiter binding present' && !x.passed));
   const kv = await runPreviewSmoke({ fetchImpl: mockService({ kv: true }).transport });
   assert.equal(kv.ok, false);
   assert.ok(kv.checks.some(x => x.name === 'No production KV on Preview' && !x.passed));
