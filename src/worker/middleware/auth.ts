@@ -1,6 +1,6 @@
 import "../activity";
 import { authorizeApiKey, readApiKey, type ApiKey, type ApiScope } from "../storage/keys";
-import { DEFAULT_KEY_RATE_LIMIT, checkRateLimit, rateLimitResponse } from "../storage/rate-limit";
+import { DEFAULT_KEY_RATE_LIMIT, limitKeyRequest } from "../storage/rate-limit";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
 import { allowedRequestOrigin } from "../auth/origin";
@@ -50,12 +50,12 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
       return c.json({ error: "unauthorized" }, 401);
     }
     c.set("apiKeyId" as any, current.key.id);
-    // Best-effort per-key rate limit; unlimited only via an explicit null override.
-    // ?? would swallow that null into the default (F16): only an absent setting falls back.
+    // Strict per-key limit.  A deliberate null remains unlimited; outages
+    // are 503 rather than silently bypassing the security control.
     const limit = current.key.rateLimitPerMinute === undefined ? DEFAULT_KEY_RATE_LIMIT : current.key.rateLimitPerMinute;
-    if (limit !== null && c.env.CACHE) {
-      const verdict = await checkRateLimit(c.env.CACHE, `k:${current.key.id}`, limit).catch(() => null);
-      if (verdict && !verdict.allowed) return rateLimitResponse(verdict.retryAfterSeconds);
+    if (limit !== null) {
+      const limited = await limitKeyRequest(c.env, current.key.id, limit);
+      if (limited) return limited;
     }
     c.set("apiKey", current.key);
     c.set("activityIdentity", { actor: { type: "api_key", id: current.key.id }, provider: "api_key" });

@@ -10,6 +10,71 @@ APP_ORIGIN 默认可省略，浏览器仅允许请求站点自身。显式值必
 
 API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API 来自 Worker；Monaco 的 inline style/self/blob worker 是 CSP 的已验证需求，脚本不允许 unsafe-eval。应用异常日志仅有固定事件、请求 ID 和方法。不要把密码、Token、Cookie、OAuth code/state 或用户 JSON 放入 URL、命令行、共享日志。平台级访问日志可能记录 URL，另行设置可访问人员和保留时间；排查通过响应 `X-Request-ID` 关联应用日志。
 
+## SEC-002 限流发布与回滚
+
+此版本把 API Key 和公开 Bin 匿名读取的安全限流从非原子的 CACHE KV 迁移到 SQLite-backed Durable Object。保持 R2 Key 元数据、Scope、资源权限、过期/撤销、Token 以及现有 Key 自定义 `rateLimitPerMinute` 不变。发布不修改任何业务 Bin 或 Key 数据。
+
+- 部署前先核对 `wrangler.jsonc` 的 `RATE_LIMITER` binding 和 `exports.ApiRateLimiter`（`storage: sqlite`）；新的 class 会在首次发布时自动建立命名空间。不要使用 KV-backed DO。检查 Cloudflare 账户对 Durable Objects 的请求、运行时间与 SQLite rows written 配额；每个受限请求新增一次 DO RPC/最多一次 SQL 行写入。
+- 在完全隔离的测试 Worker + R2 + KV 中运行 `npm ci`、`npm run typecheck`、`npm test`、`npm run test:browser`、`npx wrangler deploy --dry-run`。本地 Miniflare 使用 `useSQLite: true`，真实 Cloudflare 边缘会写入 `CF-Connecting-IP`；模拟调用时需显式提供合法测试 IP。
+- 在灰度环境验证：同 Key 第 N 次成功、N+1 次 429、`Retry-After`；两个 Key 不共享计数；不同匿名 IP 不共享计数；无效/撤销/Scope 不足的 Bearer 不能退回匿名；public→private 立即拒绝新匿名请求；有效 Session 读取不占匿名桶；DO binding 故障显式 503。执行少量并发请求确认没有超配额通过。
+- 发布前先检查 `GET /api/v1/system/health` 的 `rateLimiterConfigured:true`，并通过 `/api/v1/auth/config` 确认至少启用了密码或 GitHub OAuth 一种管理员登录方式。生产检查脚本 `scripts/check-production.mjs` 已将二者列入必过项，防止漏配限流命名空间或丢失登录 Secret 后仍误认为可以上线。**`rateLimiterConfigured` 只表示绑定存在，不代表 DO RPC/SQLite 已实测成功**；要验证真实限流仍需受控 Key 请求的 429/Retry-After 和 503 告警检查。
+- 计数对象按 Key/IP 分配，因此新增了 SQLite DO Alarm 闲置清理：空闲超过两个完整分钟窗口后执行 `deleteAll()`，彻底释放计数对象的存储和内部元数据；活跃对象会安全延迟清理，不得在报警处理期间删除仍在使用的窗口计数。监控 DO Alarm 成功/失败、SQLite 存储总量和对象数量；清理故障不能静默增长。
+- 监控 Worker 的 429/503 占比、DO 请求/存储用量、P95 延迟与业务错误率；`503 rate_limit_unavailable` 需要修复 binding 或服务，**不能**靠删除限流调用来降级。公开读缺少 `CF-Connecting-IP` 返回 `503 anonymous_identity_unavailable`，应核对代理链和可信边缘来源。
+- **生命周期变更不能直接回滚旧 Worker 版本。** 首次通过 `exports.ApiRateLimiter` 创建 SQLite Durable Object 命名空间后，Cloudflare 不允许跨越这次生命周期变更执行平台版本回滚，也不能恢复旧版 `migrations` 配置。出现严重故障应**向前部署补救版本**：保留同名 `ApiRateLimiter` 类导出、`exports.ApiRateLimiter` 与 `RATE_LIMITER` 绑定，恢复上一版已经验证的其他业务路由逻辑，重新构建并执行 `wrangler deploy`；不要删除 R2、Key、DO 命名空间，也不能只把 Git HEAD reset 到引入 DO 前再直接部署。若临时改回 KV best-effort 计数，必须显式记录安全性下降并启用 Cloudflare WAF 兜底，绝不能默认关闭限流；API Key 的 Token、Scope 和用量保持原状。
+- Durable Object 限流针对应用级请求额度，不替代 Cloudflare WAF、DDoS 防御或账户登录独立 R2 封禁。对全站公开健康/API 文档接口、异常高频探测和大量随机 Bin ID 请求，应另外在 Cloudflare Security 配置并验收 per-IP 规则；不要把内部 HMAC 身份标识与日志关联泄露。
+
+### SEC-002：隔离 Preview 准备（只操作非生产资源）
+
+仓库已设置 `previews.durable_objects.bindings.RATE_LIMITER`，Worker Previews 为每个 Preview 自动分配独立的 DO namespace。预览读取 `previews.r2_buckets.DATA` 指向 **`jsonbin-sec002-preview-data`**，与生产 `jsonbin-data` 不同；本批 Preview 为避免未知 KV ID 误绑生产，暂不配置 `CACHE`（索引/近似统计可能不可用，完整 KV 功能须另建 Preview 专用命名空间再加绑定）。生产配置、Cron 和部署分支均不变。
+
+1. **在 Cloudflare R2 新建空桶** `jsonbin-sec002-preview-data`（仅测试数据）。可运行 `npx wrangler r2 bucket create jsonbin-sec002-preview-data`；不得将 `previews.DATA` 改为生产桶，也不要复制生产数据到 Preview。
+2. 在 Cloudflare Workers → `jsonbin` → Settings → Builds 查看当前分支预览模式。既有项目如仍使用旧 Preview 模式，在 **Set up Worker Previews** 向导中明确核对并执行一次性切换（**不可逆**）。新的 Preview command 必须是 `npx wrangler preview`，**禁止**填 `npx wrangler deploy`，否则可能发布到生产。生产分支仍为 `main`。
+3. 预览不继承生产 secrets。**当前 SEC-002 Preview 已存在**：需分别运行 `npx wrangler preview secret put ADMIN_PASSWORD --name security-sec-002-api-key-public-rate-limits` 和 `npx wrangler preview secret put SESSION_SECRET --name security-sec-002-api-key-public-rate-limits`，交互输入两个新的预览专用值，至少 32 字符，切勿复用生产。`preview base-config secret put` **只会影响之后新建的 Preview，不能给已经存在的 SEC-002 Preview 补 Secret**。用户名由 `previews.vars.ADMIN_USERNAME` 设置为 `preview-admin`，不必配置 GitHub OAuth。
+4. 重新运行 Preview Build，核查 PR 返回的真实 Preview URL，记录 DO 和 R2 binding。先创建公开/私有测试 Bin、测试 API Key，再实际验证第 N+1 次 429、`Retry-After`、撤销/过期、public→private、503 故障处理。不得用真实 API Key 或生产 Bin 作为测试对象。
+5. 若要进一步验证 KV 搜索与用量统计，单独创建非生产 KV 命名空间后，将**其真实 ID**填到 `previews.kv_namespaces` 的 `CACHE` 项；切勿直接复制顶层生产 `CACHE.id`。测试结束删除专用 Preview 以及测试桶/命名空间之前核对资源归属，切勿误删生产资源。
+
+SEC-002 的 Preview 构建已于 2026-10-09 在独立测试 R2 桶创建后**成功**：Wrangler 4.147.0 通过 `npx wrangler preview` 发布；Cloudflare 记录为 Success。GitHub Actions 的只读实站测试确认 HTTP 健康状态、预览 R2/无生产 KV、401 鉴权与 CORS。已确认 `GET /api/v1/auth/config` 的 `passwordEnabled:false`，因此**有凭据测试尚未完成**，下一步先单独配置该 Preview 的 Secret。
+
+### 只读检查 Cloudflare 构建失败原因
+
+GitHub PR 只展示 `Workers Builds: jsonbin` 的失败结果，不包含 Cloudflare 账户内的原始构建日志。使用仓库脚本检索对应构建的错误摘要；它只执行 Cloudflare API 的 `GET`，不会触发部署、重试、修改 R2/KV/DO 或切换预览模式。
+
+1. 在 Cloudflare 创建仅具备 **Workers CI Read** 权限的临时 API Token，并在运行终端的环境变量 `CLOUDFLARE_API_TOKEN` 中设置。不要在命令行参数、仓库、截图或聊天中直接传递 Token。
+2. 从 GitHub PR 的 Workers Builds 检查结果打开 Cloudflare 构建详情，复制浏览器的 Build URL。例如：
+   ```bash
+   node scripts/inspect-cloudflare-build.mjs --url "https://dash.cloudflare.com/<account>/workers/services/view/jsonbin/production/builds/<build-uuid>"
+   ```
+   如果只有 Build UUID，可以设置 `CLOUDFLARE_ACCOUNT_ID` 后使用 `--build <build-uuid>`。
+3. 脚本读取构建元信息和分页日志，默认仅显示错误或部署相关行；`--all` 可读取最近 100 行，`--json` 便于复制结构化诊断结果。脚本会尽力遮蔽常见凭据，但**分享日志前仍必须人工检查**是否包含 URL 参数、Token 或其它敏感信息。
+4. 核对实际 `deploy_command`、错误码及失败所在阶段。如果仍为旧版 `wrangler versions upload`，先评估账户级不可逆的 Worker Previews 切换；不要在未确认配置与资源隔离时将 PR 分支命令改为 `wrangler deploy`。
+
+Cloudflare 官方只读日志接口：`GET /accounts/{account_id}/builds/builds/{build_uuid}/logs`。本脚本不会保存 API Token 或日志到磁盘，也不以构建失败状态作为调用失败。
+
+### SEC-002 有凭据 Preview 验收
+
+自动化只读测试（GitHub Actions 的 `SEC-002 Preview Runtime Smoke`）已经通过，证明测试 R2/公开路由/跨域规则可用，但这**不等于**真实 API Key 和 429 限流验收通过。
+
+1. 在本项目 Git 分支 `security/sec-002-api-key-public-rate-limits` 所在目录执行下面两条命令，分别输入与生产完全不同的 Preview Secret（`SESSION_SECRET` 至少 32 字符）。**必须使用单个 Preview 的命令，不要只修改 Base Secret**：
+
+```bash
+npx wrangler preview secret put ADMIN_PASSWORD --name security-sec-002-api-key-public-rate-limits
+npx wrangler preview secret put SESSION_SECRET --name security-sec-002-api-key-public-rate-limits
+```
+
+2. 在 Preview URL 打开 `/api/v1/auth/config`，确认 `passwordEnabled:true`。用户名是 `preview-admin`。不要在 PR、聊天、截图或命令参数中泄露密码。若有新部署，等其完成。
+3. 在本地运行仓库的**可选有凭据验收脚本**：它只接受 SEC-002 Preview 固定域名，要求显式 `--execute` 才会创建临时 Bin/Key；验证公开/私有读、资源作用域、3/min 配额的第 4 次请求返回 429、`Retry-After`、不限流 `null`、撤销、公开转私有；退出时按本次创建的 UUID 尝试清理测试数据。
+
+```powershell
+$secret = Read-Host '输入预览专用 ADMIN_PASSWORD' -AsSecureString
+$env:SEC002_PREVIEW_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+node scripts/check-sec002-preview-auth.mjs --execute
+Remove-Item Env:SEC002_PREVIEW_ADMIN_PASSWORD
+```
+
+4. 验证清理警告并检查 `jsonbin-sec002-preview-data` 对应 Preview 的回收站；出现中断或错误时只清理 `SEC002-` 前缀的本轮测试资源，不清理生产数据。此脚本不验证 240/min 大流量的匿名限流边界；该边界由 Miniflare 原子并发测试覆盖，必要时另在专用测试流量配额下实测。
+
+**上线门槛：** GitHub CI + Cloudflare Preview 部署 + 只读实测已通过；有凭据真实 E2E、发布回滚演练和生产发布审批仍待完成。保持 PR Draft，严禁直接把测试配置部署到 `main`。
+
 ## 日常业务备份
 
 1. 管理 Session 登录设置页，导出全部业务备份；也可 `GET /api/v1/system/export?scope=all&format=backup`。ZIP 仅由浏览器包装，包含 manifest.json/backup.json、SHA-256 和 CRC32。

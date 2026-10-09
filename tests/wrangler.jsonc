@@ -5,12 +5,34 @@
   "compatibility_date": "2026-10-03",
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "kv_namespaces": [
-    { "binding": "CACHE", "id": "00000000000000000000000000000000" }
+    {
+      "binding": "CACHE",
+      "id": "00000000000000000000000000000000"
+    }
   ],
   "r2_buckets": [
-    { "binding": "DATA", "bucket_name": "jsonbin-browser-test" }
-  ]
+    {
+      "binding": "DATA",
+      "bucket_name": "jsonbin-browser-test"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER",
+        "class_name": "ApiRateLimiter"
+      }
+    ]
+  },
+  "exports": {
+    "ApiRateLimiter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
 }

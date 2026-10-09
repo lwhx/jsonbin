@@ -44,7 +44,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
-    "wrangler": "^4.129.1"
+    "wrangler": "^4.147.0"
   },
   "bin": {
     "jsonbin": "cli/jsonbin.mjs"

@@ -12,6 +12,7 @@ export async function request(path, { method = 'GET', value, etag, authenticated
     method,
     headers: {
       'Content-Type': contentType,
+      'CF-Connecting-IP': '203.0.113.28',
       ...(authenticated && cookie ? { Cookie: cookie } : {}),
       ...(etag ? { 'If-Match': etag } : {}),
       ...(authorization !== undefined ? { Authorization: authorization } : {}),
@@ -29,7 +30,7 @@ async function create(value = { hello: 'world' }) {
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
     name: 'jsonbin-tests', modules: true, scriptPath: 'dist/jsonbin/index.js',
-    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
+    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } },
     bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret },
   }] }));
   bucket = await mf.getR2Bucket('DATA', 'jsonbin-tests');
@@ -44,6 +45,7 @@ test('health reports package version and local storage bindings', async () => {
   const pkg = JSON.parse(await readFile('package.json', 'utf8'));
   assert.equal(health.version, pkg.version);
   assert.deepEqual(health.storage, { r2: true, kv: true });
+  assert.equal(health.rateLimiterConfigured, true);
 });
 test('unauthenticated requests are rejected', async () => {
   assert.equal((await request('/bins', { authenticated: false })).status, 401);
@@ -1394,7 +1396,10 @@ test('public authorization and response share a snapshot when visibility and JSO
       }
       return object;
     } };
-    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix), { DATA: data });
+    const limiter = await mf.getDurableObjectNamespace('RATE_LIMITER', 'jsonbin-tests');
+    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix, {
+      headers: { 'CF-Connecting-IP': '203.0.113.33' },
+    }), { DATA: data, SESSION_SECRET: sessionSecret, RATE_LIMITER: limiter });
     assert.equal(response.status, 200); assert.equal(changed, true);
     assert.deepEqual((await response.json()).value, suffix ? 'public' : { message: 'public' });
     assert.equal((await request(path + suffix, { authenticated: false })).status, 401);
@@ -2343,7 +2348,8 @@ test('fast 304 reads only canonical Bin metadata, not the immutable version body
     const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
   } });
   const cache = await mf.getKVNamespace('CACHE', 'jsonbin-tests');
-  const env = { DATA: data, CACHE: cache, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret };
+  const limiter = await mf.getDurableObjectNamespace('RATE_LIMITER', 'jsonbin-tests');
+  const env = { DATA: data, CACHE: cache, RATE_LIMITER: limiter, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret };
   const worker = (await import('../dist/jsonbin/index.js')).default;
   const url = 'http://localhost/api/v1/bins/' + bin.meta.id;
   const response = await worker.fetch(new Request(url, { headers: { Cookie: cookie, 'If-None-Match': published.etag } }), env);
@@ -2351,7 +2357,7 @@ test('fast 304 reads only canonical Bin metadata, not the immutable version body
   assert.equal(await response.text(), '');
   assert.ok(counts.meta >= 1, 'always check canonical metadata for current authorization/expiry');
   assert.equal(counts.versions, 0, 'unchanged Bin must not fetch the large JSON body');
-  const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag } }), env);
+  const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag, 'CF-Connecting-IP': '203.0.113.95' } }), env);
   assert.equal(rejected.status, 401, 'private Bin still requires a session even with a matching ETag');
 });
 

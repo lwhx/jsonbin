@@ -55,7 +55,7 @@ test("数据锁持久化、禁止编辑与删除，单独解锁后可继续保�
 
 test("公开设置开放匿名当前读取，切回私有立即收回，API 页提供局部更新说明", async ({ page, playwright }) => {
   const record = await create(page), path = `/api/v1/bins/${record.meta.id}`;
-  const anonymous = await playwright.request.newContext({ baseURL: "http://127.0.0.1:5174" });
+  const anonymous = await playwright.request.newContext({ baseURL: "http://127.0.0.1:5174", extraHTTPHeaders: { "CF-Connecting-IP": "203.0.113.34" } });
   try {
     expect((await anonymous.get(path)).status()).toBe(401);
     await page.getByRole("tab", { name: "设置", exact: true }).click();

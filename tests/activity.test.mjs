@@ -5,9 +5,9 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 let mf, bucket, app, env, cookie;
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{ name: 'activity-tests', modules: true,
-    scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'] }] }));
+    scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } } }] }));
   bucket = await mf.getR2Bucket('DATA', 'activity-tests'); app = (await import('../dist/jsonbin/index.js')).default;
-  env = { DATA: bucket, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: randomBytes(32).toString('hex'), SESSION_SECRET: randomBytes(32).toString('hex') };
+  env = { DATA: bucket, RATE_LIMITER: await mf.getDurableObjectNamespace('RATE_LIMITER', 'activity-tests'), ADMIN_USERNAME: 'test', ADMIN_PASSWORD: randomBytes(32).toString('hex'), SESSION_SECRET: randomBytes(32).toString('hex') };
   const login = await app.fetch(new Request('https://example.test/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'test', password: env.ADMIN_PASSWORD }) }), env);
   cookie = login.headers.get('set-cookie').split(';')[0];
 });

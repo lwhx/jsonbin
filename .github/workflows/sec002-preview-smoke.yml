@@ -1,0 +1,54 @@
+name: SEC-002 Preview Runtime Smoke
+
+on:
+  push:
+    branches:
+      - security/sec-002-api-key-public-rate-limits
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  preview-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wait for Cloudflare Preview deployment of this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failure_streak=0
+          for attempt in $(seq 1 45); do
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name == "Workers Builds: jsonbin")] | sort_by(.started_at) | last | if . == null then "pending" else (.status + "/" + (.conclusion // "pending")) end' 2>/dev/null)" || status="pending"
+            echo "Cloudflare Preview deployment: ${status}"
+            case "${status}" in
+              completed/success) exit 0 ;;
+              completed/failure|completed/cancelled|completed/skipped|completed/timed_out)
+                # Workers Builds can report a failed placeholder for ~30s
+                # before the actual build check starts on the same SHA.
+                # Confirm a terminal failure for >=90s before failing the
+                # smoke job; any queued/in-progress state resets the count.
+                failure_streak=$((failure_streak + 1))
+                if [ "${failure_streak}" -ge 9 ]; then exit 1; fi
+                ;;
+              *) failure_streak=0 ;;
+            esac
+            sleep 10
+          done
+          echo "Cloudflare Preview deployment did not complete within the allowed window."
+          exit 1
+      - name: Verify non-mutating probe behavior
+        run: node --test tests/preview-runtime-smoke.test.mjs
+      - name: Probe isolated public runtime without secrets or writes
+        run: node scripts/check-sec002-preview.mjs

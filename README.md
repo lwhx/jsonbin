@@ -100,7 +100,10 @@ npx wrangler kv namespace create CACHE
 Then place the generated KV namespace ID in `wrangler.jsonc` and enable:
 
 - `DATA` -> R2 bucket
-- `CACHE` -> KV namespace
+- `CACHE` -> KV namespace (rebuildable caches / analytics only)
+- `RATE_LIMITER` -> SQLite-backed Durable Object `ApiRateLimiter` (provisioned by Wrangler's `exports` declaration at deploy time)
+
+SEC-002 uses an atomic per-client/per-API-key 60-second counter stored in the SQLite Durable Object, not KV. Bearer keys default to 120 requests/minute (customizable, or `null` to opt out); unauthenticated Bin ID and Slug reads (including private/missing probes) use a shared 240/minute quota per trusted Cloudflare IP, enforced before any R2 lookup. Missing limiter bindings, storage failures or missing edge IP cause an explicit `503` instead of unlimited access. Authenticated administrator Session reads are exempt from the anonymous quota, while explicit Bearer credentials are always checked before permitting public reads. This adds one Durable Object call per limited request and consumes plan-specific Durable Objects quotas; review [operations](docs/OPERATIONS.md#sec-002-%E9%99%90%E6%B5%81%E5%8F%91%E5%B8%83%E4%B8%8E%E5%9B%9E%E6%BB%9A) before enabling production traffic.
 
 Generate Worker types after bindings change:
 
@@ -110,7 +113,7 @@ npm run cf:types
 
 ## Build and deploy
 
-Cloudflare Workers Builds should use the `main` production branch.
+Cloudflare Workers Builds should use the `main` production branch. For SEC-002 branch previews, the repository config includes a separate test R2 bucket name (`jsonbin-sec002-preview-data`) and a Preview-local `RATE_LIMITER` binding. Create that empty test bucket and set **separate** Preview credentials before switching to Worker Previews (one-time, irreversible). Do not point Preview DATA or CACHE at production. See [SEC-002 Preview setup](docs/OPERATIONS.md#sec-002隔离-preview-准备只操作非生产资源).
 
 Build command:
 

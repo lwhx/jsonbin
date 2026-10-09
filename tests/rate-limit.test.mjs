@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createSystemHarness } from './support/system-harness.mjs';
 
 async function harness(t) {
@@ -55,34 +56,38 @@ test('anonymous public reads are limited per IP and the window resets', async t 
   const h = await harness(t);
   const bin = await (await h.request('/bins', { method: 'POST', value: { name: '公开仓', visibility: 'public', value: { open: true } } })).json();
   const ip = '203.0.113.77';
-  // Never seed against a window that is about to roll over.
+  // The old 240 sequential HTTP calls could straddle a natural minute
+  // boundary under CI contention, incorrectly treating a fresh window as
+  // a bypass. Seed the exact *same* DO identity quickly and finish with
+  // real API reads; leave at least 25s before the window rolls over.
   const msIntoWindow = Date.now() % 60000;
-  if (msIntoWindow > 58000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
-  const window = Math.floor(Date.now() / 60000);
+  if (msIntoWindow > 35000) await new Promise(r => setTimeout(r, 60000 - msIntoWindow + 50));
   const call = extraIp => h.worker.fetch(new Request(`https://example.test/api/v1/bins/${bin.meta.id}`, {
     headers: { 'CF-Connecting-IP': extraIp ?? ip },
   }), h.env);
 
-  // Seed the IP's current window at the limit instead of spending 240
-  // wall-clock requests: the verdict is deterministic even under CI load.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
+  const digest = createHmac('sha256', h.env.SESSION_SECRET)
+    .update(`jsonbin/public/ip/v1:${ip}`).digest('base64url');
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(`anon:${digest}`));
+  const seed = () => stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 240 }),
+  });
+  const reservations = await Promise.all(Array.from({ length: 239 }, seed));
+  assert.ok(reservations.every(response => response.status === 200));
+  assert.ok((await Promise.all(reservations.map(response => response.json())))
+    .every(verdict => verdict.allowed), 'the first 239 reservations fit the active window');
+  assert.equal((await call()).status, 200, 'the 240th request reaches the real HTTP route');
   const limited = await call();
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) >= 1);
-
-  // A different IP is a different bucket.
   assert.equal((await call('198.51.100.21')).status, 200);
+  const spoofed = await h.worker.fetch(new Request(`https://example.test/api/v1/bins/${bin.meta.id}`, {
+    headers: { 'CF-Connecting-IP': ip, 'X-Forwarded-For': '198.51.100.21' },
+  }), h.env);
+  assert.equal(spoofed.status, 429);
 
-  // Only the ACTIVE window counts: a saturated previous window never limits.
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
-  await h.env.CACHE.put(`rl:a:${ip}:${window - 1}`, '240');
-  assert.equal((await call()).status, 200);
-
-  // Counters are disposable KV state: deleting the active window restores access.
-  await h.env.CACHE.put(`rl:a:${ip}:${window}`, '240');
-  assert.equal((await call()).status, 429);
-  await h.env.CACHE.delete(`rl:a:${ip}:${window}`);
-  assert.equal((await call()).status, 200);
 });
 
 test('an explicit null key rate limit is honored as unlimited (F16)', async t => {
@@ -91,8 +96,7 @@ test('an explicit null key rate limit is honored as unlimited (F16)', async t =>
   assert.equal(key.key.rateLimitPerMinute, null);
   // Seed this minute's counter past the 120 default: an unlimited key sails
   // through, while a default-limited key would 429 on this very request.
-  const window = Math.floor(Date.now() / 60000);
-  await h.env.CACHE.put(`rl:k:${key.key.id}:${window}`, '200');
+  for (let i = 0; i < 121; i++) await h.worker.fetch(new Request('https://example.test/api/v1/bins', { headers: { Authorization: `Bearer ${key.token}` } }), h.env);
   const res = await h.worker.fetch(new Request('https://example.test/api/v1/bins', { headers: { Authorization: `Bearer ${key.token}` } }), h.env);
   assert.equal(res.status, 200, 'null must mean unlimited, not the 120 default');
 });
@@ -237,4 +241,198 @@ test('concurrent invalid logins use R2 CAS to enforce exactly three then six fai
   stored = await (await h.bucket.get(entry.key)).json();
   assert.equal(stored.failures, 6);
   assert.ok(stored.bannedUntil > Date.now());
+});
+
+test('SEC-002 denies missing trusted IP and limiter outages, but keeps valid sessions', async t => {
+  const h = await harness(t);
+  const bin = await (await h.request('/bins', { method: 'POST', value: { name: 'public security', visibility: 'public', value: { ok: true } } })).json();
+  const path = `https://example.test/api/v1/bins/${bin.meta.id}`;
+  const noIp = await h.worker.fetch(new Request(path), h.env);
+  assert.equal(noIp.status, 503);
+  assert.deepEqual(await noIp.json(), { error: 'anonymous_identity_unavailable' });
+  const noLimiter = { ...h.env, RATE_LIMITER: undefined };
+  assert.equal((await h.worker.fetch(new Request(path, { headers: { 'CF-Connecting-IP': '198.51.100.8' } }), noLimiter)).status, 503);
+  assert.equal((await h.request(`/bins/${bin.meta.id}`, {}, noLimiter)).status, 200);
+  const key = await (await h.request('/keys', { method: 'POST', value: { name: 'limited', scopes: ['bin:read'] } })).json();
+  const rejected = await h.worker.fetch(new Request(path, { headers: { Authorization: `Bearer ${key.token}` } }), noLimiter);
+  assert.equal(rejected.status, 503);
+  assert.deepEqual(await rejected.json(), { error: 'rate_limit_unavailable' });
+});
+
+
+test('SEC-002 SQLite Durable Object is exact across concurrent requests and dynamic limit changes', async t => {
+  const h = await harness(t);
+  const millis = Date.now() % 60000;
+  if (millis > 58000) await new Promise(r => setTimeout(r, 60000 - millis + 100));
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName('atomic-' + crypto.randomUUID()));
+  const consume = async limit => {
+    const response = await stub.fetch('https://rate-limit.internal/consume', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit }),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const verdicts = await Promise.all(Array.from({ length: 32 }, () => consume(5)));
+  assert.equal(verdicts.filter(result => result.allowed).length, 5, 'exactly five concurrent requests are accepted');
+  assert.equal(verdicts.filter(result => !result.allowed).length, 27);
+  for (let i = 0; i < 3; i++) assert.equal((await consume(8)).allowed, true, 'raising the limit allows only the additional capacity');
+  assert.equal((await consume(8)).allowed, false);
+  assert.equal((await consume(3)).allowed, false, 'lowering the limit cannot reset usage');
+  assert.deepEqual((await stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 0 }),
+  })).status, 400);
+});
+
+test('SEC-002 limiter remains authoritative during KV outages', async t => {
+  const h = await harness(t);
+  const created = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'KV independent', scopes: ['bin:read'], rateLimitPerMinute: 2,
+  } })).json();
+  const withoutKv = { ...h.env, CACHE: undefined };
+  const call = () => h.worker.fetch(new Request('https://example.test/api/v1/bins', {
+    headers: { Authorization: `Bearer ${created.token}` },
+  }), withoutKv);
+  assert.equal((await call()).status, 200);
+  assert.equal((await call()).status, 200);
+  const limited = await call();
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+});
+
+test('SEC-002 rate-limits private and missing anonymous Bin/Slug probes BEFORE R2', async t => {
+  const h = await harness(t);
+  const privateBin = await (await h.request('/bins', {
+    method: 'POST', value: { name: 'probe-private', visibility: 'private', value: { secret: true } },
+  })).json();
+  const ip = '198.51.100.194';
+
+  // Reserve 238 slots in this fixed window, then spend slots 239 and 240
+  // through private-ID and missing-slug paths. Earlier versions looked up
+  // both in R2 without charging the quota, allowing unbounded R2 probing.
+  const msIntoMinute = Date.now() % 60000;
+  if (msIntoMinute > 35000) await new Promise(resolve => setTimeout(resolve, 60000 - msIntoMinute + 50));
+  const digest = createHmac('sha256', h.env.SESSION_SECRET)
+    .update(`jsonbin/public/ip/v1:${ip}`).digest('base64url');
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(`anon:${digest}`));
+  const reserve = () => stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 240 }),
+  });
+  const reservations = await Promise.all(Array.from({ length: 238 }, reserve));
+  assert.ok(reservations.every(r => r.status === 200));
+  assert.ok((await Promise.all(reservations.map(r => r.json()))).every(v => v.allowed));
+  const anonymous = (path, env = h.env, headers = {}) => h.worker.fetch(
+    new Request('https://example.test/api/v1' + path, {
+      headers: { 'CF-Connecting-IP': ip, ...headers },
+    }), env,
+  );
+  assert.equal((await anonymous('/bins/' + privateBin.meta.id)).status, 401,
+    'private Bin probes count toward the shared anonymous bucket');
+  assert.equal((await anonymous('/b/no-such-slug-sec002')).status, 401,
+    'missing slug probes also count toward the same anonymous bucket');
+
+  // There is no R2 binding at all in this call. 429 must be returned before
+  // getBinMetadata/getBinBySlug attempts to touch authoritative storage.
+  const withoutR2 = { ...h.env, DATA: undefined };
+  const blockedId = await anonymous('/bins/' + privateBin.meta.id, withoutR2);
+  assert.equal(blockedId.status, 429);
+  assert.ok(Number(blockedId.headers.get('retry-after')) >= 1);
+  assert.equal((await anonymous('/b/no-such-slug-sec002', withoutR2)).status, 429);
+  assert.equal((await anonymous('/bins/' + privateBin.meta.id, h.env, { Cookie: 'jsonbin_session=invalid' })).status, 429,
+    'invalid Session cookies never exempt a client from the anonymous quota');
+
+  // Independently authenticated callers never consume this anonymous quota.
+  assert.equal((await h.request('/bins/' + privateBin.meta.id)).status, 200,
+    'valid Session remains exempt even after anonymous 429');
+  const key = await (await h.request('/keys', {
+    method: 'POST', value: { name: 'scoped-proof', scopes: ['bin:read'] },
+  })).json();
+  assert.equal((await h.worker.fetch(new Request('https://example.test/api/v1/bins/' + privateBin.meta.id, {
+    headers: { 'CF-Connecting-IP': ip, Authorization: 'Bearer ' + key.token },
+  }), h.env)).status, 200, 'Bearer uses its separate per-Key rate limit');
+});
+
+// The real SQLite concurrency/quota path is exercised by Miniflare tests.
+// Alarm lifecycle is tested with a deterministic DurableObjectState fake,
+// because this Miniflare version does not export getDurableObjectStorage().
+test('SEC-002 idle DO alarm safely delays active cleanup and reclaims stale SQLite state', async () => {
+  const { ApiRateLimiter } = await import('../dist/jsonbin/index.js');
+  assert.equal(typeof ApiRateLimiter, 'function');
+
+  let tableExists = false;
+  let tableCreations = 0;
+  let windowId = -1;
+  let used = 0;
+  let alarmTime = null;
+  let deleteCount = 0;
+  const cursor = rows => ({ toArray: () => rows });
+  const storage = {
+    sql: {
+      exec(sql, ...args) {
+        if (sql.startsWith('CREATE TABLE')) {
+          tableExists = true;
+          tableCreations++;
+          return cursor([]);
+        }
+        if (sql.includes('INSERT INTO minute_quota')) {
+          assert.equal(tableExists, true);
+          const [nextWindow, limit] = args;
+          if (windowId !== nextWindow) { windowId = nextWindow; used = 0; }
+          if (used < limit) { used++; return cursor([{ used }]); }
+          return cursor([]);
+        }
+        if (sql.includes('SELECT window_id')) {
+          return cursor(tableExists && used > 0 ? [{ window_id: windowId }] : []);
+        }
+        throw Error('Unexpected SQL in mock: ' + sql);
+      },
+    },
+    getAlarm: async () => alarmTime,
+    setAlarm: async timestamp => { alarmTime = timestamp; },
+    deleteAll: async () => {
+      tableExists = false;
+      used = 0;
+      windowId = -1;
+      alarmTime = null;
+      deleteCount++;
+    },
+  };
+  let serializedAlarms = 0;
+  const state = {
+    storage,
+    async blockConcurrencyWhile(task) {
+      serializedAlarms++;
+      return task();
+    },
+  };
+  const limiter = new ApiRateLimiter(state, {});
+  const consume = async () => (await limiter.fetch(new Request('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 1 }),
+  }))).json();
+
+  assert.equal((await consume()).allowed, true);
+  const firstAlarm = alarmTime;
+  assert.ok(firstAlarm > Date.now() + 30_000 && firstAlarm <= Date.now() + 120_000);
+  assert.equal((await consume()).allowed, false);
+  assert.equal(alarmTime, firstAlarm, 'rate-limited requests do not rewrite the alarm');
+
+  await limiter.alarm();
+  assert.equal(serializedAlarms, 1);
+  assert.equal(deleteCount, 0, 'current-window quota is not cleared by an alarm');
+  assert.ok(alarmTime > firstAlarm, 'recent activity reschedules a cleanup alarm');
+  assert.equal((await consume()).allowed, false, 'active quota remains authoritative');
+
+  // Simulate a persisted counter from an identity not used in five minutes.
+  windowId = Math.floor(Date.now() / 60_000) - 5;
+  await limiter.alarm();
+  assert.equal(serializedAlarms, 2);
+  assert.equal(deleteCount, 1, 'idle cleanup calls deleteAll to reclaim DB metadata');
+  assert.equal(alarmTime, null);
+  assert.equal(tableExists, false);
+  assert.equal((await consume()).allowed, true, 'new traffic recreates a fresh table after cleanup');
+  assert.equal(tableCreations, 2);
+  assert.ok(alarmTime > Date.now(), 'new table schedules the next idle cleanup alarm');
 });

@@ -21,7 +21,7 @@ const mf = new Miniflare(convertV4MiniflareOptions({
   cf: false,
   workers: [{
     name: 'jsonbin-bench', modules: true, scriptPath: 'dist/jsonbin/index.js',
-    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
+    compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'], durableObjects: { RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } },
     bindings: { ADMIN_USERNAME: 'bench', ADMIN_PASSWORD: PASSWORD, SESSION_SECRET },
   }],
 }));
@@ -49,6 +49,7 @@ const wrap = (target, counter) => new Proxy(target, {
 const env = {
   DATA: wrap(await mf.getR2Bucket('DATA', 'jsonbin-bench'), ops.r2),
   CACHE: wrap(await mf.getKVNamespace('CACHE', 'jsonbin-bench'), ops.kv),
+  RATE_LIMITER: await mf.getDurableObjectNamespace('RATE_LIMITER', 'jsonbin-bench'),
   ADMIN_USERNAME: 'bench', ADMIN_PASSWORD: PASSWORD, SESSION_SECRET,
 };
 
@@ -57,6 +58,7 @@ const ORIGIN = 'https://bench.test';
 let cookie = '';
 async function call0(path, init = {}) {
   const headers = new Headers(init.headers ?? {});
+  if (!headers.has('CF-Connecting-IP')) headers.set('CF-Connecting-IP', '203.0.113.31');
   if (cookie) headers.set('Cookie', cookie);
   if (init.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   return worker.fetch(new Request(ORIGIN + '/api/v1' + path, { ...init, headers }), env);

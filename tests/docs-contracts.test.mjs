@@ -9,9 +9,9 @@ import * as examples from '../src/react-app/features/docs/examples.ts';
 let mf, app, env, cookie, token, server, origin;
 const writeEtags = [];
 before(async () => {
-  mf = new Miniflare(convertV4MiniflareOptions({ cf:false, workers:[{name:'docs-tests',modules:true,scriptPath:'dist/jsonbin/index.js',compatibilityDate:'2026-10-03',r2Buckets:['DATA']}] }));
+  mf = new Miniflare(convertV4MiniflareOptions({ cf:false, workers:[{name:'docs-tests',modules:true,scriptPath:'dist/jsonbin/index.js',compatibilityDate:'2026-10-03',r2Buckets:['DATA'],durableObjects:{ RATE_LIMITER: { className: 'ApiRateLimiter', useSQLite: true } }}] }));
   app = (await import('../dist/jsonbin/index.js')).default;
-  env = { DATA:await mf.getR2Bucket('DATA','docs-tests'), ADMIN_USERNAME:'docs-test',ADMIN_PASSWORD:randomBytes(32).toString('hex'),SESSION_SECRET:randomBytes(32).toString('hex') };
+  env = { DATA:await mf.getR2Bucket('DATA','docs-tests'), RATE_LIMITER: await mf.getDurableObjectNamespace('RATE_LIMITER','docs-tests'), ADMIN_USERNAME:'docs-test',ADMIN_PASSWORD:randomBytes(32).toString('hex'),SESSION_SECRET:randomBytes(32).toString('hex') };
   const login = await app.fetch(new Request('https://example.test/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:env.ADMIN_USERNAME,password:env.ADMIN_PASSWORD})}),env);
   cookie = login.headers.get('set-cookie').split(';')[0];
   const key = await app.fetch(new Request('https://example.test/api/v1/keys',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({name:'all scopes',scopes:DOC_SCOPES})}),env);
@@ -20,7 +20,7 @@ before(async () => {
     try {
       let body='';for await(const chunk of req) body += chunk;
       if (['PUT','PATCH'].includes(req.method)) writeEtags.push(req.headers['if-match']);
-      const response = await app.fetch(new Request(origin+req.url,{method:req.method,headers:req.headers,...(body ? {body}: {})}),env);
+      const response = await app.fetch(new Request(origin+req.url,{method:req.method,headers:{ ...req.headers, 'CF-Connecting-IP': '203.0.113.26' },...(body ? {body}: {})}),env);
       res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());
     } catch { res.writeHead(500);res.end('{}'); }
   });
@@ -32,7 +32,7 @@ async function send(id,context={},body,headers={}) {
   const operation = body === undefined ? op(id) : {...op(id),body};
   const request = examples.buildRequest(operation,{origin,...context});
   const response = await app.fetch(new Request(request.url,{method:request.method,
-    headers:{...request.headers,...(request.credentials ? {Cookie:cookie}:request.headers.Authorization ? {Authorization:'Bearer '+token}:{}),...headers},
+    headers:{'CF-Connecting-IP': '203.0.113.27',...request.headers,...(request.credentials ? {Cookie:cookie}:request.headers.Authorization ? {Authorization:'Bearer '+token}:{}),...headers},
     ...(Object.hasOwn(request,'body') ? {body:JSON.stringify(request.body)}:{})}),env);
   return {response,data:await response.json()};
 }
