@@ -3,7 +3,7 @@ import { downloadBytes } from '../settings/download';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Copy, Save, Trash2, Braces, RefreshCw } from "lucide-react";
-import { BinApiError, getBin, removeBin, saveBin, saveBinMetadata, restoreBinVersion } from "./api";
+import { BinApiError, getBin, getBinIfChanged, removeBin, saveBin, saveBinMetadata, restoreBinVersion } from "./api";
 import { createDraft, isDirty, parseJson, receiveRecord, savedDraft } from "./editor-state";
 import type { Draft } from "./editor-state";
 import type { BinRecord, MetadataInput } from "./types";
@@ -40,7 +40,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
 }) {
   const client = useQueryClient();
   const confirm = useConfirm();
-  const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBin(id, undefined, signal), retry: false, refetchInterval: 15_000 });
+  const query = useQuery({ queryKey: ["bin", id], queryFn: ({ signal }) => getBinIfChanged(id, client.getQueryData<BinRecord>(["bin", id]), undefined, signal), retry: false, refetchInterval: 15_000 });
   const collections = useQuery({ queryKey: ["collections"], queryFn: ({ signal }) => listCollections(signal), retry: false });
   const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const mounted = useRef(false);

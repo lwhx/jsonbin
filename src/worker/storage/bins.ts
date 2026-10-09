@@ -289,10 +289,22 @@ export async function createBin(
   }
 }
 
-export async function getBin(env: Env, id: string): Promise<BinRecord | null> {
+/** Authoritative lightweight read: expiry/deletion checked before cache validation. */
+export async function getBinMetadata(env: Env, id: string) {
+  const meta = await getJson<StoredBinMeta>(requireDataBucket(env), metaKey(id));
+  return meta && isActiveBin(meta.value)
+    ? { value: meta.value, etag: meta.etag, uploaded: meta.uploaded }
+    : null;
+}
+
+export async function getBin(
+  env: Env,
+  id: string,
+  metadataSnapshot?: NonNullable<Awaited<ReturnType<typeof getBinMetadata>>>,
+): Promise<BinRecord | null> {
   const bucket = requireDataBucket(env);
-  const metaObject = await getJson<StoredBinMeta>(bucket, metaKey(id));
-  if (!metaObject || !isActiveBin(metaObject.value)) return null;
+  const metaObject = metadataSnapshot ?? await getBinMetadata(env, id);
+  if (!metaObject) return null;
 
   const valueObject = await getJson<unknown>(
     bucket,

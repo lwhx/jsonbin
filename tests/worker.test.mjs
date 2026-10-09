@@ -2323,3 +2323,28 @@ test('audit: template management rejects explicit Authorization like every other
   const real = await (await request('/keys', { method: 'POST', value: { name: 'f21-bearer', scopes: ['bin:read'] } })).json();
   assert.equal((await request('/templates', { authorization: `Bearer ${real.token}` })).status, 401);
 });
+
+test('fast 304 reads only canonical Bin metadata, not the immutable version body', async () => {
+  const bin = await create({ stable: true, secret: 'do-not-transfer' });
+  const published = await (await request('/bins/' + bin.meta.id)).json();
+  const counts = { meta: 0, versions: 0 };
+  const data = new Proxy(bucket, { get(target, property) {
+    if (property === 'get') return async (key, ...args) => {
+      if (key === 'bins/' + bin.meta.id + '/meta.json') counts.meta++;
+      if (String(key).startsWith('bins/' + bin.meta.id + '/versions/')) counts.versions++;
+      return target.get(key, ...args);
+    };
+    const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const cache = await mf.getKVNamespace('CACHE', 'jsonbin-tests');
+  const env = { DATA: data, CACHE: cache, ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: sessionSecret };
+  const worker = (await import('../dist/jsonbin/index.js')).default;
+  const url = 'http://localhost/api/v1/bins/' + bin.meta.id;
+  const response = await worker.fetch(new Request(url, { headers: { Cookie: cookie, 'If-None-Match': published.etag } }), env);
+  assert.equal(response.status, 304);
+  assert.equal(await response.text(), '');
+  assert.ok(counts.meta >= 1, 'always check canonical metadata for current authorization/expiry');
+  assert.equal(counts.versions, 0, 'unchanged Bin must not fetch the large JSON body');
+  const rejected = await worker.fetch(new Request(url, { headers: { 'If-None-Match': published.etag } }), env);
+  assert.equal(rejected.status, 401, 'private Bin still requires a session even with a matching ETag');
+});
