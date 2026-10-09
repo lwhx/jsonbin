@@ -10,6 +10,17 @@ APP_ORIGIN 默认可省略，浏览器仅允许请求站点自身。显式值必
 
 API 一律 no-store。静态安全响应头来自 `public/_headers`，JSON API 来自 Worker；Monaco 的 inline style/self/blob worker 是 CSP 的已验证需求，脚本不允许 unsafe-eval。应用异常日志仅有固定事件、请求 ID 和方法。不要把密码、Token、Cookie、OAuth code/state 或用户 JSON 放入 URL、命令行、共享日志。平台级访问日志可能记录 URL，另行设置可访问人员和保留时间；排查通过响应 `X-Request-ID` 关联应用日志。
 
+## SEC-002 限流发布与回滚
+
+此版本把 API Key 和公开 Bin 匿名读取的安全限流从非原子的 CACHE KV 迁移到 SQLite-backed Durable Object。保持 R2 Key 元数据、Scope、资源权限、过期/撤销、Token 以及现有 Key 自定义 `rateLimitPerMinute` 不变。发布不修改任何业务 Bin 或 Key 数据。
+
+- 部署前先核对 `wrangler.jsonc` 的 `RATE_LIMITER` binding 和 `exports.ApiRateLimiter`（`storage: sqlite`）；新的 class 会在首次发布时自动建立命名空间。不要使用 KV-backed DO。检查 Cloudflare 账户对 Durable Objects 的请求、运行时间与 SQLite rows written 配额；每个受限请求新增一次 DO RPC/最多一次 SQL 行写入。
+- 在完全隔离的测试 Worker + R2 + KV 中运行 `npm ci`、`npm run typecheck`、`npm test`、`npm run test:browser`、`npx wrangler deploy --dry-run`。本地 Miniflare 使用 `useSQLite: true`，真实 Cloudflare 边缘会写入 `CF-Connecting-IP`；模拟调用时需显式提供合法测试 IP。
+- 在灰度环境验证：同 Key 第 N 次成功、N+1 次 429、`Retry-After`；两个 Key 不共享计数；不同匿名 IP 不共享计数；无效/撤销/Scope 不足的 Bearer 不能退回匿名；public→private 立即拒绝新匿名请求；有效 Session 读取不占匿名桶；DO binding 故障显式 503。执行少量并发请求确认没有超配额通过。
+- 监控 Worker 的 429/503 占比、DO 请求/存储用量、P95 延迟与业务错误率；`503 rate_limit_unavailable` 需要修复 binding 或服务，**不能**靠删除限流调用来降级。公开读缺少 `CF-Connecting-IP` 返回 `503 anonymous_identity_unavailable`，应核对代理链和可信边缘来源。
+- 出现异常时回滚代码和原 Wrangler 绑定到上一个已验证发布版本，不删除 R2 Key 元数据，也不清空业务数据。旧版本若恢复使用 KV best-effort 限流，必须明确记录临时安全能力下降，并用 Cloudflare WAF/边缘限流缓解流量风险；独立 DO namespace 可暂时保留以方便恢复新版。回滚不重置 Token、Key Scope 或用量统计。
+- Durable Object 限流针对应用级请求额度，不替代 Cloudflare WAF、DDoS 防御或账户登录独立 R2 封禁。对全站公开健康/API 文档接口、异常高频探测和大量随机 Bin ID 请求，应另外在 Cloudflare Security 配置并验收 per-IP 规则；不要把内部 HMAC 身份标识与日志关联泄露。
+
 ## 日常业务备份
 
 1. 管理 Session 登录设置页，导出全部业务备份；也可 `GET /api/v1/system/export?scope=all&format=backup`。ZIP 仅由浏览器包装，包含 manifest.json/backup.json、SHA-256 和 CRC32。

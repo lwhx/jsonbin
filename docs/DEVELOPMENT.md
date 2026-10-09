@@ -286,12 +286,13 @@ jsonbin publish <id|slug> [--version N]
 
 ### API 限流
 
-基于一次性 CACHE KV 的固定 60 秒窗口计数（可重建的派生数据，允许最终一致下的少量少计）：
+SEC-002 起使用 SQLite-backed Durable Object `RATE_LIMITER` 对同一身份执行原子、固定 60 秒窗口计数，避免 KV 的 `get + put` 在并发/跨机房丢失更新。限流记录是运行时安全控制状态，独立于 CACHE 中的可重建统计数据：
 
-- Bearer 请求按密钥限流：默认 120 次/分钟，可通过 `rateLimitPerMinute`（1~10000，`null` 不限）在创建与 PATCH 时配置，修改即时生效
-- 匿名公开读取按 `CF-Connecting-IP` 限流 240 次/分钟；管理 Session 不限流（单管理员控制台）
-- 超限返回 `429 {error:"rate_limit_exceeded"}` + `Retry-After`（窗口剩余秒数）；429 未到达资源层，不计入密钥使用统计（与 401/403 同规则）
-- 未绑定 CACHE 的部署自动跳过限流
+- Bearer 请求按密钥 UUID 单独限流：默认 120 次/分钟，可通过 `rateLimitPerMinute`（1~10000，`null` 不限）在创建与 PATCH 时配置；调整上限后下一个请求立即采用新上限，但不清空本分钟计数。
+- 匿名公开读取按 Cloudflare 写入的 `CF-Connecting-IP` 独立限流 240 次/分钟，身份以 `SESSION_SECRET` 派生 HMAC，不把真实 IP 写入对象标识；不信任 `X-Forwarded-For`。有效管理 Session 不计入匿名额度；显式 Bearer 始终先鉴权，不能通过公开仓降级。
+- 超限返回 `429 {error:"rate_limit_exceeded"}` + `Retry-After`（窗口剩余秒数）；429 未到达资源层，不计入 Key 使用统计（与 401/403 同规则）。允许跨域来源可读取 `Retry-After`。
+- 缺失 `RATE_LIMITER`、内部 RPC 故障或匿名请求没有可信 Cloudflare IP 时返回 `503`（`rate_limit_unavailable` / `anonymous_identity_unavailable`），绝不改回使用不可靠的 KV 计数或静默无限放行。显式 `rateLimitPerMinute:null` 仍无须调用 DO。
+- 需在 `wrangler.jsonc` 声明 `durable_objects.bindings` 和 SQLite `exports`；Miniflare 测试必须使用 `useSQLite: true`。引入额外 DO 请求和 SQLite 行写入，业务量上升时应跟踪 Cloudflare 配额/延迟。生产变更与回滚见 `docs/OPERATIONS.md`。
 
 ### Webhook 事件推送
 

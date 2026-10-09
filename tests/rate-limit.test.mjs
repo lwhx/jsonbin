@@ -242,3 +242,45 @@ test('SEC-002 denies missing trusted IP and limiter outages, but keeps valid ses
   assert.equal(rejected.status, 503);
   assert.deepEqual(await rejected.json(), { error: 'rate_limit_unavailable' });
 });
+
+
+test('SEC-002 SQLite Durable Object is exact across concurrent requests and dynamic limit changes', async t => {
+  const h = await harness(t);
+  const millis = Date.now() % 60000;
+  if (millis > 58000) await new Promise(r => setTimeout(r, 60000 - millis + 100));
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName('atomic-' + crypto.randomUUID()));
+  const consume = async limit => {
+    const response = await stub.fetch('https://rate-limit.internal/consume', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit }),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const verdicts = await Promise.all(Array.from({ length: 32 }, () => consume(5)));
+  assert.equal(verdicts.filter(result => result.allowed).length, 5, 'exactly five concurrent requests are accepted');
+  assert.equal(verdicts.filter(result => !result.allowed).length, 27);
+  for (let i = 0; i < 3; i++) assert.equal((await consume(8)).allowed, true, 'raising the limit allows only the additional capacity');
+  assert.equal((await consume(8)).allowed, false);
+  assert.equal((await consume(3)).allowed, false, 'lowering the limit cannot reset usage');
+  assert.deepEqual((await stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 0 }),
+  })).status, 400);
+});
+
+test('SEC-002 limiter remains authoritative during KV outages', async t => {
+  const h = await harness(t);
+  const created = await (await h.request('/keys', { method: 'POST', value: {
+    name: 'KV independent', scopes: ['bin:read'], rateLimitPerMinute: 2,
+  } })).json();
+  const withoutKv = { ...h.env, CACHE: undefined };
+  const call = () => h.worker.fetch(new Request('https://example.test/api/v1/bins', {
+    headers: { Authorization: `Bearer ${created.token}` },
+  }), withoutKv);
+  assert.equal((await call()).status, 200);
+  assert.equal((await call()).status, 200);
+  const limited = await call();
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+});
