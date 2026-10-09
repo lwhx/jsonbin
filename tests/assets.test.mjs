@@ -34,6 +34,6 @@ test('production assets and SPA fallback apply CSP while API responses retain JS
       child.on('exit', code => resolve({ code, output }));
     });
     assert.equal(result.code, 0, result.output);
-    assert.equal((result.output.match(/^PASS /gm) ?? []).length, 7);
+    assert.equal((result.output.match(/^PASS /gm) ?? []).length, 8, 'production release probe checks limiter binding and an administrator auth provider');
   } finally { await h.close(); }
 });
