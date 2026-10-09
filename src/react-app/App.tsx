@@ -149,6 +149,7 @@ function apiErrorMessage(status: number, errorCode?: string) {
   if (status === 429 && errorCode === "login_ip_banned") return "该 IP 的密码登录已封禁 24 小时；GitHub 登录仍可使用。";
   if (status === 429) return "登录请求过于频繁，请稍后再试。";
   if (status === 503 && errorCode === "login_guard_unavailable") return "密码登录安全服务暂时不可用，请稍后再试或使用 GitHub 登录。";
+  if (status === 503 && errorCode === "session_state_unavailable") return "会话服务暂时不可用，请稍后重试。";
   if (status === 503) return "当前登录方式尚未配置。";
   return "发生错误，请稍后重试。";
 }
