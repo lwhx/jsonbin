@@ -1,0 +1,36 @@
+name: SEC002 limiter perf comparison (temporary)
+on:
+  push:
+    branches:
+      - security/native-rate-limits-20261009
+    paths:
+      - '.github/workflows/bench-sec002.yml'
+      - 'scripts/bench-native-rate-limits.mjs'
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - name: Benchmark main then candidate with same 250 requests
+        run: |
+          FEATURE_SHA="$(git rev-parse HEAD)"
+          cp scripts/bench-native-rate-limits.mjs /tmp/bench-native-rate-limits.mjs
+          git checkout main
+          cp /tmp/bench-native-rate-limits.mjs scripts/bench-native-rate-limits.mjs
+          npm run build
+          echo "BASELINE (main)"
+          node scripts/bench-native-rate-limits.mjs
+          rm scripts/bench-native-rate-limits.mjs
+          git checkout "$FEATURE_SHA"
+          npm run build
+          echo "CANDIDATE (SEC002)"
+          node scripts/bench-native-rate-limits.mjs
