@@ -28,14 +28,19 @@ export async function checkExactKeyQuota(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const loaded = await getJson<unknown>(bucket, path);
     if (loaded && !valid(loaded.value)) throw new Error("corrupt_custom_key_quota");
-    const count = loaded && (loaded.value as Counter).window === window ? (loaded.value as Counter).count : 0;
+    // Cloudflare requests can arrive out of order around minute boundaries.
+    // An older in-flight request must never roll a newer CAS window backward
+    // and reset the newer request's quota to zero.
+    const newestWindow = loaded ? (loaded.value as Counter).window : window;
+    const effectiveWindow = Math.max(window, newestWindow);
+    const count = loaded && newestWindow === effectiveWindow ? (loaded.value as Counter).count : 0;
     if (count >= limit) {
-      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((((window + 1) * WINDOW_MS) - now) / 1000)) };
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((((effectiveWindow + 1) * WINDOW_MS) - now) / 1000)) };
     }
     const onlyIf = loaded
       ? { etagMatches: loaded.etag.replace(/^"(.*)"$/, "$1") }
       : { etagDoesNotMatch: "*" };
-    const result = await putJson(bucket, path, { window, count: count + 1 }, { onlyIf });
+    const result = await putJson(bucket, path, { window: effectiveWindow, count: count + 1 }, { onlyIf });
     if (result) return { allowed: true, retryAfterSeconds: 0 };
     // Concurrent caller claimed the ETag; reload the authoritative value.
   }
