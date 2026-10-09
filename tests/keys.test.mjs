@@ -6,16 +6,20 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 async function withWorker(pepper, fn) {
   const password = randomBytes(32).toString('hex');
   const mf = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{
-    name: 'pepper-tests', modules: true, scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'],
+    name: 'pepper-tests', modules: true, scriptPath: 'dist/jsonbin/index.js', compatibilityDate: '2026-10-03', r2Buckets: ['DATA'], kvNamespaces: ['CACHE'],
     bindings: { ADMIN_USERNAME: 'test', ADMIN_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex'), ...(pepper === undefined ? {} : { TOKEN_PEPPER: pepper }) },
   }] }));
   try {
     const login = await mf.dispatchFetch('http://localhost/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'test', password }) });
     assert.equal(login.status, 200); const cookie = login.headers.get('set-cookie').split(';')[0];
-    const request = (path, { method = 'GET', value, token, etag } = {}) => mf.dispatchFetch('http://localhost/api/v1' + path, {
+    const request = async (path, { method = 'GET', value, token, etag } = {}) => {
+      const result = await mf.dispatchFetch('http://localhost/api/v1' + path, {
       method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : { Cookie: cookie }), ...(etag ? { 'If-Match': etag } : {}) },
       ...(value === undefined ? {} : { body: JSON.stringify(value) }),
-    });
+      });
+      await result.waitUntil?.();
+      return result;
+    };
     await fn(request, await mf.getR2Bucket('DATA', 'pepper-tests'));
   } finally { await mf.dispose(); }
 }
@@ -177,8 +181,8 @@ test('P14 resource policies restrict Bin and Collection access dynamically', asy
   });
 });
 
-test('P18: API Key records authorized usage counters atomically in useApiKey CAS', async () => {
-  await withWorker(undefined, async (request) => {
+test('P18: API Key shows approximate qualified usage without per-request R2 CAS', async () => {
+  await withWorker(undefined, async (request, bucket) => {
     const createKeyRes = await request('/keys', {
       method: 'POST',
       value: { name: 'Usage Counter Key', scopes: ['bin:read'] },
@@ -186,6 +190,8 @@ test('P18: API Key records authorized usage counters atomically in useApiKey CAS
     assert.equal(createKeyRes.status, 201);
     const { key, token } = await createKeyRes.json();
     assert.equal(key.usageTotal, 0);
+    const r2Key = `keys/${key.id}/meta.json`;
+    const initial = await (await bucket.get(r2Key)).json();
 
     // Authenticate 3 valid read requests
     await request('/bins', { token });
@@ -198,9 +204,11 @@ test('P18: API Key records authorized usage counters atomically in useApiKey CAS
     const list = await listRes.json();
     const updatedKey = list.items.find(k => k.id === key.id);
 
-    assert.equal(updatedKey.usageTotal, 3);
+    assert.equal(updatedKey.usageApproximate, true);
+    assert.ok(updatedKey.usageTotal >= 1 && updatedKey.usageTotal <= 3);
     const today = new Date().toISOString().slice(0, 10);
-    assert.equal(updatedKey.usageDaily[today], 3);
+    assert.ok(updatedKey.usageDaily[today] >= 1 && updatedKey.usageDaily[today] <= 3);
+    assert.deepEqual(await (await bucket.get(r2Key)).json(), initial, 'request path must not modify canonical API key record');
   });
 });
 
@@ -274,11 +282,11 @@ test('audit: usage counters skip resource denials, scope misses and invalid toke
     const allowedBin = await (await request('/bins', { method: 'POST', token: key.token, value: { name: 'Usage OK', collectionId: allowedCol.meta.id, value: { ok: true } } })).json();
     assert.equal(allowedBin.status ?? 201, 201);
     assert.equal((await request('/bins/' + allowedBin.meta.id, { token: key.token })).status, 200);
-    assert.equal(await usage(), 2, 'allowed create + read are counted');
+    assert.ok((await usage()) >= 1, 'allowed create + read contribute approximate usage');
 
     // 404 on a permitted-but-missing resource is still authorized usage
     await request('/bins/11111111-1111-4111-8111-111111111111', { token: key.token });
-    assert.equal(await usage(), 3);
+    assert.ok((await usage()) >= 1, 'allowed 404 may count, without promising exact concurrency');
   });
 });
 
@@ -297,7 +305,7 @@ test('audit: key scopes and resource scope can be edited after creation and appl
     assert.equal((await request('/bins/' + binA.meta.id, { token: created.token })).status, 200);
     assert.equal((await request('/bins/' + binB.meta.id, { token: created.token })).status, 403);
     const usageBefore = await usage();
-    assert.equal(usageBefore, 1);
+    assert.ok(usageBefore >= 1);
 
     // Session PATCH widens scopes and relaxes the resource scope.
     const widen = await request('/keys/' + created.key.id, { method: 'PATCH', value: { scopes: ['bin:read', 'bin:delete'], resourceAccess: { mode: 'all' } } });
@@ -305,7 +313,7 @@ test('audit: key scopes and resource scope can be edited after creation and appl
     assert.deepEqual((await widen.json()).key.scopes, ['bin:read', 'bin:delete']);
     assert.equal((await request('/bins/' + binB.meta.id, { token: created.token })).status, 200);
     assert.equal((await request('/bins/' + binB.meta.id, { method: 'DELETE', token: created.token })).status, 200);
-    assert.equal(await usage(), usageBefore + 2, 'usage counters survive edits');
+    assert.ok((await usage()) >= usageBefore, 'approximate counters survive edits');
 
     // Narrowing again immediately revokes the capability.
     const narrow = await request('/keys/' + created.key.id, { method: 'PATCH', value: { scopes: ['bin:read'] } });

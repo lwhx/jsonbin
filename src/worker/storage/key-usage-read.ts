@@ -33,9 +33,10 @@ export async function readDailyKeyUsage(env: Env, utcDay: string, nowMs = Date.n
         const bucket = records.get(key);
         if (bucket === null || bucket === undefined) continue;
         if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) return invalid(utcDay);
-        if (bucket.keys === undefined) continue;
-        if (!bucket.keys || typeof bucket.keys !== 'object' || Array.isArray(bucket.keys)) return invalid(utcDay);
-        for (const [id, raw] of Object.entries(bucket.keys as Record<string, unknown>)) {
+        const keyMap = (bucket as { keys?: unknown }).keys;
+        if (keyMap === undefined) continue;
+        if (!keyMap || typeof keyMap !== 'object' || Array.isArray(keyMap)) return invalid(utcDay);
+        for (const [id, raw] of Object.entries(keyMap as Record<string, unknown>)) {
           if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalid(utcDay);
           const observation = raw as { authorizedUses?: unknown; lastAuthorizedAt?: unknown };
           if (observation.authorizedUses === undefined) continue; // Legacy metrics do not prove qualified usage.

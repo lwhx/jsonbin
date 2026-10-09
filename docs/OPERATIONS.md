@@ -72,3 +72,16 @@ npm run check:production -- https://your-production-domain.example
 | TTL/Cron | 一个专用短 TTL Bin 请求到期后不可读；记录一次真实 15 分钟 Cron 日志和维护结果，含活动清理/续作任务 |
 
 v3.0.0 已按上述门槛完成生产验收并晋升 stable。后续版本仍必须先完成对应生产项目、本地检查和远端部署证据，再更新版本号与发布标签；未完成时不得提前标记为 stable。
+
+## API Key 近似使用统计：KV + R2 日结（方案 B）
+
+> 适用第二轮 P0 性能优化。使用次数是**近似值**，不用于计费、强一致配额或权限判断。
+
+- 每次 API Key 请求始终读取 R2 权威元数据，并按原先 Token 摘要、Scope、资源范围、过期、撤销和速率限制鉴权。`401` / `403` / `429` 不计入“已授权使用”；经过授权的 `404` / `422` / `5xx` 仍计入。
+- 使用次数沿用已有 `analytics:agg:<UTC-hour>:<shard>` KV 统计，**每请求不额外写 KV，也不修改 R2 Key metadata**。Cloudflare KV 最终一致、同键写入有节流，存在短暂滞后或漏计，不承诺精确值。
+- API Key 管理列表保留 `usageTotal` / `usageDaily` / `lastUsedAt` 旧字段并显示尚未结算的当日/昨日增量；新字段 `usageApproximate`、`usageStatus`、`usageAsOf` 只描述统计，`usageAppliedDays` 仅存在于 R2 内部，绝不对外返回。
+- Cron 沿用 `*/15 * * * *`，于 UTC 次日 **00:30 后**开始结算完整昨日以及最多另外两天；每次最多为 100 个未结算 Key 写 R2 CAS。`usageAppliedDays` 实现幂等，即使 KV 日完成标记丢失也不会重复添加。KV 分片损坏或访问失败不得推进该日完成标记；后续 Cron 重试。
+- 若 `CACHE` 缺失或读写失败，业务 API 继续依靠 R2 工作；管理端使用旧 R2 累计值并标注“统计暂不可用”。恢复 KV 后不应手动清零或覆盖 R2 Key metadata。
+- 观察 `keyusage:v2:done:<YYYY-MM-DD>` 的存在与 Key metadata 中的对应 `usageAppliedDays`，核对日结、Cron 延迟、R2 PUT 次数。KV 小时桶保留 35 天，自动恢复窗口最多 3 日；超过窗口的统计缺口不可自动冒充完整。
+- 发布：先让 PR #6 和当前功能 PR 完成 CI，通过隔离 R2/KV 测试环境验证旧 Key、撤销、跨日和重试；再执行灰度发布并观察连续两次 UTC 日结。**不要直接部署本分支到生产**。
+- 回滚：保留全部 R2 Key 元数据和 KV 桶，严禁删除 `usageAppliedDays` 或重置 `usageTotal`；如果退回旧版会重新启用逐请求 R2 累加，切回新版前需比对该时间段是否已经计入新 KV 事件，防止交叉版本重复结算。不要把 API Key 业务备份中的缺失视为可安全删除凭据。
