@@ -27,13 +27,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          failure_streak=0
           for attempt in $(seq 1 45); do
             status="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
               --jq '[.check_runs[] | select(.name == "Workers Builds: jsonbin")] | sort_by(.started_at) | last | if . == null then "pending" else (.status + "/" + (.conclusion // "pending")) end' 2>/dev/null)" || status="pending"
             echo "Cloudflare Preview deployment: ${status}"
             case "${status}" in
               completed/success) exit 0 ;;
-              completed/failure|completed/cancelled|completed/skipped|completed/timed_out) exit 1 ;;
+              completed/failure|completed/cancelled|completed/skipped|completed/timed_out)
+                # Cloudflare may briefly report a failed placeholder check
+                # before the real preview build check starts on the same SHA.
+                # Only fail after three consecutive terminal observations.
+                failure_streak=$((failure_streak + 1))
+                if [ "${failure_streak}" -ge 3 ]; then exit 1; fi
+                ;;
+              *) failure_streak=0 ;;
             esac
             sleep 10
           done
