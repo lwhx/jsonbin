@@ -543,6 +543,10 @@ function AuthenticatedApp({
       cancelLabel: "继续编辑",
       danger: true,
     })) return;
+    // Cancel sensitive in-flight downloads at logout intent, before network
+    // latency permits them to complete. Do not erase drafts, authentication,
+    // or credentials until server-side revocation is committed.
+    window.dispatchEvent(new Event("jsonbin:logout-pending"));
     // A logout is only final after R2 has durably revoked this session.
     // On network/storage errors, preserve the Cookie and current UI for retry.
     try {

@@ -45,7 +45,7 @@ export function BinDetailPage({ id, dark, onBack, onDeleted, onDirtyChange }: {
   const schemas = useQuery({ queryKey: ["schemas"], queryFn: ({ signal }) => listSchemas(signal), retry: false });
   const mounted = useRef(false);
   const exportController = useRef<AbortController | null>(null), exporting = useRef(false);
-  useEffect(() => { mounted.current = true; const cancel = () => exportController.current?.abort(); window.addEventListener("jsonbin:logout", cancel); return () => { mounted.current = false; exportController.current?.abort(); window.removeEventListener("jsonbin:logout", cancel); }; }, []);
+  useEffect(() => { mounted.current = true; const cancel = () => exportController.current?.abort(); window.addEventListener("jsonbin:logout", cancel); window.addEventListener("jsonbin:logout-pending", cancel); return () => { mounted.current = false; exportController.current?.abort(); window.removeEventListener("jsonbin:logout", cancel); window.removeEventListener("jsonbin:logout-pending", cancel); }; }, []);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [metadata, setMetadata] = useState<MetadataInput | null>(null);
   const [tab, setTab] = useState<Tab>("编辑器");

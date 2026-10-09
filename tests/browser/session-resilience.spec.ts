@@ -34,3 +34,30 @@ test("failed server-side logout preserves an otherwise valid Cookie and authenti
   const cookieAfter = (await page.context().cookies()).find(c => c.name === "jsonbin_session")?.value;
   expect(cookieAfter).toBe(cookieBefore);
 });
+
+
+test("failed logout after confirmation keeps prepared import draft; only transient exports are cancelled", async ({ page }) => {
+  const login = await page.request.post("/api/v1/auth/login", {
+    data: { username: "browser-test", password: process.env.JSONBIN_TEST_PASSWORD },
+  });
+  expect(login.status()).toBe(200);
+  await page.goto("/#/settings");
+  const panel = page.locator(".import-panel");
+  await panel.getByLabel("选择导入文件").setInputFiles({
+    name: "unsubmitted-import.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"pending":true}'),
+  });
+  await expect(panel).toContainText("unsubmitted-import.json");
+
+  await page.route("**/api/v1/auth/logout", route => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "session_state_unavailable" }),
+  }));
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page.getByRole("dialog", { name: "退出登录？", exact: true })
+    .getByRole("button", { name: "退出登录", exact: true }).click();
+  await expect(page.getByRole("button", { name: "退出登录", exact: true })).toBeVisible();
+  await expect(panel).toContainText("unsubmitted-import.json");
+});

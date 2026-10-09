@@ -33,6 +33,7 @@ export function SessionPanel({ onLoggedOut }: { onLoggedOut: () => void }) {
       message: item.current ? "当前设备将立即退出，未保存内容可能丢失。" : "该设备下次请求时将需要重新登录；其他设备保持登录。",
       confirmLabel: "撤销会话", cancelLabel: "取消", danger: true,
     })) return;
+    if (item.current) window.dispatchEvent(new Event("jsonbin:logout-pending"));
     setBusy(true);
     try {
       await request<{ ok: boolean }>("/sessions/" + encodeURIComponent(item.id), { method: "DELETE" });
@@ -52,6 +53,7 @@ export function SessionPanel({ onLoggedOut }: { onLoggedOut: () => void }) {
       message: "这会立即撤销所有浏览器和手机的现有登录，包括当前设备；再次访问需要重新登录。操作不能撤销。",
       confirmLabel: "退出所有设备", cancelLabel: "取消", danger: true,
     })) return;
+    window.dispatchEvent(new Event("jsonbin:logout-pending"));
     setBusy(true);
     try {
       await request<{ ok: boolean }>("/logout-all", { method: "POST" });
