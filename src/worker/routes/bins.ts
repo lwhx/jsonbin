@@ -109,12 +109,13 @@ const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
       return serve(await getBinMetadata(c.env, id));
     }
   }
+  // Enforce the anonymous quota BEFORE any R2 metadata lookup. Otherwise
+  // random/private Bin ID probing can bypass the public-read limiter while
+  // performing unlimited R2 requests. Private and missing resources count.
+  const limited = await limitAnonymousRequest(c.env, c.req.raw);
+  if (limited) return limited;
   const metadata = await getBinMetadata(c.env, id);
-  if (metadata?.value.visibility === "public") {
-    const limited = await limitAnonymousRequest(c.env, c.req.raw);
-    if (limited) return limited;
-    return serve(metadata);
-  }
+  if (metadata?.value.visibility === "public") return serve(metadata);
   // The handler uses exactly the snapshot that was authorized, including
   // public visibility, expiry and the immutable referenced version.
   return requireAccess("bin:read")(c, () => serve(metadata));
@@ -781,13 +782,13 @@ const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables
       return load();
     }
   }
+  // Slug probing has the same pre-R2 limit as ID probing; an invalid slug
+  // must not become a free R2 lookup and bypass the anonymous quota.
+  const limited = await limitAnonymousRequest(c.env, c.req.raw);
+  if (limited) return limited;
   const record = await getBinBySlug(c.env, c.req.param("slug")!);
   c.set("bin", record);
-  if (record?.meta.visibility === "public") {
-    const limited = await limitAnonymousRequest(c.env, c.req.raw);
-    if (limited) return limited;
-    return next();
-  }
+  if (record?.meta.visibility === "public") return next();
   return requireAccess("bin:read")(c, next);
 };
 

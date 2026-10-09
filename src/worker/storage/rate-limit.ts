@@ -76,7 +76,8 @@ function trustedIp(request: Request): string | null {
   }
 }
 
-/** Public reads without a trusted identity or limiter fail explicitly. */
+/** All unauthenticated Bin/Slug reads, including private/missing probes, must
+ * be checked before their first R2 lookup. No trusted identity => 503. */
 export async function limitAnonymousRequest(env: Env, request: Request, limit = ANONYMOUS_RATE_LIMIT): Promise<Response | null> {
   const ip = trustedIp(request);
   if (!ip) return unavailable("anonymous_identity_unavailable");

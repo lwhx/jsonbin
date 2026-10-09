@@ -300,3 +300,56 @@ test('SEC-002 limiter remains authoritative during KV outages', async t => {
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) > 0);
 });
+
+test('SEC-002 rate-limits private and missing anonymous Bin/Slug probes BEFORE R2', async t => {
+  const h = await harness(t);
+  const privateBin = await (await h.request('/bins', {
+    method: 'POST', value: { name: 'probe-private', visibility: 'private', value: { secret: true } },
+  })).json();
+  const ip = '198.51.100.194';
+
+  // Reserve 238 slots in this fixed window, then spend slots 239 and 240
+  // through private-ID and missing-slug paths. Earlier versions looked up
+  // both in R2 without charging the quota, allowing unbounded R2 probing.
+  const msIntoMinute = Date.now() % 60000;
+  if (msIntoMinute > 35000) await new Promise(resolve => setTimeout(resolve, 60000 - msIntoMinute + 50));
+  const digest = createHmac('sha256', h.env.SESSION_SECRET)
+    .update(`jsonbin/public/ip/v1:${ip}`).digest('base64url');
+  const stub = h.env.RATE_LIMITER.get(h.env.RATE_LIMITER.idFromName(`anon:${digest}`));
+  const reserve = () => stub.fetch('https://rate-limit.internal/consume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit: 240 }),
+  });
+  const reservations = await Promise.all(Array.from({ length: 238 }, reserve));
+  assert.ok(reservations.every(r => r.status === 200));
+  assert.ok((await Promise.all(reservations.map(r => r.json()))).every(v => v.allowed));
+  const anonymous = (path, env = h.env, headers = {}) => h.worker.fetch(
+    new Request('https://example.test/api/v1' + path, {
+      headers: { 'CF-Connecting-IP': ip, ...headers },
+    }), env,
+  );
+  assert.equal((await anonymous('/bins/' + privateBin.meta.id)).status, 401,
+    'private Bin probes count toward the shared anonymous bucket');
+  assert.equal((await anonymous('/b/no-such-slug-sec002')).status, 401,
+    'missing slug probes also count toward the same anonymous bucket');
+
+  // There is no R2 binding at all in this call. 429 must be returned before
+  // getBinMetadata/getBinBySlug attempts to touch authoritative storage.
+  const withoutR2 = { ...h.env, DATA: undefined };
+  const blockedId = await anonymous('/bins/' + privateBin.meta.id, withoutR2);
+  assert.equal(blockedId.status, 429);
+  assert.ok(Number(blockedId.headers.get('retry-after')) >= 1);
+  assert.equal((await anonymous('/b/no-such-slug-sec002', withoutR2)).status, 429);
+  assert.equal((await anonymous('/bins/' + privateBin.meta.id, h.env, { Cookie: 'jsonbin_session=invalid' })).status, 429,
+    'invalid Session cookies never exempt a client from the anonymous quota');
+
+  // Independently authenticated callers never consume this anonymous quota.
+  assert.equal((await h.request('/bins/' + privateBin.meta.id)).status, 200,
+    'valid Session remains exempt even after anonymous 429');
+  const key = await (await h.request('/keys', {
+    method: 'POST', value: { name: 'scoped-proof', scopes: ['bin:read'] },
+  })).json();
+  assert.equal((await h.worker.fetch(new Request('https://example.test/api/v1/bins/' + privateBin.meta.id, {
+    headers: { 'CF-Connecting-IP': ip, Authorization: 'Bearer ' + key.token },
+  }), h.env)).status, 200, 'Bearer uses its separate per-Key rate limit');
+});
