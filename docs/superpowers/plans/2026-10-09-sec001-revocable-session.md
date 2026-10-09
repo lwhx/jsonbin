@@ -23,7 +23,7 @@
 ## Review Focus
 
 - Concurrent login/logout-all must not revive revoked generations: CAS race integration test.
-- Legacy valid cookie must work before deadline; global revoke must block it: signed-cookie integration test.
+- Legacy signed cookies must remain valid until their **individual `exp`** even if a production rollout is delayed; global revoke must block them: signed-cookie integration tests.
 - Successful logout must revoke old cookie despite local browser reimport: server replay test.
 - Error on R2 GET must remain retryable (503) instead of unauthenticated login: outage test.
 - Multi-device independent sessions and true process-relaunch persistence, not only page reload: worker + persistent-profile browser tests.
@@ -49,7 +49,7 @@
 
 - [ ] Add strict R2 policy parser + ETag CAS mutation loop, cap 512, prune expired rows on mutations, fail closed on unavailable/corrupt policy.
 - [ ] Add SID/gen to new signed Cookies without changing 14d Max-Age or exp semantics.
-- [ ] Enforce server policy on authenticated read, legacy migration through 2026-10-25 only, no accidental catch of storage 503 as 401.
+- [x] Enforce server policy on authenticated read, migrate correctly signed legacy cookies until **their signed expiry** (no hard-coded calendar cutoff), no accidental catch of storage 503 as 401.
 - [ ] Run targeted tests GREEN and existing `tests/security.test.mjs`; adapt time-controlled test for explicit finite legacy cutover without weakening behavioral assertions.
 - [ ] Commit.
 

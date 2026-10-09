@@ -79,7 +79,8 @@ async function readSignedCookie<T extends JsonBinContextEnv>(c: Context<T>): Pro
 
     const user: SessionUser = { id: claims.id, username: claims.username, provider: claims.provider };
     if (claims.sid === undefined && claims.gen === undefined) {
-      // A finite migration period for cookies issued before SID support.
+      // Old signed cookies retain their original 14-day expiry; they can
+      // still be revoked individually or globally by the R2 policy.
       const legacyDigest = await hmacSign(sessionSecret(c), `legacy-session/v1\0${token}`);
       return { user, principal: { exp: claims.exp, provider: claims.provider, legacyDigest } };
     }

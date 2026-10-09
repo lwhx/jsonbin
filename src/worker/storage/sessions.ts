@@ -112,7 +112,10 @@ export function registryAuthorizes(registry: SessionRegistry | null, principal: 
     const stored = registry.sessions[principal.sid];
     return Boolean(stored && stored.exp === principal.exp && stored.provider === principal.provider && stored.exp * 1000 > now);
   }
-  if (!principal.legacyDigest || now >= Date.UTC(2026, 9, 25)) return false;
+  // Legacy cookies are trusted only until the fixed signed expiry checked
+  // by readSignedCookie, regardless of when this version is deployed.
+  // A hardcoded calendar cutoff would prematurely log out delayed rollouts.
+  if (!principal.legacyDigest) return false;
   if (!registry) return true;
   return !registry.legacyDisabled && !(principal.legacyDigest in registry.legacyRevoked);
 }
