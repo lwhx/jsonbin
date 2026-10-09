@@ -18,6 +18,10 @@
       "id": "5761f7b90a4d479b955fa4ac8b69df6e"
     }
   ],
+  "ratelimits": [
+    { "name": "JSONBIN_KEY_RATE", "namespace_id": "847621193", "simple": { "limit": 120, "period": 60 } },
+    { "name": "JSONBIN_ANON_RATE", "namespace_id": "847621194", "simple": { "limit": 240, "period": 60 } }
+  ],
   "r2_buckets": [
     {
       "binding": "DATA",

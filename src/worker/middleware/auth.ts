@@ -1,6 +1,6 @@
 import "../activity";
 import { authorizeApiKey, readApiKey, type ApiKey, type ApiScope } from "../storage/keys";
-import { DEFAULT_KEY_RATE_LIMIT, checkRateLimit, rateLimitResponse } from "../storage/rate-limit";
+import { DEFAULT_KEY_RATE_LIMIT, enforceApiKeyRateLimit } from "../storage/rate-limit";
 import type { MiddlewareHandler } from "hono";
 import { readSession, type SessionUser } from "../auth/session";
 import { allowedRequestOrigin } from "../auth/origin";
@@ -53,10 +53,9 @@ export function requireAccess(scopes: ApiScope | ApiScope[]): typeof requireSess
     // Best-effort per-key rate limit; unlimited only via an explicit null override.
     // ?? would swallow that null into the default (F16): only an absent setting falls back.
     const limit = current.key.rateLimitPerMinute === undefined ? DEFAULT_KEY_RATE_LIMIT : current.key.rateLimitPerMinute;
-    if (limit !== null && c.env.CACHE) {
-      const verdict = await checkRateLimit(c.env.CACHE, `k:${current.key.id}`, limit).catch(() => null);
-      if (verdict && !verdict.allowed) return rateLimitResponse(verdict.retryAfterSeconds);
-    }
+    // Native default or exact R2 custom quota; backend errors fail closed.
+    const limited = await enforceApiKeyRateLimit(c.env, current.key.id, limit);
+    if (limited) return limited;
     c.set("apiKey", current.key);
     c.set("activityIdentity", { actor: { type: "api_key", id: current.key.id }, provider: "api_key" });
     await next();

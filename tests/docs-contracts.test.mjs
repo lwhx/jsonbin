@@ -11,7 +11,12 @@ const writeEtags = [];
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ cf:false, workers:[{name:'docs-tests',modules:true,scriptPath:'dist/jsonbin/index.js',compatibilityDate:'2026-10-03',r2Buckets:['DATA']}] }));
   app = (await import('../dist/jsonbin/index.js')).default;
-  env = { DATA:await mf.getR2Bucket('DATA','docs-tests'), ADMIN_USERNAME:'docs-test',ADMIN_PASSWORD:randomBytes(32).toString('hex'),SESSION_SECRET:randomBytes(32).toString('hex') };
+  // This suite validates generated API documentation, not quota exhaustion.
+  // Supply the native bindings deployed in production instead of relying on
+  // the old fail-open path when CACHE is deliberately absent here.
+  const unlimitedNativeForDocs = { limit: async () => ({ success: true }) };
+  env = { DATA:await mf.getR2Bucket('DATA','docs-tests'), ADMIN_USERNAME:'docs-test',ADMIN_PASSWORD:randomBytes(32).toString('hex'),SESSION_SECRET:randomBytes(32).toString('hex'),
+    JSONBIN_KEY_RATE: unlimitedNativeForDocs, JSONBIN_ANON_RATE: unlimitedNativeForDocs };
   const login = await app.fetch(new Request('https://example.test/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:env.ADMIN_USERNAME,password:env.ADMIN_PASSWORD})}),env);
   cookie = login.headers.get('set-cookie').split(';')[0];
   const key = await app.fetch(new Request('https://example.test/api/v1/keys',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({name:'all scopes',scopes:DOC_SCOPES})}),env);

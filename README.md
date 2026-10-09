@@ -101,6 +101,9 @@ Then place the generated KV namespace ID in `wrangler.jsonc` and enable:
 
 - `DATA` -> R2 bucket
 - `CACHE` -> KV namespace
+- `JSONBIN_KEY_RATE` / `JSONBIN_ANON_RATE` -> native Workers Rate Limiting bindings (120/min/key, 240/min/IP). Their `namespace_id` values **must not collide** with bindings in other Workers on the same Cloudflare account; review the values in `wrangler.jsonc` before merging. No separate paid R2/KV resource is created by these two bindings.
+
+Default API Key and anonymous public limits use fast, per-PoP approximate native counters without KV writes. API Keys with custom numeric limits `1–10000` (other than default 120) use exact R2 CAS quotas at the cost of an R2 GET+PUT per allowed request; `rateLimitPerMinute:null` disables per-key limiting. A limiter outage responds `503 rate_limit_unavailable`, not a bypass. See [SEC-002 operations](docs/OPERATIONS.md#sec-002api-key--匿名读取限流安全与成本).
 
 Generate Worker types after bindings change:
 

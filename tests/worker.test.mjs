@@ -1394,7 +1394,13 @@ test('public authorization and response share a snapshot when visibility and JSO
       }
       return object;
     } };
-    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix), { DATA: data });
+    const response = await app.fetch(new Request('https://example.test/api/v1' + path + suffix), {
+      DATA: data,
+      // The isolated snapshot race uses a minimal R2 stub and has no CACHE.
+      // Provide an allowing native limiter so this remains a snapshot test.
+      JSONBIN_ANON_RATE: { limit: async () => ({ success: true }) },
+      SESSION_SECRET: sessionSecret,
+    });
     assert.equal(response.status, 200); assert.equal(changed, true);
     assert.deepEqual((await response.json()).value, suffix ? 'public' : { message: 'public' });
     assert.equal((await request(path + suffix, { authenticated: false })).status, 401);

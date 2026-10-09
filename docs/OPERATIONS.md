@@ -73,6 +73,18 @@ npm run check:production -- https://your-production-domain.example
 
 v3.0.0 已按上述门槛完成生产验收并晋升 stable。后续版本仍必须先完成对应生产项目、本地检查和远端部署证据，再更新版本号与发布标签；未完成时不得提前标记为 stable。
 
+
+## SEC-002：API Key / 匿名读取限流安全与成本
+
+- 此变更是独立的 SEC-002 PR。**合并之前先检查该 Cloudflare 账户是否已有 Rate Limiting namespace_id `847621193` 和 `847621194`；如已占用，修改为其他正整数，不要与别的 Worker 不小心共享额度。** 本次增加两个 Cloudflare Workers 原生 Rate Limiting 绑定，无新的 R2 桶、D1、Durable Objects 或 Secret：
+  - `JSONBIN_KEY_RATE`：普通 API Key（`rateLimitPerMinute` 省略或设为 120）120 次／60 秒／Key。
+  - `JSONBIN_ANON_RATE`：匿名公开 Bin / Slug 当前读取 240 次／60 秒／IP；`CF-Connecting-IP` 经过 HMAC/哈希处理后作为绑定 key，绝不将原始 IP 提交给原生 limiter。
+- **原生绑定是按 Cloudflare 节点近似限流，不是跨 PoP 强一致全局计数。** 不用于计费或严格安全配额；详情见 https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/ 。如果多个用户共享公网 IP，匿名配额也会共享。
+- 单个 API Key 显式设置 `1–10000` 且不等于 120 的限额时，保留**精确自定义值**：每 Key 的 R2 对象 `auth/key-rate/<id>.json` 使用 ETag 条件写入，每个通过请求增加 1 次 R2 GET + 1 次条件 PUT（并发冲突可能重试），429 不写入；此功能适用于需要严格配额但会提高成本的 Key。显式 `null` 仍为不限流。R2 计数对象不保存 Token。
+- 429 返回 `rate_limit_exceeded` 和 `Retry-After`；原生限流不返回精确重置时刻，因此头保守设为 60 秒。原生绑定、R2 动态计数或 KV 兼容降级发生错误时返回 `503 rate_limit_unavailable`（带 `Retry-After:60`），**不再绕过**。受限请求不计为已授权 API Key 使用次数。普通 Session 和 GitHub OAuth 不受上述限流影响。
+- 未安装原生 Rate Limiting binding 的本地 Miniflare/老部署仍可走兼容的 KV 近似限流：单键 1 次/秒写限制和最终一致性仍在；任何 KV 读写失败会拒绝请求。**不要把这个兼容路径当成可用于生产的精确全局保护**。KV 可用于业务索引与近似分析，而不能用于严格配额。
+- 迁移不需要修改既有 Key 元数据或手工删除 KV 计数：旧 `rl:` 分钟键自动过期。发布后抽查默认 Key、显式 `null`、自定义 Key、匿名公开 Bin，以及 429/503、R2/Workers 使用量。回滚至旧代码会重新引入 KV 热键和失败放行风险。
+
 ## API Key 近似使用统计：KV + R2 日结（方案 B）
 
 > 适用第二轮 P0 性能优化。使用次数是**近似值**，不用于计费、强一致配额或权限判断。
