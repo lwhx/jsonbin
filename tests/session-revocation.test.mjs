@@ -58,7 +58,7 @@ test('admin can enumerate, target-revoke, and globally revoke other devices with
   assert.ok(sessions.some(x => x.id === sidB));
   assert.ok(sessions.some(x => x.id === payload(a).sid && x.current === true));
   assert.equal((await request(h, '/sessions', { headers: { Authorization: 'Bearer invalid' } })).status, 401);
-  assert.equal((await request(h, '/sessions', { cookie: a, method: 'DELETE', headers: { Origin: 'https://evil.test' } })).status, 403);
+  assert.equal((await request(h, '/sessions/' + sidB, { cookie: a, method: 'DELETE', headers: { Origin: 'https://evil.test' } })).status, 403);
   const targeted = await request(h, '/sessions/' + sidB, { method: 'DELETE', cookie: a });
   assert.equal(targeted.status, 200);
   assert.equal((await me(h, b)).status, 401);
