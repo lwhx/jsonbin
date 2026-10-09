@@ -172,3 +172,14 @@ test('concurrent logins CAS-register independent devices; global revoke invalida
   const fresh = await passwordLogin(h);
   assert.equal((await me(h, fresh)).status, 200, 'new generation can sign in after global revoke');
 });
+
+test('OpenAPI documents revocable Session endpoints and names actual signed Cookie', async t => {
+  const h = await setup(t);
+  const response = await h.worker.fetch(new Request('https://example.test/api/v1/openapi.json'), h.env);
+  assert.equal(response.status, 200);
+  const spec = await response.json();
+  assert.equal(spec.components.securitySchemes.CookieAuth.name, 'jsonbin_session');
+  assert.equal(spec.paths['/auth/sessions'].get.security[0][0] ?? spec.paths['/auth/sessions'].get.security[0].CookieAuth?.length, 0);
+  assert.ok(spec.paths['/auth/sessions/{id}'].delete);
+  assert.ok(spec.paths['/auth/logout-all'].post);
+});
