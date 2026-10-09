@@ -159,3 +159,16 @@ test('legacy signed-session boundary accepts plus-one-second expiry during migra
     assert.equal(valid.status, 200, 'pre-upgrade HMAC session should survive within original expiration');
   } finally { Date.now = original; }
 });
+
+
+test('concurrent logins CAS-register independent devices; global revoke invalidates all of them', async t => {
+  const h = await setup(t);
+  const cookies = await Promise.all(Array.from({ length: 5 }, () => passwordLogin(h)));
+  const ids = cookies.map(cookie => payload(cookie).sid);
+  assert.equal(new Set(ids).size, 5, 'concurrent logins must not overwrite each other');
+  for (const cookie of cookies) assert.equal((await me(h, cookie)).status, 200);
+  assert.equal((await request(h, '/logout-all', { method: 'POST', cookie: cookies[0] })).status, 200);
+  for (const cookie of cookies) assert.equal((await me(h, cookie)).status, 401);
+  const fresh = await passwordLogin(h);
+  assert.equal((await me(h, fresh)).status, 200, 'new generation can sign in after global revoke');
+});
