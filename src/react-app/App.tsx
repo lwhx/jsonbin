@@ -29,7 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FormEvent, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BinDetailPage } from "./features/bins/BinDetailPage";
 import { binHash, binIdFromHash } from "./features/bins/navigation";
 import { CollectionsPage } from "./features/collections/CollectionsPage";
@@ -421,7 +421,16 @@ function AuthenticatedApp({
   const confirm = useConfirm();
   const toast = useToast();
   const [route, setRoute] = useState(() => window.location.hash);
-  const [detailDirty, setDetailDirty] = useState(false);
+  const [detailDirty, setDetailDirtyState] = useState(false);
+  // Browser history events must never read a stale render's dirty flag.
+  // Update the ref as soon as the detail page reports a new value.
+  const detailDirtyRef = useRef(false);
+  const routeRef = useRef(route);
+  const setDetailDirty = useCallback((next: boolean) => {
+    detailDirtyRef.current = next;
+    setDetailDirtyState(next);
+  }, []);
+  useLayoutEffect(() => { routeRef.current = route; }, [route]);
   const section: Section = route.startsWith("#/search") ? "Search" : route.startsWith("#/bins") ? "Bins" : route.startsWith("#/collections") ? "Collections" : route.startsWith("#/schemas") ? "Schemas" : route === "#/keys" ? "Keys" : route === "#/webhooks" ? "Webhooks" : route === "#/analytics" ? "Analytics" : route === "#/trash" ? "Trash" : route === "#/activity" ? "Activity" : route === "#/docs" ? "Docs" : route === "#/mcp" ? "Mcp" : route === "#/settings" ? "Settings" : "Overview";
   const binId = binIdFromHash(route);
   const collectionId = collectionIdFromHash(route);
@@ -450,9 +459,10 @@ function AuthenticatedApp({
     let active = true;
     async function changed() {
       const next = window.location.hash;
-      if (next === route) return;
-      if (detailDirty) {
-        window.history.pushState(null, "", route || window.location.pathname);
+      const currentRoute = routeRef.current;
+      if (next === currentRoute) return;
+      if (detailDirtyRef.current) {
+        window.history.pushState(null, "", currentRoute || window.location.pathname);
         const leave = await confirm({
           title: "放弃未保存的修改？",
           message: "当前页面还有未保存内容，离开后这些修改将丢失。",
@@ -462,15 +472,18 @@ function AuthenticatedApp({
         });
         if (!active || !leave) return;
         setDetailDirty(false);
+        routeRef.current = next;
         setRoute(next);
         window.history.replaceState(null, "", next || window.location.pathname);
         return;
       }
-      setDetailDirty(false); setRoute(next);
+      setDetailDirty(false);
+      routeRef.current = next;
+      setRoute(next);
     }
     window.addEventListener("hashchange", changed);
     return () => { active = false; window.removeEventListener("hashchange", changed); };
-  }, [route, detailDirty, confirm]);
+  }, [confirm, setDetailDirty]);
 
   const health = useQuery({
     queryKey: ["system-health"],
