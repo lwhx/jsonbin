@@ -1,6 +1,7 @@
 interface Env {
   DATA?: R2Bucket;
   CACHE?: KVNamespace;
+  RATE_LIMITER?: DurableObjectNamespace;
 
   APP_ORIGIN?: string;
   ADMIN_USERNAME?: string;

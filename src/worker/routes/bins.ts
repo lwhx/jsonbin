@@ -2,6 +2,7 @@ import { auditRequest } from "../activity";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
+import { readSession } from "../auth/session";
 import { managementSession, readBoundedJson } from "../lib/system-http";
 import { SystemError } from "../../shared/system";
 import { MAX_VALUE_BYTES } from "../../shared/backup";
@@ -98,6 +99,16 @@ const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
     }
     await serve(metadata);
   });
+  // A valid administrator Session must not be charged against the shared
+  // anonymous IP quota. An invalid cookie never grants access.
+  if (c.req.raw.headers.has("Cookie")) {
+    const user = await readSession(c);
+    if (user) {
+      c.set("user", user);
+      c.set("activityIdentity", { actor: { type: "session", id: user.id }, provider: user.provider });
+      return serve(await getBinMetadata(c.env, id));
+    }
+  }
   const metadata = await getBinMetadata(c.env, id);
   if (metadata?.value.visibility === "public") {
     const limited = await limitAnonymousRequest(c.env, c.req.raw);
@@ -762,6 +773,14 @@ const readCurrentBySlug: MiddlewareHandler<{ Bindings: Env; Variables: Variables
   };
   // Explicit credentials keep their authentication and scope semantics on public Bins.
   if (c.req.raw.headers.has("Authorization")) return requireAccess("bin:read")(c, load);
+  if (c.req.raw.headers.has("Cookie")) {
+    const user = await readSession(c);
+    if (user) {
+      c.set("user", user);
+      c.set("activityIdentity", { actor: { type: "session", id: user.id }, provider: user.provider });
+      return load();
+    }
+  }
   const record = await getBinBySlug(c.env, c.req.param("slug")!);
   c.set("bin", record);
   if (record?.meta.visibility === "public") {

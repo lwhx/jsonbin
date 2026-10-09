@@ -25,6 +25,9 @@ import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
 import { applicationOrigin } from "./auth/origin";
 
+// This named export provisions the SQLite-backed Durable Object class.
+export { ApiRateLimiter } from "./storage/rate-limit-do";
+
 type Bindings = Env;
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -107,7 +110,7 @@ app.use(
       return origin === applicationOrigin(c.req.raw, c.env) ? origin : null;
     },
     allowHeaders: ["Content-Type", "Authorization", "If-Match"],
-    exposeHeaders: ["ETag", "X-JSONBin-Version", "X-Request-ID"],
+    exposeHeaders: ["ETag", "X-JSONBin-Version", "X-Request-ID", "Retry-After"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   }),
