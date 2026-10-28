@@ -40,6 +40,8 @@ function decodeCursor(query: ActivityQuery) {
     return value.after;
   } catch { throw new Error('invalid_activity_query'); }
 }
+/** Body fetches per span; the 40-GET budget still bounds the whole request. */
+const ACTIVITY_FETCH_CONCURRENCY = 4;
 export async function listActivity(env: Env, query: ActivityQuery): Promise<ActivityPage> {
   let after = decodeCursor(query);
   const bucket = requireDataBucket(env), items: ActivityEntry[] = [];
@@ -50,27 +52,50 @@ export async function listActivity(env: Env, query: ActivityQuery): Promise<Acti
     nextCursor: more && after ? base64UrlEncode(JSON.stringify({ v: 1, after, action: query.action ?? null, resourceType: query.resourceType ?? null })) : null });
   while (scanned < 1000) {
     const page = await bucket.list({ prefix: 'activity/', cursor, startAfter: cursor ? undefined : after, limit: 200, include: ['customMetadata'] });
-    for (let index = 0; index < page.objects.length; index++) {
-      const object = page.objects[index]; scanned++;
-      // Every scanned key advances the list marker; only canonical keys are read.
-      after = object.key;
-      if (!validKey(object.key)) {
-        if (scanned >= 1000) return result(index < page.objects.length - 1 || page.truncated);
-        continue;
-      }
-      const metadata = object.customMetadata;
-      if ((!query.action || metadata?.action === query.action) && (!query.resourceType || metadata?.resourceType === query.resourceType)) {
-        gets++;
-        const stored = await bucket.get(object.key);
-        if (stored) {
-          let data: unknown;
-          try { data = await stored.json(); } catch { data = null; }
-          const parsed = entrySchema.safeParse(data);
-          if (parsed.success && activityKey(Date.parse(parsed.data.timestamp), parsed.data.id) === object.key
-            && metadata?.action === parsed.data.action && metadata?.resourceType === parsed.data.resourceType) items.push(parsed.data);
+    let spanStart = 0;
+    while (spanStart < page.objects.length) {
+      // Walk one bounded span: gather up to ACTIVITY_FETCH_CONCURRENCY fetch
+      // candidates while applying the same sync stop points as a serial walk
+      // (40 GETs / 1000 scanned keys). The resume cursor only ever advances to
+      // positions whose results have been committed below.
+      const candidates: { index: number; key: string; metadata: Record<string, string> | undefined }[] = [];
+      const scannedAtSpanStart = scanned;
+      let spanEnd = spanStart, syncStopAt = -1;
+      for (; spanEnd < page.objects.length; spanEnd++) {
+        const object = page.objects[spanEnd]; scanned++;
+        // Every scanned key advances the list marker; only canonical keys are read.
+        after = object.key;
+        if (validKey(object.key)) {
+          const metadata = object.customMetadata;
+          if ((!query.action || metadata?.action === query.action) && (!query.resourceType || metadata?.resourceType === query.resourceType)) {
+            gets++;
+            candidates.push({ index: spanEnd, key: object.key, metadata });
+            if (gets >= 40) { syncStopAt = spanEnd; spanEnd++; break; }
+          }
         }
+        if (scanned >= 1000) { syncStopAt = spanEnd; spanEnd++; break; }
       }
-      if (items.length >= limit || gets >= 40 || scanned >= 1000) return result(index < page.objects.length - 1 || page.truncated);
+      const bodies = await Promise.all(candidates.map(candidate => bucket.get(candidate.key)
+        .then(stored => stored ? stored.json().catch(() => null) : null)));
+      for (let position = spanStart; position < spanEnd; position++) {
+        const slot = candidates.findIndex(candidate => candidate.index === position);
+        if (slot >= 0) {
+          const candidate = candidates[slot], data = bodies[slot];
+          if (data != null) {
+            const parsed = entrySchema.safeParse(data);
+            if (parsed.success && activityKey(Date.parse(parsed.data.timestamp), parsed.data.id) === candidate.key
+              && candidate.metadata?.action === parsed.data.action && candidate.metadata?.resourceType === parsed.data.resourceType) items.push(parsed.data);
+          }
+          if (items.length >= limit) {
+            // A mid-span stop must forget keys that were only prefetched ahead of it.
+            scanned = scannedAtSpanStart + (position - spanStart + 1);
+            after = page.objects[position].key;
+            return result(position < page.objects.length - 1 || page.truncated);
+          }
+        }
+        if (position === syncStopAt) return result(position < page.objects.length - 1 || page.truncated);
+      }
+      spanStart = spanEnd;
     }
     if (!page.truncated) return result(false);
     cursor = page.cursor;

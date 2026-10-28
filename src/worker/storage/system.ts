@@ -4,25 +4,43 @@ async function probe(binding: unknown, read: () => Promise<unknown>): Promise<Pr
   if (!binding) return 'unconfigured';
   try { await read(); return 'reachable'; } catch { return 'unavailable'; }
 }
+const STATISTICS_SCAN_LIMIT = 10000;
+const STATISTICS_METADATA_LIMIT = 500;
+const METADATA_READ_CONCURRENCY = 8;
 async function statistics(env: Env): Promise<SystemInfo['statistics']> {
   try {
     if (!env.DATA) throw new Error();
+    const bucket = env.DATA;
+    // Prefix listings run concurrently; the shared scan budget still caps total work.
     const objects: R2Object[] = [];
-    for (const prefix of ['bins/', 'trash/bins/', 'collections/', 'schemas/']) {
+    let overflow = false;
+    await Promise.all(['bins/', 'trash/bins/', 'collections/', 'schemas/'].map(prefix => (async () => {
       let cursor: string | undefined;
-      do { const page = await env.DATA.list({ prefix, cursor, limit: 1000 }); objects.push(...page.objects);
-        if (objects.length > 10000) return { status: 'unavailable', error: 'statistics_limit_exceeded' };
+      do {
+        if (overflow) return;
+        const page = await bucket.list({ prefix, cursor, limit: 1000 });
+        objects.push(...page.objects);
+        if (objects.length > STATISTICS_SCAN_LIMIT) { overflow = true; return; }
         cursor = page.truncated ? page.cursor : undefined;
       } while (cursor);
-    }
+    })()));
+    if (overflow) return { status: 'unavailable', error: 'statistics_limit_exceeded' };
     const metadata = objects.filter(o => /^(?:bins|trash\/bins|collections|schemas)\/[^/]+\/meta\.json$/.test(o.key));
-    if (metadata.length > 500) return { status: 'unavailable', error: 'statistics_limit_exceeded' };
+    if (metadata.length > STATISTICS_METADATA_LIMIT) return { status: 'unavailable', error: 'statistics_limit_exceeded' };
     const data: BusinessStats = { activeBins: 0, trashBins: 0, pendingImports: 0, collections: 0, schemas: 0, versions: 0, currentValueBytes: 0, storedBytes: 0 };
     data.storedBytes = objects.filter(o => /^(?:(?:bins|trash\/bins|collections|schemas)\/[^/]+\/meta\.json|(?:bins\/[^/]+\/versions|schemas\/[^/]+\/revisions)\/\d{6,}\.json)$/.test(o.key)).reduce((sum, o) => sum + o.size, 0);
     const keys = new Set(objects.map(o => o.key));
-    for (const object of metadata) {
-      const record = await env.DATA.get(object.key); if (!record) throw new Error();
-      const meta = await record.json<Record<string, unknown>>();
+    // Metadata bodies are read with bounded concurrency, then folded in listing
+    // order so counters and the missing/invalid "unavailable" outcome match a
+    // sequential walk.
+    const bodies = new Array<Record<string, unknown> | null>(metadata.length).fill(null);
+    for (let start = 0; start < metadata.length; start += METADATA_READ_CONCURRENCY) {
+      const loaded = await Promise.all(metadata.slice(start, start + METADATA_READ_CONCURRENCY)
+        .map(object => bucket.get(object.key).then(record => record ? record.json<Record<string, unknown>>().catch(() => null) : null)));
+      loaded.forEach((body, offset) => { bodies[start + offset] = body; });
+    }
+    for (let index = 0; index < metadata.length; index++) {
+      const object = metadata[index], meta = bodies[index];
       if (!meta || typeof meta !== 'object') throw new Error();
       if (object.key.startsWith('trash/') && keys.has(object.key.slice(6))) continue;
       const prefix = object.key.slice(0, -9);
