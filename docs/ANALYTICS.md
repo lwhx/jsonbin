@@ -39,6 +39,8 @@ JSONBin 提供 API 请求指标分析能力，用于回答：
 - 分桶键示例：`analytics:agg:2026-10-06T04`；
 - 写入使用 `ctx.waitUntil()`，**绝不阻塞或影响业务响应**。
 - 现有生产写入格式为每小时 4 个 KV 分片（兼容更早的非分片小时桶），每个请求进行一次读-改-写。**分片不提供强一致计数**，同一个 KV Key 每秒最多可写一次；高频时统计可能丢失，绝不能作为精确计费或权限控制依据。
+- **健康与认证配置探测的写入优化**：匿名 `GET /api/v1/system/health` 与 `GET /api/v1/auth/config` 且 HTTP 状态为 **200** 时，直接跳过 Analytics KV 读-改-写（每次节省一次 KV 单键读取、一次 KV 写入）。只有这两条**完整匹配**的规范化 Route 适用。Bearer、管理员 Session、已识别 API Key、任何非 200 状态、非 GET 请求和其余业务接口仍按原逻辑记录。API Key 的 `authorizedUses`、`lastAuthorizedAt`、日结及 429/5xx 异常统计不受影响。
+- **统计口径与历史提示**：Dashboard 的请求量是已采集的 API 请求量，**不再包含上述两类成功匿名探测**；上线前旧 KV 分桶会一直保留至其 35 天 TTL 到期，因此跨版本的 7/30 天窗口存在正常的口径切换。若要计算全量 HTTP 探测流量，应以 Cloudflare Worker 请求指标或独立开启的 Analytics Engine 事件为准，勿将当前 Dashboard 数值视为全量边缘流量。高频探测占比不明时不可承诺全站统一节省百分比。
 - **读路径优化**：管理后台查询采用 Cloudflare 原生 KV 批量 `get(keys, "json")`，每批最多 100 个键、并发最多 6 批，并分窗口合并。30 天共 720 小时 ×（4 分片 + 1 个历史桶）= **3,600 个键，最多 36 次批量 KV 读取操作**，避免原来的 3,600 个独立子请求超过 Worker 的 1,000 次操作上限。
 - 批量读取失败时接口仍返回已成功读取的聚合值，但额外返回 `partial: true`；管理后台显示显著提示。缺少 `CACHE` 绑定时同样标记为不完整。**这不是高频写入问题的解决方案**，仅减少查询子请求和内存峰值；KV 读取计费仍按查询的键数量计算。
 
@@ -236,11 +238,15 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
   "ANALYTICS_EVENTS_SHADOW": "1",
   "ANALYTICS_SHADOW_COMPARE": "1",
   "ANALYTICS_SHADOW_DATASET": "jsonbin-api-shadow-preview",
-  "ANALYTICS_SHADOW_STARTED_AT": "2026-10-29T04:00:00.000Z"
+  "ANALYTICS_SHADOW_STARTED_AT": "2026-10-29T04:00:00.000Z",
+  "ANALYTICS_KV_PROBE_FILTER_STARTED_AT": "2026-10-29T04:00:00.000Z"
 }
 ```
 
 - `ANALYTICS_SHADOW_STARTED_AT` 必须填写实际**开启影子写入**的 UTC 时间，不得使用部署前的假日期；否则历史窗口会被误判为可比较。
+- `ANALYTICS_KV_PROBE_FILTER_STARTED_AT` 也必须填写**成功匿名探测写入排除策略实际部署至生产**的 UTC 时间。该值与影子写入开始时间可能不同，不能照抄示例日期。如果未配置或查询窗口包含切换前数据，诊断返回 `coverage=unknown/partial_window`、`comparable=false`、`deltas=null`；避免把过去包含探测流量的 KV 桶拿来与新口径 SQL 比对。
+- SQL 对照查询会过滤与 KV 相同的成功匿名 `GET /system/health`、`GET /auth/config` 事件，但 Analytics Engine 底层 **原始事件仍保留**它们；Cloudflare Studio 可查看完整探测流量。该过滤只影响只读 SQL 诊断，不影响生产鉴权、API Key 日结和异常状态监控。
+
 - 正式生产数据集为 `jsonbin-api-shadow-prod`。SQL 数据集标识符由代码白名单固定，不接受查询参数或任意配置字符串拼接；Preview 不得指向生产数据集。
 - 只使用当前 Cloudflare 官方 `analytics` SQL binding（Wrangler 4.145.0+），**不需要向 Worker 提供 Analytics API Token**。
 - **注意两个 SQL API 采样规则不同**：本项目使用新 Analytics SQL binding（`events.analyticsEngine.*`），`COUNT(*)`、`SUM(double2)`、`countIf(...)` 已由 SQL API 自动执行采样加权；只有 P95 使用 `quantileWeighted(0.95, double2, sampleInterval)` 传入显式权重。不得套用旧 Analytics Engine SQL API 的 `SUM(_sample_interval * ...)`，否则可能重复加权。KV 的 P95 是固定直方图分桶上界，和 Engine 加权分位数并不完全等价。

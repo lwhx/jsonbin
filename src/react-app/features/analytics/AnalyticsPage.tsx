@@ -35,7 +35,7 @@ export function AnalyticsPage() {
         <div>
           <span className="eyebrow">可观测性</span>
           <h1>API 请求分析</h1>
-          <p>实时监控接口吞吐量、响应延迟、状态码分布与热点端点。严格遵循隐私底线，不采集任何请求正文与凭据。</p>
+          <p>实时监控已采集接口请求量、响应延迟、状态码分布与热点端点。成功的匿名健康检查及认证配置探测不计入 KV 统计；历史分桶在过期前沿用原口径。不采集请求正文与凭据。</p>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
           {(["1h", "24h", "7d", "30d"] as const).map((r) => (
@@ -76,7 +76,7 @@ export function AnalyticsPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "20px" }}>
             <div className="panel" style={{ padding: "16px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)", fontSize: "13px" }}>
-                <span>总请求量</span>
+                <span>已统计请求量</span>
                 <Activity size={16} />
               </div>
               <h2 style={{ fontSize: "24px", margin: "8px 0 0 0" }}>{overview.totalRequests.toLocaleString()}</h2>

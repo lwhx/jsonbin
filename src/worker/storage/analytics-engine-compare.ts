@@ -13,6 +13,8 @@ export type ShadowCompareEnv = Env & {
   ANALYTICS_SHADOW_COMPARE?: string;
   ANALYTICS_SHADOW_DATASET?: string;
   ANALYTICS_SHADOW_STARTED_AT?: string;
+  // Actual UTC time the KV probe exclusion first reached production.
+  ANALYTICS_KV_PROBE_FILTER_STARTED_AT?: string;
   ANALYTICS_EVENTS_SHADOW?: string;
 };
 
@@ -90,7 +92,14 @@ export async function compareShadowAnalytics(
   const params = { start, end };
   // Identifiers come ONLY from the literal whitelist. Never interpolate any
   // request input or arbitrary config values into SQL.
-  const clause = `FROM ${dataset} WHERE timestamp >= $start AND timestamp < $end AND index1 = 'jsonbin'`;
+  // Match the KV write-side policy: anonymous successful infrastructure
+  // probes remain visible as raw shadow events, but not in KV-vs-SQL metrics.
+  // This predicate is all constant SQL and never takes caller-controlled
+  // identifiers, slugs, credentials, or arbitrary configuration text.
+  const clause = `FROM ${dataset} WHERE timestamp >= $start AND timestamp < $end
+    AND index1 = 'jsonbin'
+    AND NOT (blob1 = 'GET' AND blob3 = '200' AND blob4 = 'anonymous'
+      AND blob6 = '0' AND blob2 IN ('/api/v1/system/health', '/api/v1/auth/config'))`;
   // Cloudflare's NEW Analytics SQL API automatically weights COUNT/SUM/countIf
   // for sampled events. Do NOT multiply by _sample_interval (that convention
   // belongs to the separate, legacy Analytics Engine SQL endpoint). Weighted
@@ -125,10 +134,16 @@ export async function compareShadowAnalytics(
 
   const startedMs = typeof env.ANALYTICS_SHADOW_STARTED_AT === "string"
     ? Date.parse(env.ANALYTICS_SHADOW_STARTED_AT) : NaN;
-  // An explicit start timestamp is mandatory before a full-window comparison
-  // can be considered meaningful. Shadow ingestion can still lag behind KV.
-  const coverage = !Number.isFinite(startedMs) || startedMs > nowMs
-    ? "unknown" : startedMs <= startMs ? "full_window" : "partial_window";
+  const kvPolicyStartedMs = typeof env.ANALYTICS_KV_PROBE_FILTER_STARTED_AT === "string"
+    ? Date.parse(env.ANALYTICS_KV_PROBE_FILTER_STARTED_AT) : NaN;
+  // A complete comparison requires BOTH full shadow ingestion and a full KV
+  // window under the same probe-exclusion policy. Old 35-day KV buckets
+  // include successful probes and cannot safely be compared to filtered SQL.
+  // Set these markers only to actual UTC rollout times; never guess.
+  const coverage = !Number.isFinite(startedMs) || startedMs > nowMs ||
+    !Number.isFinite(kvPolicyStartedMs) || kvPolicyStartedMs > nowMs
+    ? "unknown" : Math.max(startedMs, kvPolicyStartedMs) <= startMs
+      ? "full_window" : "partial_window";
   const baseline = {
     range, start, end, legacy,
     coverage,
