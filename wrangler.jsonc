@@ -60,7 +60,19 @@
       }
     ],
     "vars": {
-      "ADMIN_USERNAME": "preview-admin"
+      "ADMIN_USERNAME": "preview-admin",
+      "ANALYTICS_EVENTS_SHADOW": "1",
+      "ANALYTICS_SHADOW_COMPARE": "1",
+      "ANALYTICS_SHADOW_DATASET": "jsonbin-api-shadow-pr20"
+    },
+    "analytics_engine_datasets": [
+      {
+        "binding": "ANALYTICS_EVENTS",
+        "dataset": "jsonbin-api-shadow-pr20"
+      }
+    ],
+    "analytics": {
+      "binding": "ANALYTICS_SQL"
     }
   }
 }

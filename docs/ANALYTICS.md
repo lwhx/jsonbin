@@ -250,3 +250,19 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
 - 单次 SQL 诊断最多执行三个只读 SELECT（总览、状态码、最多 150 个热门 Endpoint）。没有常规后台自动轮询该诊断接口，避免额外查询成本。
 
 建议先在独立 Preview 环境使用真实数据验证 SQL 方言、数据集可读性、指标一致性及成本，确认后再独立设计历史拼接和 Key 结算的切换策略。请勿同时修改线上 KV 写入路径。
+
+### Preview-only integration experiment (PR20; never deploy these settings to production)
+
+This branch changes only `previews` config: it binds `ANALYTICS_EVENTS` to `jsonbin-api-shadow-pr20`, adds read-only `ANALYTICS_SQL`, and enables shadow instrumentation and comparison **only for Worker Previews**. Top-level production config remains unchanged. The branch is intentionally an experiment; do not merge its Preview overrides into `main`.
+
+Manual runtime validation after the Cloudflare Preview build succeeds:
+
+1. Open Cloudflare Workers > jsonbin > Previews > `test/analytics-engine-preview-validation`. Confirm Preview's `ANALYTICS_EVENTS` dataset is **jsonbin-api-shadow-pr20**, that `ANALYTICS_SQL` is present, and no production R2/KV resources are bound. Do not reuse production sessions or secrets in Preview.
+2. Make several anonymous requests to Preview `/api/v1/auth/config` and `/api/v1/system/health` to generate safe shadow events. Analytics Engine datasets are created on the first write, and queries may show ingestion delay.
+3. Authenticate to Preview using a dedicated Preview administrator credential (configure Preview secret separately if missing). Check that `GET /api/v1/analytics/shadow-compare?range=1h` returns `shadow.available: true` and non-zero `shadow.overview.totalRequests`; check that Bearer and anonymous access both return 401.
+4. The Preview intentionally has no production KV binding. Therefore `legacy.partial: true` and `comparable: false` are **expected**, not a regression. To measure real KV-vs-Engine divergence later, use a separately approved, read-only historical snapshot and a controlled environment; NEVER connect this Preview to production's writable KV namespace.
+5. The shadow startup timestamp is deliberately absent. `coverage: unknown` is expected until the genuine first-write UTC time is recorded in `ANALYTICS_SHADOW_STARTED_AT` for a future comparison window. Do not invent a start date to force full coverage.
+6. Collect actual SQL query results, read latency/rows/bytes, sampled-rate behavior, and Analytics Engine write/query costs. Validate that `COUNT(*)` and `SUM(double2)` are automatically sampling-adjusted by the **new** Analytics SQL API. The older Analytics Engine SQL API's `_sample_interval` formulas must not be used here.
+7. Roll back by removing the Preview-specific `analytics`, `analytics_engine_datasets` and shadow vars, or disabling the two Preview flags. Production bindings, KV reads, Key usage settlement and R2 records are unaffected.
+
+**Completion gate:** Cloudflare Preview build success alone is insufficient: authenticated real SQL query and dataset isolation must be observed before declaring a real-data pass.

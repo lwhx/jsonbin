@@ -18,6 +18,8 @@ export type ShadowCompareEnv = Env & {
 
 const ALLOWED_DATASETS: Record<string, string> = {
   "jsonbin-api-shadow-preview": 'events.analyticsEngine."jsonbin-api-shadow-preview"',
+  // One-off test dataset scoped to PR20; never configured in production.
+  "jsonbin-api-shadow-pr20": 'events.analyticsEngine."jsonbin-api-shadow-pr20"',
   "jsonbin-api-shadow-prod": 'events.analyticsEngine."jsonbin-api-shadow-prod"',
 };
 const RANGES: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168, "30d": 720 };
