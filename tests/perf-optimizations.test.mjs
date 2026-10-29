@@ -48,7 +48,14 @@ test('analytics route classification cannot generate unbounded keys from arbitra
 function fakeKv() {
   const values = new Map();
   return {
-    async get(key, type) { const raw = values.get(key) ?? null; return type === 'json' && raw ? JSON.parse(raw) : raw; },
+    async get(key, type) {
+      const read = k => {
+        const raw = values.get(k) ?? null;
+        return type === 'json' && raw ? JSON.parse(raw) : raw;
+      };
+      if (Array.isArray(key)) return new Map(key.map(k => [k, read(k)]));
+      return read(key);
+    },
     async put(key, value) { values.set(key, value); },
   };
 }
