@@ -413,26 +413,41 @@ test('SEC-002 idle DO alarm safely delays active cleanup and reclaims stale SQLi
     body: JSON.stringify({ limit: 1 }),
   }))).json();
 
-  assert.equal((await consume()).allowed, true);
-  const firstAlarm = alarmTime;
-  assert.ok(firstAlarm > Date.now() + 30_000 && firstAlarm <= Date.now() + 120_000);
-  assert.equal((await consume()).allowed, false);
-  assert.equal(alarmTime, firstAlarm, 'rate-limited requests do not rewrite the alarm');
+  // The limiter reads the wall clock in both fetch and alarm paths. A fast
+  // runner can evaluate two of those reads inside one millisecond, which once
+  // made "recent activity reschedules" compare equal timestamps; drive the
+  // clock explicitly so every scheduling decision is deterministic.
+  let fakeNow = 1_700_000_000_000;
+  const realNow = Date.now;
+  Date.now = () => fakeNow;
+  try {
+    assert.equal((await consume()).allowed, true);
+    const firstAlarm = alarmTime;
+    assert.ok(firstAlarm > fakeNow + 30_000 && firstAlarm <= fakeNow + 120_000);
+    assert.equal((await consume()).allowed, false);
+    assert.equal(alarmTime, firstAlarm, 'rate-limited requests do not rewrite the alarm');
 
-  await limiter.alarm();
-  assert.equal(serializedAlarms, 1);
-  assert.equal(deleteCount, 0, 'current-window quota is not cleared by an alarm');
-  assert.ok(alarmTime > firstAlarm, 'recent activity reschedules a cleanup alarm');
-  assert.equal((await consume()).allowed, false, 'active quota remains authoritative');
+    // Advance 25s: stays inside the same quota window (the fixed epoch begins
+    // 20s into it) while guaranteeing the rescheduled alarm is strictly later.
+    fakeNow += 25_000;
+    await limiter.alarm();
+    assert.equal(serializedAlarms, 1);
+    assert.equal(deleteCount, 0, 'current-window quota is not cleared by an alarm');
+    assert.equal(alarmTime, fakeNow + 120_000);
+    assert.ok(alarmTime > firstAlarm, 'recent activity reschedules a cleanup alarm');
+    assert.equal((await consume()).allowed, false, 'active quota remains authoritative');
 
-  // Simulate a persisted counter from an identity not used in five minutes.
-  windowId = Math.floor(Date.now() / 60_000) - 5;
-  await limiter.alarm();
-  assert.equal(serializedAlarms, 2);
-  assert.equal(deleteCount, 1, 'idle cleanup calls deleteAll to reclaim DB metadata');
-  assert.equal(alarmTime, null);
-  assert.equal(tableExists, false);
-  assert.equal((await consume()).allowed, true, 'new traffic recreates a fresh table after cleanup');
-  assert.equal(tableCreations, 2);
-  assert.ok(alarmTime > Date.now(), 'new table schedules the next idle cleanup alarm');
+    // Simulate a persisted counter from an identity not used in five minutes.
+    windowId = Math.floor(fakeNow / 60_000) - 5;
+    await limiter.alarm();
+    assert.equal(serializedAlarms, 2);
+    assert.equal(deleteCount, 1, 'idle cleanup calls deleteAll to reclaim DB metadata');
+    assert.equal(alarmTime, null);
+    assert.equal(tableExists, false);
+    assert.equal((await consume()).allowed, true, 'new traffic recreates a fresh table after cleanup');
+    assert.equal(tableCreations, 2);
+    assert.ok(alarmTime > fakeNow, 'new table schedules the next idle cleanup alarm');
+  } finally {
+    Date.now = realNow;
+  }
 });
