@@ -3,7 +3,7 @@
  * Never used for authentication, rate limits, billing, API Key usage settlement
  * or the management dashboard's normal /overview response.
  */
-import { normalizeRoute, queryAnalytics } from "./analytics";
+import { normalizeRoute, queryAnalytics } from "./analytics.ts";
 
 type QueryRow = Record<string, unknown>;
 type SqlResult = { data: QueryRow[]; rows: number; statistics?: { elapsed_ms?: number; rows_read?: number; bytes_read?: number } };
