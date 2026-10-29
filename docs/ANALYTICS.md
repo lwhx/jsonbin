@@ -272,3 +272,19 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
 - **成本权衡**：影子开启后每次有效 Key 调用增加一笔 DO RPC 和 SQLite 写入成本；请先通过 CI/Preview 及账单验证，不要在未完成迁移时为节省 KV 而直接打开。关闭 `KEY_USAGE_DO_SHADOW` 可立即停止新写入，KV 旧逻辑始终独立可用。
 
 测试覆盖大量并发同 Key 累加、不同 Key 隔离、跨 UTC 零点、异常输入过滤、HTTP 401/403/429 排除和 DO 故障回退。生产发布门槛：CI Node、Playwright、Wrangler dry-run、Cloudflare Preview 与生产构建全部正常，且不更改原有 Key 结算源。
+
+### P24：影子计数事件幂等与有限失败重试
+
+P22 的 SQLite DO 已能对每次成功提交的事件原子累加，但 **RPC 响应丢失** 时，直接重试可能导致重复计数；另一方面，单次异步投递错误可能丢失事件。
+
+本阶段在仍默认关闭的 `KEY_USAGE_DO_SHADOW=1` 通道上增加以下防护：
+
+- Worker 为每个 API 请求生成不可由客户端覆盖的 UUIDv4（同一服务端 `X-Request-ID`），并只把 `{ timestamp, eventId }` 发送到对应 API Key 的内部 DO。API Key ID 仅用于选择 DO 实例，不进入事件表字段，也不在失败日志中输出。
+- 每个 Key 的 SQLite `usage_event_ids(event_id PRIMARY KEY, utc_day, timestamp)` 与 `daily_key_usage` 计数聚合在**同一个 `transactionSync`** 完成。第一次调用累计一次；同一 UUID + 同一时间戳重试返回 `deduplicated=true`、不再次计数；同一 UUID + 不同时间戳返回 HTTP 409，数据不变。
+- 仅对异常网络响应、HTTP 429 或 5xx 做最多 **3 次总尝试**、固定短退避（0/30/120ms）；HTTP 400/409/422 等确定性错误不重试。所有重试复用同一个 JSON 负载，不因失去确认而再次生成 ID。失败日志为固定 `key_usage_shadow_delivery_failed` 和有限错误类别、尝试次数，不记录 Key ID、Token、事件 UUID、原始异常。
+- 为限制无限增长，去重表与日计数数据均保留 35 天并通过 DO alarm 清理；过期超过 35 天、超前超过 5 分钟的事件直接返回 422，杜绝已删除去重记录的历史重放复活。使用范围限制而非主观猜测历史封账。
+- **生产默认仍关闭**；既有 KV `authorizedUses`、R2 CAS 日结、限流和 API 成功响应都不受影响。读/写计数来源仍是 KV。只在 Preview 隔离环境显式开启后才会产生额外 DO 调用和 SQLite 存储成本。
+
+**明确限制：这仍不是零丢失或财务级 exactly-once。** `waitUntil()` 有执行截止期限；如果 Worker 在把第一条事件可靠投递前终止，简单重试无法找回数据。下一小阶段必须引入可持久化的队列/Outbox（例如 Cloudflare Queues，并明确启用成本及消费端）和可观测 DLQ，完成“写入已持久化 → 可重放 → 按 Key 结算”全链路验证后才可替代 KV 的 API Key 用量来源。
+
+- **上线检查**：GitHub Node+Playwright 全套、Wrangler dry-run、Cloudflare Preview 构建全部通过；真实 Preview 双写压测必须验证同 Key 并发、重放、强制失败、跨日边界、R2 日结保持不变。若未真正开启 Preview 影子开关，测试只能证明本地 Miniflare 行为而不是 Cloudflare 平台端真实写入。

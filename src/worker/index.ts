@@ -90,7 +90,7 @@ app.use("/api/*", async (c, next) => {
   // error cannot change the response or existing KV/R2 usage bookkeeping.
   const shadowUsage = c.req.method !== "OPTIONS" && c.env.KEY_USAGE_DO_SHADOW === "1" &&
     point.authType === "api_key" && point.qualifiedKeyUse
-    ? recordKeyUsageShadow(c.env, point)
+    ? recordKeyUsageShadow(c.env, point, requestId)
     : null;
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
