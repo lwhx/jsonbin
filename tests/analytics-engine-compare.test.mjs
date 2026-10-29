@@ -89,6 +89,20 @@ test('management-only diagnostics use weighted SQL and preserve the existing KV 
     assert.match(query, /events\.analyticsEngine\."jsonbin-api-shadow-preview"/);
     assert.match(query, /timestamp >= \$start AND timestamp < \$end/);
     assert.match(query, /index1 = 'jsonbin'/);
+    // New Analytics SQL API auto-applies sample weights to COUNT and SUM.
+    // Multiplying by _sample_interval again would inflate production counts.
+    assert.doesNotMatch(query, /_sample_interval/i);
+    assert.doesNotMatch(query, /sumIf\(/i);
+    if (query.includes('AS totalRequests')) {
+      assert.match(query, /COUNT\(\*\) AS totalRequests/);
+      assert.match(query, /SUM\(double2\) AS totalDurationMs/);
+    }
+    if (query.includes('AS p95DurationMs')) {
+      assert.match(query, /quantileWeighted\(0\.95, double2, sampleInterval\)/);
+    }
+    if (query.includes('AS errors')) {
+      assert.match(query, /countIf\(toUInt32\(blob3\) >= 400\) AS errors/);
+    }
     assert.ok(Date.parse(params.start) <= Date.now());
     assert.ok(Date.parse(params.end) > Date.parse(params.start));
     assert.doesNotMatch(query, /HIDDEN_CANARY|Bearer|Authorization|Cookie|DROP TABLE/);
