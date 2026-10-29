@@ -58,7 +58,9 @@ export async function recordKeyUsageShadow(
   }
 
   let reason = "unknown";
+  let attemptsUsed = 0;
   for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt++) {
+    attemptsUsed = attempt + 1;
     if (attempt > 0) {
       await new Promise<void>(resolve => setTimeout(resolve, RETRY_BACKOFF_MS[attempt]));
     }
@@ -81,7 +83,7 @@ export async function recordKeyUsageShadow(
   }
   // Deliberately no Key ID, token, event ID or raw exception text in logs.
   console.warn("key_usage_shadow_delivery_failed", {
-    reason, attempts: reason === "invalid_or_conflicting_event" ? 1 : RETRY_BACKOFF_MS.length,
+    reason, attempts: attemptsUsed,
   });
   return false;
 }
