@@ -6,10 +6,10 @@
  * All test events use synthetic Key UUIDs. No production KV, DATA R2,
  * credentials or external business routes are bound to this Worker.
  */
-import { parseQueuedKeyUsageEvent, consumeKeyUsageEvents, archiveKeyUsageDeadLetters } from "./storage/key-usage-queue";
-import { readKeyUsageShadow } from "./storage/key-usage-do-shadow";
+import { parseQueuedKeyUsageEvent, consumeKeyUsageEvents, archiveKeyUsageDeadLetters } from "./storage/key-usage-queue.ts";
+import { readKeyUsageShadow } from "./storage/key-usage-do-shadow.ts";
 
-export { ApiKeyUsageCounter } from "./storage/key-usage-do";
+export { ApiKeyUsageCounter } from "./storage/key-usage-do.ts";
 
 type StagingEnv = Env & {
   KEY_USAGE_STAGING_MODE?: string;
