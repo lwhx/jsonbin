@@ -58,17 +58,22 @@ export async function waitForProductionBuild(options) {
   const { attempts = 42, intervalMs = 10000, sleep = ms => new Promise(r => setTimeout(r, ms)) } = options;
   let last = { state: 'missing', previewCount: 0, url: null };
   let failureStreak = 0;
+  let successStreak = 0;
   for (let i = 1; i <= attempts; i++) {
     last = await fetchGitHubChecks(options);
     console.log(`Cloudflare production build check ${i}/${attempts}: ${last.state} (preview-only checks: ${last.previewCount})`);
-    if (last.state === 'success') return last;
+    // Early Cloudflare checks can temporarily point to /production/builds/
+    // before the final branch-specific Preview URL is attached. Require three
+    // consecutive successful production-path observations before accepting.
+    successStreak = last.state === 'success' ? successStreak + 1 : 0;
+    if (successStreak >= 3) return last;
     // Cloudflare sometimes posts an early failed placeholder before the real
     // check starts. It must remain failed for >= 90 seconds before we stop.
     failureStreak = last.state === 'failure' ? failureStreak + 1 : 0;
     if (failureStreak >= 9) return last;
     if (i < attempts) await sleep(intervalMs);
   }
-  return last;
+  return last.state === 'success' ? { ...last, state: 'unconfirmed' } : last;
 }
 
 async function main() {
