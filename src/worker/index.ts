@@ -19,7 +19,8 @@ import mcpRoutes from "./routes/mcp";
 import { generateOpenApiSpec } from "../shared/openapi";
 import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
-import { recordAnalytics, normalizeRoute } from "./storage/analytics";
+import { recordAnalytics, normalizeRoute, type AnalyticsDataPoint } from "./storage/analytics";
+import { shadowAnalyticsEvent } from "./storage/analytics-engine-shadow";
 import { settleRecentKeyUsage } from "./storage/key-usage";
 import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
@@ -65,18 +66,22 @@ app.use("/api/*", async (c, next) => {
   // CORS preflights are browser infrastructure, not business requests: one
   // precedes every cross-origin write and carries no dashboard signal, so
   // recording them would double analytics KV traffic for pure noise.
+  const point: AnalyticsDataPoint = {
+    timestamp: new Date().toISOString(),
+    method: c.req.method,
+    route,
+    status,
+    durationMs,
+    authType,
+    keyId,
+    qualifiedKeyUse: Boolean(authenticatedKey) && ![401, 403, 429].includes(status),
+  };
+  // Shadow only: opt-in Analytics Engine event does not affect authoritative
+  // KV rollups, daily Key usage settlement or API business responses.
+  if (c.req.method !== "OPTIONS") shadowAnalyticsEvent(c.env, point);
   const record = c.req.method === "OPTIONS"
     ? null
-    : recordAnalytics(c.env, {
-        timestamp: new Date().toISOString(),
-        method: c.req.method,
-        route,
-        status,
-        durationMs,
-        authType,
-        keyId,
-        qualifiedKeyUse: Boolean(authenticatedKey) && ![401, 403, 429].includes(status),
-      }).catch(() => {});
+    : recordAnalytics(c.env, point).catch(() => {});
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
