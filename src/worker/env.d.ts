@@ -5,6 +5,7 @@ interface Env {
   KEY_USAGE_COUNTER?: DurableObjectNamespace;
   KEY_USAGE_DO_SHADOW?: string;
   KEY_USAGE_QUEUE_SHADOW?: string;
+  KEY_USAGE_CONSUMER_ENABLED?: string;
   KEY_USAGE_EVENTS_QUEUE?: Queue<import('./storage/key-usage-queue').QueuedKeyUsageEvent>;
   KEY_USAGE_DLQ_ARCHIVE?: R2Bucket;
 
