@@ -256,3 +256,19 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
 - 单次 SQL 诊断最多执行三个只读 SELECT（总览、状态码、最多 150 个热门 Endpoint）。没有常规后台自动轮询该诊断接口，避免额外查询成本。
 
 建议先在独立 Preview 环境使用真实数据验证 SQL 方言、数据集可读性、指标一致性及成本，确认后再独立设计历史拼接和 Key 结算的切换策略。请勿同时修改线上 KV 写入路径。
+
+### P22：独立 SQLite Durable Object API Key 使用量影子计数（默认关闭）
+
+现行 `analytics:agg:<hour>:<shard>` KV 读-改-写不是原子操作。高并发的两个 Worker 可能基于同一旧值覆盖彼此，故 Dashboard 的 Key 用量、`authorizedUses`、R2 日结仍只属于**近似使用量**，不能当作严格计费记录。
+
+本阶段声明独立的 `ApiKeyUsageCounter` SQLite Durable Object，绑定名称 `KEY_USAGE_COUNTER`。**每个 API Key UUID 对应一个独立 DO**；与 `ApiRateLimiter` 完全分离，因后者会清理空闲限流状态，不得存放长周期用量。
+
+- **生产/Preview 默认均关闭**：`KEY_USAGE_DO_SHADOW` 未设置为字符串 `"1"` 时，Worker 不向用量 DO 发送 RPC。两种环境分别使用自己的 Worker Preview namespace。配置内仅增加独立 DO class/export/binding，不新增任何 Secret、不访问生产 KV Preview。
+- 仅当实际鉴权成功、路由完成后 `qualifiedKeyUse=true`，才以 `ctx.waitUntil()` 异步写一条内部 `POST /usage/increment`，内容只有服务器生成的 UTC ISO 时间戳。401/403/429、匿名、Session、畸形 Key ID 等不会写；HTTP 500 如被现行 `qualifiedKeyUse` 口径认定为有效使用，也会写入，保持与原 KV 语义一致。
+- DO 使用 `INSERT ... ON CONFLICT(utc_day) DO UPDATE SET authorized_uses=authorized_uses+1`，同一 Key 的并发增长由 SQLite 事务串行化，避免 KV 上丢失更新。另保存最新 `last_authorized_at`。提供**仅内部 stub 可访问**的 `GET /usage/day/YYYY-MM-DD` 读取，未增加任何对外 API 或管理员路由。
+- 每个 DO 通过 alarm 清理超过 35 天的记录；没有记录时删除 SQLite 实例数据。DO 原始计数不会携带 Token、Cookie、IP、请求体或 Bin 内容。
+- **不做来源切换**：`recordAnalytics`、`readDailyKeyUsage`、`settleRecentKeyUsage`、R2 CAS checkpoint、原 Dashboard/Top Keys 全部不变。新 DO 失败一律 best-effort 忽略，不改变授权、限流和 API 响应。该阶段**不会减少** API Key 的 KV 写入；只有将来明确切换读/日结来源才能节省 KV 成本。
+- **不能声称已达到财务级精确计费**：虽然单个 DO 的已接受 UPSERT 不会因并发丢失，但异步 `waitUntil` 失败可能漏计，当前影子接口也没有事件幂等去重；不要自动重试可能已提交但丢失响应的 RPC。升级为正式结算来源前，须增加请求事件幂等键、跨 UTC 日的延迟事件封账与可重放/对账、R2 checkpoint 迁移策略、KV 历史拼接、故障告警，以及实际 Preview/生产成本和配额验收。
+- **成本权衡**：影子开启后每次有效 Key 调用增加一笔 DO RPC 和 SQLite 写入成本；请先通过 CI/Preview 及账单验证，不要在未完成迁移时为节省 KV 而直接打开。关闭 `KEY_USAGE_DO_SHADOW` 可立即停止新写入，KV 旧逻辑始终独立可用。
+
+测试覆盖大量并发同 Key 累加、不同 Key 隔离、跨 UTC 零点、异常输入过滤、HTTP 401/403/429 排除和 DO 故障回退。生产发布门槛：CI Node、Playwright、Wrangler dry-run、Cloudflare Preview 与生产构建全部正常，且不更改原有 Key 结算源。
