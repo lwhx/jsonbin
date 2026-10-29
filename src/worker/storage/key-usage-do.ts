@@ -44,7 +44,11 @@ export class ApiKeyUsageCounter {
   private tableReady = false;
   private alarmKnown = false;
 
-  constructor(private readonly state: DurableObjectState, _env: Env) {}
+  private readonly state: DurableObjectState;
+
+  constructor(state: DurableObjectState, _env: Env) {
+    this.state = state;
+  }
 
   private ensureTable() {
     if (this.tableReady) return;
