@@ -37,6 +37,9 @@ jobs:
       - name: Validate Cloudflare deployment configuration (dry-run)
         run: npx wrangler deploy --dry-run --outdir .wrangler/sec002-check
 
+      - name: Validate isolated P24b Queue staging configuration (dry-run)
+        run: npx wrangler deploy --config wrangler.usage-staging.jsonc --dry-run --outdir .wrangler/p24b-staging-check
+
       - name: Test
         run: npm run build:sdk && npm run build:mcp && npm run test:only
 
