@@ -5,8 +5,8 @@
  * settlement, or any business response. One Key + UTC day per request bounds
  * the cost. A matching KV/DO count is NOT evidence of complete Queue delivery.
  */
-import { readDailyKeyUsage } from "./key-usage-read";
-import { readKeyUsageShadow } from "./key-usage-do-shadow";
+import { readDailyKeyUsage } from "./key-usage-read.ts";
+import { readKeyUsageShadow } from "./key-usage-do-shadow.ts";
 
 const KEY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
