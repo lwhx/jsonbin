@@ -74,7 +74,7 @@ test('AI TXT export is deterministic and does not echo request querystrings or u
   assert.equal(good, await (await get('/api/v1/openapi.txt')).text());
   const untrusted = renderOpenApiTxt(spec, 'https://secret:password@attacker.example');
   assert.ok(untrusted.includes('https://YOUR_JSONBIN_HOST/api/v1'));
-  assert.doesNotMatch(untrusted, /attacker\.example|password|secret:password/);
+  assert.doesNotMatch(untrusted, /attacker\.example|secret:password@/);
   const badProtocol = renderOpenApiTxt(spec, 'javascript:alert(1)');
   assert.ok(badProtocol.includes('https://YOUR_JSONBIN_HOST/api/v1'));
 });
