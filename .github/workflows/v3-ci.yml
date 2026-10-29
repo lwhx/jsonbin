@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      # Temporary branch-only CI for the stacked PR20 Preview experiment.
+      - test/analytics-engine-preview-validation
   pull_request:
     branches:
       - main
