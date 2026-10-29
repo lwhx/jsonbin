@@ -91,6 +91,18 @@ export function generateOpenApiSpec(): Record<string, unknown> {
       "/openapi.json": {
         get: op("获取 OpenAPI 规范", { security: PUBLIC, responses: ok("OpenAPI 3.1 文档") }),
       },
+      "/openapi.txt": {
+        get: op("下载 AI 易读的 API 使用指南 TXT", {
+          security: PUBLIC,
+          description: "根据当前 OpenAPI 3.1 规范生成 UTF-8 纯文本，包含功能概览、鉴权与 Scope、ETag、安全约束、接口参数、请求体 Schema、状态码和 curl 示例。公开下载，不会导出任何真实凭据或用户业务数据。",
+          responses: {
+            "200": {
+              description: "TXT 文件下载，filename=jsonbin-api-guide.txt",
+              content: { "text/plain": { schema: { type: "string" } } },
+            },
+          },
+        }),
+      },
       "/system/health": {
         get: op("系统健康状态检查", { security: PUBLIC, responses: ok("健康运行中，含版本与存储绑定状态") }),
       },

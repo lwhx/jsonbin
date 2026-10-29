@@ -17,6 +17,7 @@ import webhookRoutes from "./routes/webhooks";
 import analyticsRoutes from "./routes/analytics";
 import mcpRoutes from "./routes/mcp";
 import { generateOpenApiSpec } from "../shared/openapi";
+import { renderOpenApiTxt } from "../shared/openapi-txt";
 import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute, type AnalyticsDataPoint } from "./storage/analytics";
@@ -155,6 +156,20 @@ app.route("/api/v1/mcp", mcpRoutes);
 
 app.get("/api/v1/openapi.json", (c) => {
   return c.json(generateOpenApiSpec());
+});
+
+/**
+ * Public, on-demand AI-readable export of the same OpenAPI contract.
+ * No user content, keys, cookies or runtime secrets are used by the renderer.
+ */
+app.get("/api/v1/openapi.txt", (c) => {
+  const text = renderOpenApiTxt(generateOpenApiSpec(), new URL(c.req.url).origin);
+  return c.body(text, 200, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Disposition": 'attachment; filename="jsonbin-api-guide.txt"',
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
 });
 
 app.get("/api/v1/system/health", (c) => {

@@ -100,6 +100,7 @@ const KNOWN_ROUTES = new Set([
   "/mcp/message",
   "/mcp/sse",
   "/openapi.json",
+  "/openapi.txt",
   "/schemas",
   "/schemas/:id",
   "/schemas/:id/validate",

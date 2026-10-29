@@ -60,3 +60,27 @@ test('JSON 草稿在 API 页签往返保持，移动端示例和复制不泄露�
   await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'切换明暗主题'}).click();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('tab',{name:'编辑器',exact:true}).click();await expect(page.locator('.monaco-editor')).toContainText(draft);await expect(page.getByRole('button',{name:'保存 JSON',exact:true})).toBeEnabled();
 });
+
+test('开发者可下载给 AI 阅读的 TXT，覆盖实际接口且不带任何业务数据', async ({page}) => {
+  await page.goto('/#/docs');
+  const exportLink = page.getByRole('link', {name: '导出 API 文档 TXT（给 AI）'});
+  await expect(exportLink).toBeVisible();
+  await expect(exportLink).toHaveAttribute('href', '/api/v1/openapi.txt');
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    exportLink.click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('jsonbin-api-guide.txt');
+
+  const response = await page.request.get('/api/v1/openapi.txt');
+  expect(response.status()).toBe(200);
+  expect(response.headers()['content-type']).toContain('text/plain');
+  expect(response.headers()['content-disposition']).toContain('jsonbin-api-guide.txt');
+  const guide = await response.text();
+  expect(guide).toContain('AI 可读 API 使用指南');
+  expect(guide).toContain('/api/v1/bins');
+  expect(guide).toContain('If-Match');
+  expect(guide).toContain('Bearer API Key');
+  await page.getByRole('button', {name: 'OpenAPI 3.1'}).click();
+  await expect(exportLink).toBeVisible();
+});
