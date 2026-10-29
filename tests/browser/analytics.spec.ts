@@ -29,7 +29,8 @@ test('API 分析页展示真实聚合指标，支持时间范围切换与手机�
   await expect(page).toHaveURL(/#\/analytics$/);
   await expect(page.getByRole('heading', { name: 'API 请求分析', exact: true })).toBeVisible();
   const shell = page.locator('.analytics-page');
-  await expect(shell).toContainText('总请求量');
+  await expect(shell).toContainText('已统计请求量');
+  await expect(shell).toContainText('匿名健康检查及认证配置探测不计入 KV 统计');
   await expect(shell).toContainText('成功率');
   await expect(shell).toContainText('接口调用排行');
 
@@ -38,10 +39,10 @@ test('API 分析页展示真实聚合指标，支持时间范围切换与手机�
   await expect(shell).not.toContainText('Authorization');
 
   await page.getByRole('button', { name: '最近 7 天', exact: true }).click();
-  await expect(shell).toContainText('总请求量');
+  await expect(shell).toContainText('已统计请求量');
   await page.reload();
   await expect(page).toHaveURL(/#\/analytics$/);
-  await expect(shell).toContainText('总请求量');
+  await expect(shell).toContainText('已统计请求量');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '切换明暗主题' }).click();
