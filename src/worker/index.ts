@@ -21,6 +21,7 @@ import { sweepBins } from "./storage/trash";
 import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute, type AnalyticsDataPoint } from "./storage/analytics";
 import { shadowAnalyticsEvent } from "./storage/analytics-engine-shadow";
+import { recordKeyUsageShadow } from "./storage/key-usage-do-shadow";
 import { settleRecentKeyUsage } from "./storage/key-usage";
 import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
@@ -28,6 +29,8 @@ import { applicationOrigin } from "./auth/origin";
 
 // This named export provisions the SQLite-backed Durable Object class.
 export { ApiRateLimiter } from "./storage/rate-limit-do";
+// P22: a separate, optional durable usage shadow; NEVER share the limiter DO.
+export { ApiKeyUsageCounter } from "./storage/key-usage-do";
 
 type Bindings = Env;
 
@@ -82,6 +85,13 @@ app.use("/api/*", async (c, next) => {
   const record = c.req.method === "OPTIONS"
     ? null
     : recordAnalytics(c.env, point).catch(() => {});
+  // P22: independent SQLite shadow writes ONLY for permitted API Key use.
+  // No flag means no DO RPC, no extra cost and no behavioral change. A shadow
+  // error cannot change the response or existing KV/R2 usage bookkeeping.
+  const shadowUsage = c.req.method !== "OPTIONS" && c.env.KEY_USAGE_DO_SHADOW === "1" &&
+    point.authType === "api_key" && point.qualifiedKeyUse
+    ? recordKeyUsageShadow(c.env, point)
+    : null;
 
   let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
   try {
@@ -91,15 +101,15 @@ app.use("/api/*", async (c, next) => {
     waitUntil = undefined;
   }
 
-  if (record) {
-    if (waitUntil) {
-      // Production: hand the write to the runtime so it outlives the response.
-      waitUntil(record);
-    } else {
-      // No execution context available (e.g. direct worker.fetch invocations):
-      // settle the write so metrics stay observable without surfacing errors.
-      await record;
-    }
+  const pending: Promise<unknown>[] = [];
+  if (record) pending.push(record);
+  if (shadowUsage) pending.push(shadowUsage);
+  if (pending.length) {
+    // Keep both independent best-effort observers alive after the response.
+    // In direct worker.fetch tests, complete both before returning.
+    const completion = Promise.allSettled(pending);
+    if (waitUntil) waitUntil(completion);
+    else await completion;
   }
 });
 app.use("/api/*", secureHeaders({
