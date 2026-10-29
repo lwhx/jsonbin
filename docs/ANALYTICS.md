@@ -186,3 +186,36 @@ node --test tests/analytics.test.mjs
 - Session 不产生伪 Key，Anonymous 正确归类；
 - Session-only 强制（Bearer 调用返回 401）；
 - 安全断言：KV 中不出现 Authorization / Token / Cookie / 用户 JSON / 搜索关键词。
+
+### Analytics Engine 影子采集（默认关闭，第一阶段试运行）
+
+本阶段只新增 **可选、只写入** 的 Analytics Engine 适配器；不切换统计查询，`recordAnalytics()` 仍写入现有 KV。缺少绑定或开关时不会执行额外写入，生产行为保持原样。
+
+准备试运行时，在 Wrangler 中增加绑定，**生产与 Preview 使用不同数据集**：
+
+```json
+"analytics_engine_datasets": [
+  { "binding": "ANALYTICS_EVENTS", "dataset": "jsonbin-api-shadow-prod" }
+]
+```
+
+Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变量中设置 `ANALYTICS_EVENTS_SHADOW=1` 才启动采集。务必先验证 Preview 的最终绑定和数据集隔离。**当前 PR 不修改 Wrangler 配置，不启用采集。**
+
+每条事件固定使用如下字段顺序：
+
+| Analytics Engine 列 | 内容 |
+|---|---|
+| blob1 | 标准 HTTP 方法 |
+| blob2 | 脱敏规范化路由模板 |
+| blob3 | HTTP 状态码 |
+| blob4 | 认证类型 |
+| blob5 | 安全错误码（不接受自由文本） |
+| blob6 | 授权 API Key 使用标志（`0` / `1`） |
+| double1 | 单次请求计数 `1` |
+| double2 | 截断后的请求耗时（ms） |
+| double3 | UTC 时间戳（毫秒） |
+| index1 | 常量 `jsonbin` |
+
+**绝不发送 Key ID、Token、IP、Cookie、Slug、查询参数或业务 JSON**。对非规范化路由拒绝影子采集；采集失败不阻断业务，也不会影响原有 KV 指标。
+
+启用条件：通过 Preview 采样率/延迟/成本、隐私检查，以及 Key 使用量日结兼容性后，才能规划查询和结算迁移。关闭开关或移除绑定即可回退到仅 KV 指标。该阶段 **不会降低 KV 写入次数**，因为尚未转移 Dashboard 与 Key 结算读路径。
