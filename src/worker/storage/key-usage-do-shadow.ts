@@ -88,6 +88,24 @@ export async function recordKeyUsageShadow(
   return false;
 }
 
+/** Queue consumer transport: independent of the producer's opt-in flag. */
+export async function deliverKeyUsageEvent(
+  env: UsageShadowEnv,
+  event: { keyId: string; eventId: string; timestamp: string },
+): Promise<boolean> {
+  if (!env.KEY_USAGE_COUNTER || !KEY_ID.test(event.keyId) ||
+      !EVENT_ID_PATTERN.test(event.eventId) || !UTC_TIMESTAMP.test(event.timestamp) ||
+      !Number.isFinite(Date.parse(event.timestamp))) return false;
+  try {
+    const response = await scopedStub(env, event.keyId).fetch(
+      "https://key-usage.internal/usage/increment",
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timestamp: event.timestamp, eventId: event.eventId }) },
+    );
+    return response.ok;
+  } catch { return false; }
+}
+
 export type ShadowDailyUsage = { day: string; count: number; lastUsedAt: string | null };
 
 export async function readKeyUsageShadow(
