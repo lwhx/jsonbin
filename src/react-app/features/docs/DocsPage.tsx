@@ -1,4 +1,5 @@
 import {useState, useEffect} from 'react';
+import { FileDown } from 'lucide-react';
 import { DOC_SECTIONS,DOC_OPERATIONS,DOC_ERRORS,DOC_SCOPES } from './catalog';
 import { buildQuickStart, buildRequest, renderExample } from './examples';
 import type {ExampleLanguage} from './types';
@@ -30,10 +31,22 @@ export function DocsPage() {
         <div>
           <span className="eyebrow">开发者</span>
           <h1>API 文档与工具</h1>
-          <p>当前部署的调用方式、权限、在线调试与 OpenAPI 3.1 规范。</p>
+          <p>当前部署的调用方式、权限、在线调试与 OpenAPI 3.1 规范。支持一键导出给 AI 阅读的 TXT 文档。</p>
           <code>{origin}/api/v1</code>
         </div>
-        {activeTab === "docs" && <LanguageSelect value={language} onChange={setLanguage} />}
+        <div className="doc-header-actions">
+          {activeTab === "docs" && <LanguageSelect value={language} onChange={setLanguage} />}
+          <a
+            href="/api/v1/openapi.txt"
+            download="jsonbin-api-guide.txt"
+            className="secondary-button doc-download-button"
+            aria-label="导出 API 文档 TXT（给 AI）"
+            title="下载 UTF-8 纯文本 API 使用指南，不包含真实 Token 或用户数据"
+          >
+            <FileDown size={16} aria-hidden="true" />
+            导出 TXT（给 AI）
+          </a>
+        </div>
       </header>
 
       <div style={{ display: "flex", gap: "10px", margin: "16px 0" }}>
