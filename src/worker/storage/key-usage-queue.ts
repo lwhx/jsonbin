@@ -30,8 +30,8 @@ const KEY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const ARCHIVE_PREFIX = "internal/key-usage-dlq/v1";
-const EVENT_QUEUES = new Set(["jsonbin-key-usage-events-preview", "jsonbin-key-usage-events-prod"]);
-const DEAD_LETTER_QUEUES = new Set(["jsonbin-key-usage-dlq-preview", "jsonbin-key-usage-dlq-prod"]);
+const EVENT_QUEUES = new Set(["jsonbin-key-usage-events-preview", "jsonbin-key-usage-events-prod", "jsonbin-key-usage-events-staging"]);
+const DEAD_LETTER_QUEUES = new Set(["jsonbin-key-usage-dlq-preview", "jsonbin-key-usage-dlq-prod", "jsonbin-key-usage-dlq-staging"]);
 
 function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || !ISO_UTC.test(value)) return false;
@@ -121,25 +121,48 @@ export async function consumeKeyUsageEvents(
  * A persisted archive supports an explicitly authorized manual replay later.
  * Missing R2 binding or failed writes are retried, never silently ACKed.
  */
+/** Internal invalid-message quarantine: record a sanitized tombstone, NEVER the raw payload. */
+async function archiveInvalidMessage(
+  bucket: R2Bucket, queue: string, message: Message<unknown>,
+): Promise<void> {
+  // Hash the system-generated message ID for a deterministic private object path.
+  const input = new TextEncoder().encode(message.id);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  const hex = Array.from(hash, byte => byte.toString(16).padStart(2, "0")).join("");
+  const day = new Date().toISOString().slice(0, 10);
+  await bucket.put(
+    `internal/key-usage-quarantine/v1/${day}/${hex}.json`,
+    JSON.stringify({ version: 1, category: "invalid_usage_event", sourceQueue: queue }),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+}
+
+/**
+ * Persist validated events for manual replay. Malformed events have no safe
+ * replay semantics: preserve only a fixed-category quarantine marker, never
+ * arbitrary raw payloads, tokens or user-controlled labels.
+ */
 export async function archiveKeyUsageDeadLetters(
   batch: MessageBatch<unknown>, env: QueueUsageEnv,
 ): Promise<void> {
   if (!DEAD_LETTER_QUEUES.has(batch.queue)) throw new Error("unsupported_usage_dlq");
   for (const message of batch.messages) {
-    const event = parseQueuedKeyUsageEvent(message.body);
-    if (!event || !env.KEY_USAGE_DLQ_ARCHIVE) {
-      console.warn("key_usage_dlq_archive_failed", {
-        reason: !event ? "invalid_payload" : "binding_unavailable",
-      });
+    if (!env.KEY_USAGE_DLQ_ARCHIVE) {
+      console.warn("key_usage_dlq_archive_failed", { reason: "binding_unavailable" });
       message.retry({ delaySeconds: 60 });
       continue;
     }
+    const event = parseQueuedKeyUsageEvent(message.body);
     try {
-      await env.KEY_USAGE_DLQ_ARCHIVE.put(
-        archiveKeyForEvent(event),
-        JSON.stringify(event),
-        { httpMetadata: { contentType: "application/json" } },
-      );
+      if (event) {
+        await env.KEY_USAGE_DLQ_ARCHIVE.put(
+          archiveKeyForEvent(event),
+          JSON.stringify(event),
+          { httpMetadata: { contentType: "application/json" } },
+        );
+      } else {
+        await archiveInvalidMessage(env.KEY_USAGE_DLQ_ARCHIVE, batch.queue, message);
+      }
       message.ack();
     } catch {
       console.warn("key_usage_dlq_archive_failed", { reason: "storage_unavailable" });
@@ -149,7 +172,8 @@ export async function archiveKeyUsageDeadLetters(
 }
 
 export function archiveKeyForEvent(event: QueuedKeyUsageEvent): string {
-  return `${ARCHIVE_PREFIX}/${event.timestamp.slice(0, 10)}/${event.eventId}.json`;
+  // A distinct Key namespace avoids collisions across different Key UUIDs.
+  return `${ARCHIVE_PREFIX}/${event.timestamp.slice(0, 10)}/${event.keyId}/${event.eventId}.json`;
 }
 
 /**
@@ -161,7 +185,7 @@ export async function replayArchivedKeyUsageEvent(
   env: QueueUsageEnv, key: string,
 ): Promise<boolean> {
   if (!env.KEY_USAGE_DLQ_ARCHIVE ||
-      !/^internal\/key-usage-dlq\/v1\/\d{4}-\d{2}-\d{2}\/[0-9a-f-]{36}\.json$/.test(key)) return false;
+      !/^internal\/key-usage-dlq\/v1\/\d{4}-\d{2}-\d{2}\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.json$/.test(key)) return false;
   try {
     const archived = await env.KEY_USAGE_DLQ_ARCHIVE.get(key);
     if (!archived) return false;
