@@ -184,10 +184,25 @@ const QUERY_BATCH_SIZE = 100;
 const QUERY_BATCH_CONCURRENCY = 6;
 
 /**
+ * Infrastructure-only success responses have no API Key usage to settle.
+ * Do not spend a KV read + put on every probe or login-page configuration
+ * check. Failures, non-GET methods and ANY authenticated/credential-bearing
+ * request are still recorded; this must never skip a qualified Key use.
+ *
+ * The opt-in Analytics Engine shadow observer runs independently in index.ts,
+ * so it can still capture all of these events when enabled.
+ */
+export function shouldRecordKvAnalytics(dp: AnalyticsDataPoint): boolean {
+  if (dp.method !== "GET" || dp.status !== 200 || dp.authType !== "anonymous" ||
+      dp.keyId != null || dp.qualifiedKeyUse) return true;
+  return dp.route !== "/api/v1/system/health" && dp.route !== "/api/v1/auth/config";
+}
+
+/**
  * Record a single request metrics data point in KV.
  */
 export async function recordAnalytics(env: Env, dp: AnalyticsDataPoint): Promise<void> {
-  if (!env.CACHE) return;
+  if (!env.CACHE || !shouldRecordKvAnalytics(dp)) return;
   try {
     const hourBucket = dp.timestamp.slice(0, 13); // e.g. "2026-10-06T04"
     const shardId = Math.floor(Math.random() * SHARDS_COUNT);
