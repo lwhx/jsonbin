@@ -1,24 +1,13 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "jsonbin-usage-staging",
-  "main": "src/worker/index.ts",
+  "main": "src/worker/usage-staging-entry.ts",
   "compatibility_date": "2026-10-03",
   "keep_vars": true,
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*"
-    ],
-    "directory": "./dist/client"
-  },
   "observability": {
     "enabled": true
   },
   "r2_buckets": [
-    {
-      "binding": "DATA",
-      "bucket_name": "jsonbin-usage-staging-data"
-    },
     {
       "binding": "KEY_USAGE_DLQ_ARCHIVE",
       "bucket_name": "jsonbin-usage-staging-deadletters"
@@ -27,20 +16,12 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "RATE_LIMITER",
-        "class_name": "ApiRateLimiter"
-      },
-      {
         "name": "KEY_USAGE_COUNTER",
         "class_name": "ApiKeyUsageCounter"
       }
     ]
   },
   "exports": {
-    "ApiRateLimiter": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
     "ApiKeyUsageCounter": {
       "type": "durable-object",
       "storage": "sqlite"
@@ -75,9 +56,10 @@
     ]
   },
   "vars": {
-    "ADMIN_USERNAME": "staging-admin",
     "KEY_USAGE_QUEUE_SHADOW": "0",
     "KEY_USAGE_CONSUMER_ENABLED": "0",
-    "KEY_USAGE_DO_SHADOW": "0"
-  }
+    "KEY_USAGE_DO_SHADOW": "0",
+    "KEY_USAGE_STAGING_MODE": "0"
+  },
+  "workers_dev": true
 }
