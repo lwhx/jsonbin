@@ -103,9 +103,11 @@ function operationCurl(method: string, path: string, operation: ObjectValue, sec
   if (parameters.some(p => p.in === "header" && p.name === "If-Match")) {
     pieces.push('-H "If-Match: <CURRENT_ETAG>"');
   }
-  if (Object.keys(asObject(asObject(operation.requestBody).content)).length > 0) {
-    pieces.push("-H 'Content-Type: application/json'");
-    pieces.push("--data-raw '<按上方 Schema 构造 JSON>'");
+  const bodyTypes = Object.keys(asObject(asObject(operation.requestBody).content));
+  if (bodyTypes.length > 0) {
+    const firstType = bodyTypes[0];
+    pieces.push("-H 'Content-Type: " + firstType + "'");
+    pieces.push("--data-raw '<按上方 Schema 构造请求体>'");
   }
   return pieces.join(" ");
 }
