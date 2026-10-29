@@ -288,3 +288,16 @@ P22 的 SQLite DO 已能对每次成功提交的事件原子累加，但 **RPC �
 **明确限制：这仍不是零丢失或财务级 exactly-once。** `waitUntil()` 有执行截止期限；如果 Worker 在把第一条事件可靠投递前终止，简单重试无法找回数据。下一小阶段必须引入可持久化的队列/Outbox（例如 Cloudflare Queues，并明确启用成本及消费端）和可观测 DLQ，完成“写入已持久化 → 可重放 → 按 Key 结算”全链路验证后才可替代 KV 的 API Key 用量来源。
 
 - **上线检查**：GitHub Node+Playwright 全套、Wrangler dry-run、Cloudflare Preview 构建全部通过；真实 Preview 双写压测必须验证同 Key 并发、重放、强制失败、跨日边界、R2 日结保持不变。若未真正开启 Preview 影子开关，测试只能证明本地 Miniflare 行为而不是 Cloudflare 平台端真实写入。
+
+
+### P24b：持久化 Queue 投递 / DLQ 死信归档（代码就绪，默认关闭）
+
+P24a 的 `waitUntil()` 重试不是持久化投递。P24b 增加独立队列生产、消费和死信归档路径。**当前 Wrangler 没有绑定 Queues，也没有打开开关**，因此生产与 Preview 均不产生新增队列流量或账单。
+
+- `KEY_USAGE_QUEUE_SHADOW=1` 加上 `KEY_USAGE_EVENTS_QUEUE` binding 后，Worker 在返回业务响应前 **await Queue.send()**；成功的投递有持久化接收确认。发送失败绝不阻断业务，若另外显式开启 `KEY_USAGE_DO_SHADOW=1`，仍可走原有 best-effort DO 影子回退。只有 Queue 成功时才跳过直接 DO 路径，避免双重计数。
+- 主队列名固定允许 `jsonbin-key-usage-events-preview` / `jsonbin-key-usage-events-prod`，消费者逐消息 ACK，DO 不可用则 retry；每条事件只含 version、Key UUID、服务端 UUIDv4、UTC 时间戳，且 DO 继续按 eventId 幂等。
+- 生产 Queue 要配置合理的 **max_retries + dead_letter_queue**。DLQ 名固定允许 `jsonbin-key-usage-dlq-preview` / `jsonbin-key-usage-dlq-prod`；另外把死信消息写入独立的私有 R2 `KEY_USAGE_DLQ_ARCHIVE`（绝不能与公开 Bin DATA bucket 共用）。归档失败重试，不主动丢弃。受限内部 `replayArchivedKeyUsageEvent` helper 可以由未来专门管理脚本调用；当前不提供公开 HTTP 或 Cron 重放入口。
+- 必须在 Cloudflare 控制台分别建立 Preview/生产资源并审核计费；同一环境需同时正确声明 **producer + main consumer + DLQ consumer**，分开权限、资源、DLQ 告警、存储保留期和 replay 审计。仅在 Preview 经验证后启用 Preview 开关；生产仍保持关闭。
+- **重要限制**：Queue 入口无法与既有业务响应做一个共享的数据库事务。若 Queue.send 失败、请求被中断或未收到确认，依然不能承诺完整无遗漏。死信消息的归档/人工补投可能超过 DO 35 天窗口而被 422 拒绝，因此没有完成封账/日界/成本/差异阈值评估前，不得把此链路提升为权威 Key 结算来源，也不得关闭旧 KV/R2 结算。
+
+发布验收：`npm run typecheck`、`npm run build`、`npm run test:only`、`npm run test:browser`、Wrangler dry-run、Cloudflare Preview；同时实际验证 Queue 丢 ACK、永久 DO 故障后 DLQ、DLQ 归档不可用、重复消费、跨 UTC 日、成本上限。**不能把编译通过等同于真实 Queue 已上线。**
