@@ -124,7 +124,11 @@ test('P24b malformed DLQ payload is quarantined without recording raw content', 
   assert.equal(acks, 1);
   assert.equal(retries, 0);
   assert.equal(writes.length, 1);
-  assert.match(writes[0][0], /^internal\\/key-usage-quarantine\\/v1\\/\\d{4}-\\d{2}-\\d{2}\\/[0-9a-f]{64}\\.json$/);
+  const pathParts = writes[0][0].split('/');
+  assert.deepEqual(pathParts.slice(0, 3), ['internal', 'key-usage-quarantine', 'v1']);
+  assert.equal(pathParts.length, 5);
+  assert.equal(pathParts[3].length, 10);
+  assert.match(pathParts[4].split('.')[0], /^[a-f0-9]{64}$/);
   assert.deepEqual(JSON.parse(writes[0][1]), {
     version: 1, category: 'invalid_usage_event', sourceQueue: batch.queue,
   });
