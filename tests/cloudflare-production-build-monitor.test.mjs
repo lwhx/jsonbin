@@ -70,8 +70,27 @@ test('Transient failed placeholder is tolerated until a successful production ch
   };
   const result = await waitForProductionBuild({
     repository: repo, sha, token: 'test-token', fetchImpl,
-    attempts: 5, intervalMs: 0, sleep: async () => {},
+    attempts: 6, intervalMs: 0, sleep: async () => {},
   });
   assert.equal(result.state, 'success');
-  assert.equal(count, 4);
+  assert.equal(count, 6, 'require three stable production-path successes');
+});
+
+
+test('A transient production-path placeholder later classified as Preview must not pass', async () => {
+  let n = 0;
+  const fetchImpl = async () => {
+    n++;
+    const observed = n === 1
+      ? check('builds/placeholder')
+      : check('previews/ci-monitor-cloudflare-production-build/builds/preview');
+    return Response.json({ check_runs: [observed] });
+  };
+  const result = await waitForProductionBuild({
+    repository: repo, sha, token: 'test-token', fetchImpl,
+    attempts: 3, intervalMs: 0, sleep: async () => {},
+  });
+  assert.equal(result.state, 'missing');
+  assert.equal(result.previewCount, 1);
+  assert.equal(n, 3);
 });
