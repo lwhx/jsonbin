@@ -62,6 +62,7 @@ test('management-only diagnostics use weighted SQL and preserve the existing KV 
     ANALYTICS_EVENTS_SHADOW: '1',
     ANALYTICS_SHADOW_DATASET: 'jsonbin-api-shadow-preview',
     ANALYTICS_SHADOW_STARTED_AT: '2026-01-01T00:00:00.000Z',
+    ANALYTICS_KV_PROBE_FILTER_STARTED_AT: '2026-01-01T00:00:00.000Z',
   };
   assert.equal((await h.request('/analytics/shadow-compare?range=1h')).status, 404, 'disabled by default');
   assert.equal(seen.length, 0);
@@ -89,6 +90,9 @@ test('management-only diagnostics use weighted SQL and preserve the existing KV 
     assert.match(query, /events\.analyticsEngine\."jsonbin-api-shadow-preview"/);
     assert.match(query, /timestamp >= \$start AND timestamp < \$end/);
     assert.match(query, /index1 = 'jsonbin'/);
+    assert.match(query, /AND NOT \(blob1 = 'GET' AND blob3 = '200' AND blob4 = 'anonymous'/);
+    assert.match(query, /blob6 = '0' AND blob2 IN \('\/api\/v1\/system\/health', '\/api\/v1\/auth\/config'\)/);
+    assert.doesNotMatch(query, /blob3 != '200'/);
     // New Analytics SQL API auto-applies sample weights to COUNT and SUM.
     // Multiplying by _sample_interval again would inflate production counts.
     assert.doesNotMatch(query, /_sample_interval/i);
@@ -130,12 +134,29 @@ test('partial historical coverage and missing markers cannot falsely assert comp
   assert.equal(missing.coverage, 'unknown');
   assert.equal(missing.comparable, false);
   assert.equal(missing.deltas, null);
+  const missingPolicy = await compareShadowAnalytics({
+    ...base, ANALYTICS_SHADOW_STARTED_AT: '2026-01-01T00:00:00.000Z',
+  }, '1h');
+  assert.equal(missingPolicy.coverage, 'unknown',
+    'without a trusted KV rollout timestamp historical buckets can be mixed');
+  assert.equal(missingPolicy.comparable, false);
   const later = await compareShadowAnalytics({
-    ...base, ANALYTICS_SHADOW_STARTED_AT: new Date().toISOString(),
+    ...base,
+    ANALYTICS_SHADOW_STARTED_AT: new Date().toISOString(),
+    ANALYTICS_KV_PROBE_FILTER_STARTED_AT: '2026-01-01T00:00:00.000Z',
   }, '1h');
   assert.equal(later.coverage, 'partial_window');
   assert.equal(later.comparable, false);
   assert.equal(later.deltas, null);
+  const recentPolicy = await compareShadowAnalytics({
+    ...base,
+    ANALYTICS_SHADOW_STARTED_AT: '2026-01-01T00:00:00.000Z',
+    ANALYTICS_KV_PROBE_FILTER_STARTED_AT: new Date().toISOString(),
+  }, '1h');
+  assert.equal(recentPolicy.coverage, 'partial_window',
+    'do not compare the first hour containing a KV analytics policy change');
+  assert.equal(recentPolicy.comparable, false);
+  assert.equal(recentPolicy.deltas, null);
 });
 
 test('SQL binding errors fall back to the legacy KV response without leaking failures', async () => {
