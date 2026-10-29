@@ -243,7 +243,7 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
 - `ANALYTICS_SHADOW_STARTED_AT` 必须填写实际**开启影子写入**的 UTC 时间，不得使用部署前的假日期；否则历史窗口会被误判为可比较。
 - 正式生产数据集为 `jsonbin-api-shadow-prod`。SQL 数据集标识符由代码白名单固定，不接受查询参数或任意配置字符串拼接；Preview 不得指向生产数据集。
 - 只使用当前 Cloudflare 官方 `analytics` SQL binding（Wrangler 4.145.0+），**不需要向 Worker 提供 Analytics API Token**。
-- 使用 `_sample_interval` 做权重求和，延迟 P95 使用 `quantileExactWeighted(0.95)`。KV 的 P95 是分桶上界，二者口径并非精确相同。
+- **注意两个 SQL API 采样规则不同**：本项目使用新 Analytics SQL binding（`events.analyticsEngine.*`），`COUNT(*)`、`SUM(double2)`、`countIf(...)` 已由 SQL API 自动执行采样加权；只有 P95 使用 `quantileWeighted(0.95, double2, sampleInterval)` 传入显式权重。不得套用旧 Analytics Engine SQL API 的 `SUM(_sample_interval * ...)`，否则可能重复加权。KV 的 P95 是固定直方图分桶上界，和 Engine 加权分位数并不完全等价。
 - `coverage` 为 `unknown` 或 `partial_window` 时不返回误导性的差异值（`deltas: null`）；只有完整窗口且 KV 查询完整时，才返回请求量差异，并明确仅为近似运营比对。
 - `shadow.available=false` 表示 SQL 出错或数据格式异常，仍返回 legacy KV 统计，**绝不自动把空 SQL 结果替代旧数据**。SQL 读取失败不得影响业务请求。
 - 高流量样本可能被采样，后台写入存在可见性延迟。比对结果不用于身份鉴权、计费或 API Key 使用量结算。当前 Analytics Engine 不存储 Key ID，也不能取代 KV `authorizedUses` 和日结机制。
