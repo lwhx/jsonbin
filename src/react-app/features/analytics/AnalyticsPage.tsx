@@ -67,6 +67,11 @@ export function AnalyticsPage() {
         </div>
       ) : (
         <>
+          {data?.partial && (
+            <div className="panel detail-error" role="alert" style={{ marginBottom: "16px" }}>
+              部分 KV 统计分桶读取失败，本次分析结果可能不完整。请稍后重试，不要将当前请求量作为完整总数。
+            </div>
+          )}
           {/* Overview Cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "20px" }}>
             <div className="panel" style={{ padding: "16px" }}>

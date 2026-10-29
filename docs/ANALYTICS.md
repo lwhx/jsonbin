@@ -38,6 +38,18 @@ JSONBin 提供 API 请求指标分析能力，用于回答：
 - 若未来接入 Cloudflare Analytics Engine，仅作为指标存储，**不替代** R2 的业务数据职责；
 - 分桶键示例：`analytics:agg:2026-10-06T04`；
 - 写入使用 `ctx.waitUntil()`，**绝不阻塞或影响业务响应**。
+- 现有生产写入格式为每小时 4 个 KV 分片（兼容更早的非分片小时桶），每个请求进行一次读-改-写。**分片不提供强一致计数**，同一个 KV Key 每秒最多可写一次；高频时统计可能丢失，绝不能作为精确计费或权限控制依据。
+- **读路径优化**：管理后台查询采用 Cloudflare 原生 KV 批量 `get(keys, "json")`，每批最多 100 个键、并发最多 6 批，并分窗口合并。30 天共 720 小时 ×（4 分片 + 1 个历史桶）= **3,600 个键，最多 36 次批量 KV 读取操作**，避免原来的 3,600 个独立子请求超过 Worker 的 1,000 次操作上限。
+- 批量读取失败时接口仍返回已成功读取的聚合值，但额外返回 `partial: true`；管理后台显示显著提示。缺少 `CACHE` 绑定时同样标记为不完整。**这不是高频写入问题的解决方案**，仅减少查询子请求和内存峰值；KV 读取计费仍按查询的键数量计算。
+
+### 2.2 Analytics Engine 写入迁移前置条件
+
+下一阶段可以使用 Cloudflare Workers Analytics Engine 的 `writeDataPoint()` 承担高频事件写入，再通过无需 API Token 的 Workers Analytics SQL binding 查询；但必须独立验收、分阶段开启，不能直接用新增绑定替换当前 KV：
+
+1. 既有 `readDailyKeyUsage` / `settleRecentKeyUsage` 与 API Key 使用次数估算依赖 KV 桶中的 `authorizedUses` 与 `lastAuthorizedAt`；需要完整的迁移读取和日结幂等方案。
+2. 管理端历史 1h / 24h / 7d / 30d 数据及 P95 直方图必须校验与原口径相容，包括 Analytics Engine 可能发生的数据采样。
+3. Preview 数据集必须与生产分离，生产读取异常应回退至旧 KV，任何阶段不得改变认证、限流、R2 CAS 与审计的安全边界。
+4. 验证 Analytics Engine 实际成本、统计误差、延迟以及回滚后恢复旧 KV 读写的路径，再决定是否关闭 KV 高频聚合写入。
 
 ### 2.1 写入失败不影响业务
 
@@ -143,6 +155,8 @@ GET /api/v1/analytics/overview?range=24h
 ```
 
 **所有聚合在服务端完成**，前端只接收聚合结果，不会下载几十万条原始请求日志。
+
+响应可额外包含 `partial: boolean`：`false` 表示批量读取完整（不保证 KV 在多地域强一致），`true` 表示部分 KV 批次失败或 CACHE 不可用。
 
 ---
 

@@ -176,6 +176,11 @@ function percentile95(hist: DurationHistogram): number {
 export const ANALYTICS_PREFIX = "analytics:agg:";
 export const ANALYTICS_SHARDS_COUNT = 4;
 const SHARDS_COUNT = ANALYTICS_SHARDS_COUNT;
+// Cloudflare KV bulk reads support up to 100 keys per call. Bound concurrency
+// and process one window at a time so 30-day queries do not retain 3,600
+// parsed records in Worker memory or exhaust the 1,000-operations limit.
+const QUERY_BATCH_SIZE = 100;
+const QUERY_BATCH_CONCURRENCY = 6;
 
 /**
  * Record a single request metrics data point in KV.
@@ -258,6 +263,7 @@ export async function queryAnalytics(env: Env, hours = 24) {
       statuses: [],
       keys: [],
       errors: [],
+      partial: true,
     };
   }
 
@@ -273,17 +279,6 @@ export async function queryAnalytics(env: Env, hours = 24) {
     }
   }
 
-  const buckets = await Promise.all(
-    bucketKeys.map(async (k) => {
-      try {
-        const str = await cache.get(k);
-        return str ? JSON.parse(str) : null;
-      } catch {
-        return null;
-      }
-    }),
-  );
-
   let totalRequests = 0;
   let totalDuration = 0;
   const durationsHistogram: DurationHistogram = {};
@@ -292,8 +287,7 @@ export async function queryAnalytics(env: Env, hours = 24) {
   const keyMap: Record<string, { requests: number; count4xx: number; count429: number }> = {};
   const errorMap: Record<string, number> = {};
 
-  for (const b of buckets) {
-    if (!b) continue;
+  const mergeBucket = (b: any) => {
     totalRequests += b.requests || 0;
     totalDuration += b.totalDuration || 0;
     mergeDurationHist(durationsHistogram, b.durationHistogram, b.durations);
@@ -318,6 +312,35 @@ export async function queryAnalytics(env: Env, hours = 24) {
     }
     for (const [err, cnt] of Object.entries(b.errors || {})) {
       errorMap[err] = (errorMap[err] || 0) + (cnt as number);
+    }
+  };
+  // A 30-day query can address 720 hours * (4 shards + 1 legacy) = 3,600
+  // keys. Fetching those individually exceeds Workers KV's 1,000 operation
+  // limit. Bulk GET handles 100 keys per *operation* and returns a Map.
+  // Process at most six bulk responses together to bound peak memory.
+  let partial = false;
+  for (let offset = 0; offset < bucketKeys.length; offset += QUERY_BATCH_SIZE * QUERY_BATCH_CONCURRENCY) {
+    const chunks: string[][] = [];
+    const limit = Math.min(bucketKeys.length, offset + QUERY_BATCH_SIZE * QUERY_BATCH_CONCURRENCY);
+    for (let i = offset; i < limit; i += QUERY_BATCH_SIZE) {
+      chunks.push(bucketKeys.slice(i, i + QUERY_BATCH_SIZE));
+    }
+    const results = await Promise.all(chunks.map(async chunk => {
+      try { return await cache.get(chunk, "json"); }
+      catch { return null; }
+    }));
+    for (let i = 0; i < chunks.length; i++) {
+      const records = results[i];
+      if (!(records instanceof Map)) {
+        // Keep the successful metrics but flag incomplete results instead of
+        // silently presenting a partial count as an authoritative total.
+        partial = true;
+        continue;
+      }
+      for (const key of chunks[i]) {
+        const bucket = records.get(key);
+        if (bucket) mergeBucket(bucket);
+      }
     }
   }
 
@@ -377,5 +400,6 @@ export async function queryAnalytics(env: Env, hours = 24) {
     statuses,
     keys,
     errors,
+    partial,
   };
 }
