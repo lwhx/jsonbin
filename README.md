@@ -215,6 +215,7 @@ curl -X PATCH "$JSONBIN_URL/api/v1/bins/<BIN_ID>" \
 | --- | --- | --- |
 | `GET` | `/api/v1/system/health` | 公开健康检查 |
 | `GET` | `/api/v1/openapi.json` | OpenAPI 3.1 描述 |
+| `GET` | `/api/v1/openapi.txt` | 一键下载给 AI 阅读的 API 使用指南 TXT（含端点、鉴权、Schema、示例） |
 | `GET / POST` | `/api/v1/bins` | 列表 / 创建 |
 | `GET / PUT / PATCH / DELETE` | `/api/v1/bins/:id` | 当前值及数据仓操作 |
 | `GET` | `/api/v1/b/:slug` | 通过自定义别名访问 |
@@ -226,6 +227,18 @@ curl -X PATCH "$JSONBIN_URL/api/v1/bins/<BIN_ID>" \
 | `POST` | `/api/v1/mcp` | Remote MCP（Streamable HTTP） |
 
 > 接口权限并不相同：公开 Bin 允许匿名读取当前值，但管理、历史和修改操作需要认证。更完整的参数、响应和错误码请查看运行中的 `/api/v1/openapi.json` 或控制台 **「API 文档」**。
+
+### 导出给 AI 阅读的 API 文档（TXT）
+
+打开控制台 **「开发者 → API 文档」**，点击 **「导出 TXT（给 AI）」** 即可下载 `jsonbin-api-guide.txt`。你可以把这个文件交给 ChatGPT、Hermes、Cursor 或其他 AI Agent，让它快速了解 JSONBin 支持哪些功能、HTTP 接口、鉴权方式、Scope、参数、请求体格式、ETag 和错误处理。
+
+也可以通过公开的只读接口直接下载，**不需要管理员登录**：
+
+```bash
+curl -fL https://your-domain.example/api/v1/openapi.txt -o jsonbin-api-guide.txt
+```
+
+TXT 从当前 Worker 的 OpenAPI 3.1 定义动态生成，**不会包含真实 API Key、Session Cookie、用户保存的 JSON 或其他业务数据**。AI 想实际调用你的私有数据时，仍须单独获得经过授权的 Token；不要把真实密钥写入 TXT 或粘贴到共享提示词中。
 
 ## 开发者接入
 
