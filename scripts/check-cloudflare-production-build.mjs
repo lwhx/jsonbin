@@ -17,7 +17,7 @@ export function classifyCloudflareProductionBuild(checks) {
     try {
       const url = new URL(check.details_url);
       return url.hostname === 'dash.cloudflare.com' &&
-        /^\\/[a-z0-9]+\\/workers\\/services\\/view\\/jsonbin\\/production\\/builds\\/[^/]+\\/?$/i.test(url.pathname);
+        /^\/[a-z0-9]+\/workers\/services\/view\/jsonbin\/production\/builds\/[^/]+\/?$/i.test(url.pathname);
     } catch { return false; }
   }).sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? ''));
 
@@ -36,7 +36,7 @@ export function classifyCloudflareProductionBuild(checks) {
 }
 
 export async function fetchGitHubChecks({ repository, sha, token, fetchImpl = fetch }) {
-  if (!/^[\\w.-]+\\/[\\w.-]+$/.test(repository) || !/^[0-9a-f]{40}$/i.test(sha)) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !/^[0-9a-f]{40}$/i.test(sha)) {
     throw new Error('invalid_github_repository_or_commit');
   }
   if (!token) throw new Error('GITHUB_TOKEN_missing');
@@ -89,7 +89,7 @@ async function main() {
     ok
       ? 'A successful production **build check** was found. Verify active rollout in Cloudflare Deployments; a successful build alone does not prove the new version receives traffic.'
       : 'GitHub CI does not deploy the Worker. Check Cloudflare Worker > Settings > Build > Branch control (production=main), build watch paths and GitHub repository connection. Preview checks do not count as production builds.',
-  ].join('\\n') + '\\n';
+  ].join('\n') + '\n';
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary);
   if (!ok) {
