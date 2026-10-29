@@ -22,7 +22,14 @@ export function classifyCloudflareProductionBuild(checks) {
   }).sort((a, b) => (a.started_at ?? '').localeCompare(b.started_at ?? ''));
 
   const selected = production.at(-1);
-  const previewCount = cloudflare.length - production.length;
+  const previewCount = cloudflare.filter(check => {
+    if (typeof check.details_url !== 'string') return false;
+    try {
+      const url = new URL(check.details_url);
+      return url.hostname === 'dash.cloudflare.com' &&
+        url.pathname.includes('/workers/services/view/jsonbin/production/previews/');
+    } catch { return false; }
+  }).length;
   if (!selected) return { state: 'missing', previewCount, url: null };
   if (selected.status === 'completed') {
     return {
