@@ -1,0 +1,32 @@
+name: Cloudflare Production Build Monitor
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  verify-production-build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout commit
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Detect Cloudflare production build for this exact SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-cloudflare-production-build.mjs
+      - name: Next steps after missing build
+        if: failure()
+        run: |
+          echo '::notice::Check Worker jsonbin > Settings > Build > Branch control. Set production branch to main and verify Build watch paths and GitHub connection.'
