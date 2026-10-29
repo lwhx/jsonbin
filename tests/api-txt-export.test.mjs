@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { app } from '../dist/jsonbin/index.js';
 import { renderOpenApiTxt } from '../src/shared/openapi-txt.ts';
+import { normalizeRoute } from '../src/worker/storage/analytics.ts';
 
 const ORIGIN = 'https://jsonbin-ai-docs.example.test';
 const METHODS = new Set(['get', 'put', 'post', 'patch', 'delete', 'head', 'options', 'trace']);
@@ -16,6 +17,7 @@ async function readSpec() {
 }
 
 test('AI API TXT is a public UTF-8 attachment with no runtime bindings or user credentials', async () => {
+  assert.equal(normalizeRoute('/api/v1/openapi.txt'), '/api/v1/openapi.txt');
   const response = await get('/api/v1/openapi.txt');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('Content-Type') ?? '', /^text\/plain;\s*charset=utf-8/i);
