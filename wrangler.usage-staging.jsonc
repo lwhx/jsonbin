@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jsonbin-usage-staging",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-03",
+  "keep_vars": true,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "DATA",
+      "bucket_name": "jsonbin-usage-staging-data"
+    },
+    {
+      "binding": "KEY_USAGE_DLQ_ARCHIVE",
+      "bucket_name": "jsonbin-usage-staging-deadletters"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER",
+        "class_name": "ApiRateLimiter"
+      },
+      {
+        "name": "KEY_USAGE_COUNTER",
+        "class_name": "ApiKeyUsageCounter"
+      }
+    ]
+  },
+  "exports": {
+    "ApiRateLimiter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ApiKeyUsageCounter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "KEY_USAGE_EVENTS_QUEUE",
+        "queue": "jsonbin-key-usage-events-staging"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "jsonbin-key-usage-events-staging",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 4,
+        "retry_delay": 30,
+        "max_concurrency": 2,
+        "dead_letter_queue": "jsonbin-key-usage-dlq-staging"
+      },
+      {
+        "queue": "jsonbin-key-usage-dlq-staging",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 10,
+        "retry_delay": 60,
+        "max_concurrency": 2,
+        "dead_letter_queue": "jsonbin-key-usage-quarantine-staging"
+      }
+    ]
+  },
+  "vars": {
+    "ADMIN_USERNAME": "staging-admin",
+    "KEY_USAGE_QUEUE_SHADOW": "0",
+    "KEY_USAGE_CONSUMER_ENABLED": "0",
+    "KEY_USAGE_DO_SHADOW": "0"
+  }
+}
