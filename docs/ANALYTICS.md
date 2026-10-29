@@ -219,3 +219,34 @@ Preview 配置应改用数据集 `jsonbin-api-shadow-preview`，并在环境变�
 **绝不发送 Key ID、Token、IP、Cookie、Slug、查询参数或业务 JSON**。对非规范化路由拒绝影子采集；采集失败不阻断业务，也不会影响原有 KV 指标。
 
 启用条件：通过 Preview 采样率/延迟/成本、隐私检查，以及 Key 使用量日结兼容性后，才能规划查询和结算迁移。关闭开关或移除绑定即可回退到仅 KV 指标。该阶段 **不会降低 KV 写入次数**，因为尚未转移 Dashboard 与 Key 结算读路径。
+
+### Analytics Engine SQL 与 KV 并行校验（第二阶段，默认关闭）
+
+新增只读管理诊断端点：`GET /api/v1/analytics/shadow-compare?range=1h`。支持 `1h`、`24h`、`7d`、`30d`。必须是 **管理员 Session**；Bearer API Key 访问返回 401。未完全配置时返回 404，不会调用 SQL，也不会改变原 `/analytics/overview`。
+
+只有明确完成以下配置，才会启用对照查询。**本 PR 不修改生产 Wrangler 配置，也不打开开关。**
+
+```jsonc
+// 仅作为分环境配置示例：生产与 Preview 应隔离数据集。
+"analytics_engine_datasets": [
+  { "binding": "ANALYTICS_EVENTS", "dataset": "jsonbin-api-shadow-preview" }
+],
+"analytics": { "binding": "ANALYTICS_SQL" },
+"vars": {
+  "ANALYTICS_EVENTS_SHADOW": "1",
+  "ANALYTICS_SHADOW_COMPARE": "1",
+  "ANALYTICS_SHADOW_DATASET": "jsonbin-api-shadow-preview",
+  "ANALYTICS_SHADOW_STARTED_AT": "2026-10-29T04:00:00.000Z"
+}
+```
+
+- `ANALYTICS_SHADOW_STARTED_AT` 必须填写实际**开启影子写入**的 UTC 时间，不得使用部署前的假日期；否则历史窗口会被误判为可比较。
+- 正式生产数据集为 `jsonbin-api-shadow-prod`。SQL 数据集标识符由代码白名单固定，不接受查询参数或任意配置字符串拼接；Preview 不得指向生产数据集。
+- 只使用当前 Cloudflare 官方 `analytics` SQL binding（Wrangler 4.145.0+），**不需要向 Worker 提供 Analytics API Token**。
+- **注意两个 SQL API 采样规则不同**：本项目使用新 Analytics SQL binding（`events.analyticsEngine.*`），`COUNT(*)`、`SUM(double2)`、`countIf(...)` 已由 SQL API 自动执行采样加权；只有 P95 使用 `quantileWeighted(0.95, double2, sampleInterval)` 传入显式权重。不得套用旧 Analytics Engine SQL API 的 `SUM(_sample_interval * ...)`，否则可能重复加权。KV 的 P95 是固定直方图分桶上界，和 Engine 加权分位数并不完全等价。
+- `coverage` 为 `unknown` 或 `partial_window` 时不返回误导性的差异值（`deltas: null`）；只有完整窗口且 KV 查询完整时，才返回请求量差异，并明确仅为近似运营比对。
+- `shadow.available=false` 表示 SQL 出错或数据格式异常，仍返回 legacy KV 统计，**绝不自动把空 SQL 结果替代旧数据**。SQL 读取失败不得影响业务请求。
+- 高流量样本可能被采样，后台写入存在可见性延迟。比对结果不用于身份鉴权、计费或 API Key 使用量结算。当前 Analytics Engine 不存储 Key ID，也不能取代 KV `authorizedUses` 和日结机制。
+- 单次 SQL 诊断最多执行三个只读 SELECT（总览、状态码、最多 150 个热门 Endpoint）。没有常规后台自动轮询该诊断接口，避免额外查询成本。
+
+建议先在独立 Preview 环境使用真实数据验证 SQL 方言、数据集可读性、指标一致性及成本，确认后再独立设计历史拼接和 Key 结算的切换策略。请勿同时修改线上 KV 写入路径。
