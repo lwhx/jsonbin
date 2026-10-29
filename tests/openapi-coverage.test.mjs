@@ -73,5 +73,15 @@ test('spec passes structural validation: operations declare responses and known 
   assert.deepEqual(spec.paths['/bins/{id}'].get.security, []);
   assert.deepEqual(spec.paths['/bins/{id}/save-as-template'].post.security, [{ CookieAuth: [] }]);
   assert.deepEqual(spec.paths['/system/settings'].get.security, [{ CookieAuth: [] }]);
+  const usageCompare = spec.paths['/analytics/key-usage-compare']?.get;
+  assert.ok(usageCompare, 'production KV/DO diagnostic must be documented');
+  assert.deepEqual(usageCompare.security, [{ CookieAuth: [] }], 'usage comparison must be Session-only');
+  assert.deepEqual(usageCompare.parameters.map(param => [param.name, param.in, param.required]), [
+    ['keyId', 'query', true], ['day', 'query', true],
+  ], 'only one Key and one UTC day may be requested');
+  for (const code of ['200', '400', '401', '404', '503']) {
+    assert.ok(usageCompare.responses[code], 'usage comparison must document HTTP ' + code);
+  }
+
   assert.deepEqual(spec.paths['/bins'].post.security, [{ CookieAuth: [] }, { BearerAuth: [] }]);
 });

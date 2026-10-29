@@ -180,6 +180,23 @@ export function generateOpenApiSpec(): Record<string, unknown> {
           ],
         }),
       },
+      "/analytics/key-usage-compare": {
+        get: op("对比单个 API Key 的 KV 与 SQLite DO 日用量（只读、默认关闭）", {
+          security: SESSION_ONLY,
+          description: "仅管理员 Session；须显式启用 KEY_USAGE_CUTOVER_COMPARE=1。逐个 Key 和 UTC 日期读取 KV 近似计数与 SQLite DO 计数，不执行正式统计切换。结果恒为 comparable=false、safeToCutover=false，不能仅凭计数相等判断可切换。",
+          parameters: [
+            { name: "keyId", in: "query", required: true, schema: { type: "string", format: "uuid" }, description: "内部 API Key UUID（仅单个）" },
+            { name: "day", in: "query", required: true, schema: { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }, description: "UTC 日期，仅限最近 35 个 UTC 日" },
+          ],
+          responses: {
+            ...ok("只读返回 legacy、durable、observedDifference、comparable=false、safeToCutover=false 及 blockers"),
+            "400": { description: "invalid_query（参数缺失、重复、日期超范围）" },
+            "401": { description: "session_required（不接受 Bearer API Key）" },
+            "404": { description: "诊断功能未启用或绑定缺失" },
+            "503": { description: "usage_compare_unavailable" },
+          },
+        }),
+      },
       "/analytics/shadow-compare": {
         get: op("对照 KV 与 Analytics Engine 影子指标（默认关闭）", {
           security: SESSION_ONLY,

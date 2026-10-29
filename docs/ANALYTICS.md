@@ -373,3 +373,28 @@ node scripts/usage-staging-smoke.mjs --run
 4. 当需要停止新事件时，仅关闭 `KEY_USAGE_QUEUE_SHADOW`；先确认并处理队列 backlog，再考虑关闭 `KEY_USAGE_CONSUMER_ENABLED`。保留既有 KV/R2 权威日结，**不能为了降本直接关闭 KV 写入**。
 
 **剩余一致性限制**：业务请求成功与 Queue.send 不能组成同一个数据库原子事务，Worker 在持久化发送前终止仍可能漏报；R2 中超过 35 天的事件会被 DO 拒绝（422），无法无限期重放；此外 Cloudflare Queue 保留期与重试次数有限，DLQ 末端故障仍可能丢失。此阶段既不是全程 exactly-once，也不是财务级准确结算。正式切换还需要跨日封账、KV 历史衔接、可靠对账及故障恢复方案。
+
+
+### P25：生产环境内切换前的 API Key 用量对账（不依赖独立 Staging）
+
+本阶段按直接在生产环境内进行受控迁移的要求，增加 **管理 Session 专属、默认关闭、只读** 诊断：
+`GET /api/v1/analytics/key-usage-compare?keyId=<uuid>&day=YYYY-MM-DD`。
+
+只有显式配置 `KEY_USAGE_CUTOVER_COMPARE=1` 且 KV 与 SQLite DO 绑定都存在时才开放。Bearer API Key 仍返回 401；不开放给匿名访问者。每次只允许 **一个 Key、一个最近 35 天内的 UTC 日**，不接受任意查询或批量扫描，避免诊断成本无界。该诊断同时读取 `readDailyKeyUsage()` 和 `readKeyUsageShadow()`，**绝不修改**原有 `/keys` 列表、`/analytics/overview` 或 R2 日结。缺少任一来源时返回不可用，不将错误误认为 0。
+
+结果返回 KV 的近似量、SQLite 已接受的事件量及二者的观察差异，并始终标记 `comparable=false`、`safeToCutover=false`。原因：KV 本身存在并发丢失更新，Queue 可能积压或发生迟到、重试和死信，两套数值一致也不能证明已具备完整覆盖。**开关只能启用诊断，不能启用权威统计切换。**
+
+#### 直接生产切换仍需实现的功能
+
+1. 在生产中创建独立 Queue、DLQ 和私有 R2 归档桶，核对绑定、管辖区、消费端、付费额度及监控，验证消息生产、消费与积压处理。可以跳过独立 Staging，但生产端到端投递故障仍须可见。
+2. 明确 `KEY_USAGE_SOURCE=do` 的 **生效 UTC 日边界**，使切换日前的 KV/R2 历史、切换日后的 DO 计数不混合。若要求 UTC 日中切换，需建立每个 Key 的可审计基线，否则同一天数据有重复/遗漏风险。
+3. 改造 `listKeysWithEstimatedUsage()` 读取路径，并实现 **DO → R2 每日增量结算**。目前 `usageAppliedDays` 是一次性按日标记，不能处理 Queue 延迟到达后的补差。须支持按 Key / UTC 日可重入、CAS 防重复的累计水位。
+4. 新增真实 Queue backlog + DLQ 归档 / 隔离告警，定义消息保留期、重放授权、告警阈值和异常处置。Queue 只能保证至少一次投递，不保证业务操作与 Queue.send 原子提交。
+5. 独立的读源切换开关、健康自动回退与旧数据备份：出现读失败、积压或计数异常时停止新权威结算，旧 KV/R2 保留可追溯历史，不能直接清除。
+
+**尚未实现以上 1～5 时，不能通过设置 `KEY_USAGE_QUEUE_SHADOW=1` 和 `KEY_USAGE_CONSUMER_ENABLED=1` 声称统计完成迁移。** 当前 `wrangler.jsonc` 继续不绑定生产 Queue，不修改现有统计来源。此 PR 只增加生产端诊断入口的可选代码和覆盖测试，准备后续读/日结迁移，不自动部署或启用。
+
+参考：Cloudflare Queues delivery guarantees、dead-letter queues 和 Queue 实时 backlog：
+https://developers.cloudflare.com/queues/reference/delivery-guarantees/
+https://developers.cloudflare.com/queues/configuration/dead-letter-queues/
+https://developers.cloudflare.com/api/resources/queues/methods/get_metrics/
