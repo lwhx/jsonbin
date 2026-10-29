@@ -91,18 +91,22 @@ export async function compareShadowAnalytics(
   // Identifiers come ONLY from the literal whitelist. Never interpolate any
   // request input or arbitrary config values into SQL.
   const clause = `FROM ${dataset} WHERE timestamp >= $start AND timestamp < $end AND index1 = 'jsonbin'`;
+  // Cloudflare's NEW Analytics SQL API automatically weights COUNT/SUM/countIf
+  // for sampled events. Do NOT multiply by _sample_interval (that convention
+  // belongs to the separate, legacy Analytics Engine SQL endpoint). Weighted
+  // quantiles instead explicitly take the sampleInterval column.
   const queries = {
-    overview: `SELECT SUM(_sample_interval) AS totalRequests,
-      SUM(_sample_interval * double2) AS totalDurationMs,
-      quantileExactWeighted(0.95)(double2, _sample_interval) AS p95DurationMs
+    overview: `SELECT COUNT(*) AS totalRequests,
+      SUM(double2) AS totalDurationMs,
+      quantileWeighted(0.95, double2, sampleInterval) AS p95DurationMs
       ${clause}`,
-    statuses: `SELECT blob3 AS status, SUM(_sample_interval) AS requests
+    statuses: `SELECT blob3 AS status, COUNT(*) AS requests
       ${clause} GROUP BY blob3 ORDER BY requests DESC LIMIT 600`,
     endpoints: `SELECT blob1 AS method, blob2 AS route,
-      SUM(_sample_interval) AS requests,
-      SUM(_sample_interval * double2) AS totalDurationMs,
-      sumIf(_sample_interval, toUInt32(blob3) >= 400) AS errors,
-      quantileExactWeighted(0.95)(double2, _sample_interval) AS p95DurationMs
+      COUNT(*) AS requests,
+      SUM(double2) AS totalDurationMs,
+      countIf(toUInt32(blob3) >= 400) AS errors,
+      quantileWeighted(0.95, double2, sampleInterval) AS p95DurationMs
       ${clause} GROUP BY blob1, blob2 ORDER BY requests DESC LIMIT ${ENDPOINT_LIMIT + 1}`,
   };
   const sql = env.ANALYTICS_SQL!;
