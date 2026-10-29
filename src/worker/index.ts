@@ -196,6 +196,9 @@ app.onError((error, c) => {
 export default {
   fetch: app.fetch,
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    // Separate consumer gate; producer shutdown must not implicitly drop an
+    // existing backlog, and a stray production binding must fail closed.
+    if (env.KEY_USAGE_CONSUMER_ENABLED !== "1") throw new Error("usage_queue_consumer_disabled");
     if (batch.queue.startsWith("jsonbin-key-usage-dlq-")) {
       await archiveKeyUsageDeadLetters(batch, env);
     } else {
