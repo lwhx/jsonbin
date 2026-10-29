@@ -180,6 +180,21 @@ export function generateOpenApiSpec(): Record<string, unknown> {
           ],
         }),
       },
+      "/analytics/shadow-compare": {
+        get: op("对照 KV 与 Analytics Engine 影子指标（默认关闭）", {
+          security: SESSION_ONLY,
+          description: "仅管理员 Session；需显式启用两个影子开关、只读 SQL binding 和指定数据集。此端点不替代常规 Dashboard，不用于 API Key 结算。",
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["1h", "24h", "7d", "30d"] } },
+          ],
+          responses: {
+            ...ok("返回 legacy、shadow、coverage、comparable；SQL 不可用时仍保留旧 KV 数据"),
+            "400": { description: "invalid_range" },
+            "404": { description: "诊断功能未启用" },
+            "503": { description: "analytics_compare_unavailable" },
+          },
+        }),
+      },
       "/mcp": {
         post: op("Remote MCP Streamable HTTP POST 端点", {
           security: SESSION_OR_BEARER,
