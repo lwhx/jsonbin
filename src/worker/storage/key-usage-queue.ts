@@ -11,7 +11,7 @@
  * unchanged when KEY_USAGE_QUEUE_SHADOW is not "1".
  */
 import type { AnalyticsDataPoint } from "./analytics";
-import { deliverKeyUsageEvent } from "./key-usage-do-shadow";
+import { deliverKeyUsageEvent } from "./key-usage-do-shadow.ts";
 
 export type QueuedKeyUsageEvent = {
   version: 1;
