@@ -306,22 +306,64 @@ P22 的 SQLite DO 已能对每次成功提交的事件原子累加，但 **RPC �
 - 超过消费失败重试次数进入 DLQ。有效消息写入**独立私有 R2** 的 `internal/key-usage-dlq/v1/<UTC day>/<Key UUID>/<event UUID>.json`，保留人工重放所需最少字段；无效或注入敏感字段的消息**不保存原始内容**，只产生 `internal/key-usage-quarantine/v1/...` 固定类别的脱敏墓碑记录。归档失败会重试，不会主动 ACK。
 - Staging 配置把 DLQ 归档失败的消息继续转到第三个 `jsonbin-key-usage-quarantine-staging` 队列（无 consumer，供故障时人工介入）。**这不是永久备份**，到达保留期仍会删除，必须设置积压/重试/归档异常告警；没有完成监控之前严禁升级为权威计数路径。
 
-#### 独立 Staging 配置（仅模板，不自动部署）
+#### 独立 Staging 最小权限 Worker（已准备配置，不自动部署）
 
-`wrangler.usage-staging.jsonc` 是独立 Worker `jsonbin-usage-staging` 的**专用配置**，和生产 `jsonbin` Worker 不是同一个服务：单独 SQLite DO 命名空间、测试 R2 DATA 桶、独立 R2 死信归档桶、独立 Queue 与三层 DLQ。没有绑定生产 KV/R2；不运行生产 Cron。配置的生产/消费影子开关默认都是字符串 `"0"`。
+`wrangler.usage-staging.jsonc` 的入口现在是独立 `src/worker/usage-staging-entry.ts`，**不再挂载完整业务 Worker**。Staging 仅绑定独立的 SQLite 用量 DO、三条专用 Queue 和私有 R2 死信归档桶。没有生产 KV、业务 DATA R2、登录/Session、正式 API 路由或 Cron。三个开关均默认 `0`。
 
-创建云资源属于有成本的操作，需要先确认 Cloudflare 账户、额度、队列管辖区和环境隔离。操作示例（**不要在生产部署脚本中执行**）：
+受强随机 `STAGING_PROBE_TOKEN` Secret 保护、且只有 `KEY_USAGE_STAGING_MODE=1` 才能访问的测试 API：
+
+- `GET /__staging/usage/status`：只读取绑定和开关状态；
+- `POST /__staging/usage/emit`：仅允许合成 Key UUID、事件 UUID 和 UTC 时间戳，返回 Queue 持久化接收确认；
+- `GET /__staging/usage/day?keyId=...&day=YYYY-MM-DD`：只读该合成 Key 的 DO 日计数，用于验证 Queue 重放去重。
+
+#### 离线检查（零云端写入）
+
+```bash
+npm ci
+npm run typecheck
+npm run test:usage-staging:check
+npx wrangler deploy --config wrangler.usage-staging.jsonc --dry-run
+```
+
+#### 独立 Staging 云资源准备（仅核实账户、额度和费用后手动执行）
 
 ```bash
 npx wrangler queues create jsonbin-key-usage-events-staging
 npx wrangler queues create jsonbin-key-usage-dlq-staging
 npx wrangler queues create jsonbin-key-usage-quarantine-staging
-npx wrangler r2 bucket create jsonbin-usage-staging-data
 npx wrangler r2 bucket create jsonbin-usage-staging-deadletters
 npx wrangler deploy --config wrangler.usage-staging.jsonc
 ```
 
-Staging 的 ADMIN_PASSWORD / SESSION_SECRET 必须为**新生成、与生产完全无关**的强随机 Secret，绝不可提交 Git；额外用 Cloudflare Access 或 IP 白名单保护测试域名。资源都正常后，才可在**独立 Staging** 配置将两个影子开关分别设为 `"1"`，实际验证登录、创建**测试专用** API Key、重复投递、429/503、DO 强制失败、DLQ 故障、跨 UTC 日、R2 去重与消费指标。
+三个 Queue 必须在相同 jurisdiction；末端 quarantine Queue 没有 consumer，必须监控积压和消息保留期（无活跃 consumer 的 DLQ 通常 4 天后清理）。
+
+为独立 Staging 设置一次性生成的强 Secret（仅在终端环境，不提交到仓库）：
+
+```bash
+export STAGING_PROBE_TOKEN="$(openssl rand -hex 32)"
+printf '%s' "$STAGING_PROBE_TOKEN" | npx wrangler secret put STAGING_PROBE_TOKEN --config wrangler.usage-staging.jsonc
+```
+
+确认资源隔离和费用后，**仅在专用 Staging Worker 上**显式启用：
+
+```bash
+npx wrangler deploy --config wrangler.usage-staging.jsonc \
+  --var KEY_USAGE_STAGING_MODE:1 \
+  --var KEY_USAGE_QUEUE_SHADOW:1 \
+  --var KEY_USAGE_CONSUMER_ENABLED:1 \
+  --var KEY_USAGE_DO_SHADOW:0
+```
+
+然后用 Cloudflare 控制台显示的真实 Staging workers.dev 域名运行合成事件实测（地址必须属于 `jsonbin-usage-staging`，不得输入生产域名）：
+
+```bash
+export STAGING_URL="https://jsonbin-usage-staging.<account>.workers.dev"
+node scripts/usage-staging-smoke.mjs --run
+```
+
+脚本发送两条相同的**合成**事件，验证 Queue 实际消费且单 Key 的 SQLite DO 计数仍为 1。若加 Cloudflare Access，可在本机额外设置 `CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`；脚本和日志不输出凭据。CLI 实测之后，还需单独进行 DO 503、连续失败至 DLQ、归档失败、隔离队列积压、跨 UTC 日和成本/延迟故障注入。生产、普通 PR Preview 和权威 Key 日结均不参与这些测试。
+
+关闭测试时，先设置 `KEY_USAGE_QUEUE_SHADOW:0` 且保持 consumer 为 `1` 清空已收消息；确认主 Queue、DLQ 积压和 R2 归档完毕，再以默认 `0` 配置关闭 consumer。绝不能因节省 KV 成本直接切换生产 Key 计数。
 
 #### 持续验收与回退
 
