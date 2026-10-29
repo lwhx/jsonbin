@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createSystemHarness } from './support/system-harness.mjs';
+import { readKeyUsageShadow } from '../src/worker/storage/key-usage-do-shadow.ts';
 import {
   parseQueuedKeyUsageEvent, archiveKeyForEvent, enqueueKeyUsageShadow,
   consumeKeyUsageEvents, archiveKeyUsageDeadLetters,
@@ -57,4 +60,105 @@ test('P24b DLQ archives only validated private events; retries storage faults', 
   assert.deepEqual(objects[0][1], e);
   await archiveKeyUsageDeadLetters(batch, {});
   assert.equal(retried, 1);
+});
+
+test('P24b staging configuration isolates all resources and is explicitly disabled', () => {
+  const stage = JSON.parse(readFileSync('wrangler.usage-staging.jsonc', 'utf8'));
+  const prod = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+  assert.notEqual(stage.name, prod.name);
+  assert.equal(stage.vars.KEY_USAGE_QUEUE_SHADOW, '0');
+  assert.equal(stage.vars.KEY_USAGE_CONSUMER_ENABLED, '0');
+  assert.equal(stage.vars.KEY_USAGE_DO_SHADOW, '0');
+  assert.equal(prod.queues, undefined, 'no Cloudflare Queue may be configured on production');
+  assert.ok(stage.r2_buckets.every(bucket => bucket.bucket_name.includes('staging')));
+  assert.notEqual(stage.r2_buckets[0].bucket_name, stage.r2_buckets[1].bucket_name);
+  const [main, dlq] = stage.queues.consumers;
+  assert.equal(main.dead_letter_queue, dlq.queue);
+  assert.notEqual(dlq.dead_letter_queue, main.queue);
+  assert.ok(dlq.dead_letter_queue.includes('quarantine-staging'));
+  assert.equal(stage.queues.producers[0].queue, main.queue);
+});
+
+test('P24b Queue consumer ACKs successful and duplicate deliveries exactly once', async t => {
+  const h = await createSystemHarness('usage-queue-real-' + crypto.randomUUID());
+  t.after(() => h.close());
+  const e = event();
+  let acked = 0, retried = 0;
+  const message = { id: crypto.randomUUID(), body: e,
+    ack() { acked++; }, retry() { retried++; } };
+  const batch = { queue: 'jsonbin-key-usage-events-staging', messages: [message] };
+  await assert.rejects(
+    h.worker.queue(batch, { ...h.env, KEY_USAGE_CONSUMER_ENABLED: '0' }),
+    /usage_queue_consumer_disabled/,
+  );
+  assert.equal(acked, 0);
+  await h.worker.queue(batch, { ...h.env, KEY_USAGE_CONSUMER_ENABLED: '1' });
+  await h.worker.queue(batch, { ...h.env, KEY_USAGE_CONSUMER_ENABLED: '1' });
+  assert.equal(acked, 2);
+  assert.equal(retried, 0);
+  const count = await readKeyUsageShadow(
+    { ...h.env, KEY_USAGE_DO_SHADOW: '1' }, keyId, e.timestamp.slice(0, 10));
+  assert.equal(count.count, 1, 'SQLite event UUID must deduplicate Queue redeliveries');
+});
+
+test('P24b permanent counter fault retries individual messages without ACK', async () => {
+  const e = event();
+  let acks = 0, retries = 0;
+  const message = { id: crypto.randomUUID(), body: e,
+    ack() { acks++; }, retry({ delaySeconds }) { retries++; assert.equal(delaySeconds, 30); } };
+  await consumeKeyUsageEvents({ queue: 'jsonbin-key-usage-events-staging', messages: [message] }, {
+    KEY_USAGE_COUNTER: { idFromName: () => 'fake', get: () => ({ fetch: async () => new Response(null, { status: 503 }) }) },
+  });
+  assert.equal(acks, 0);
+  assert.equal(retries, 1);
+});
+
+test('P24b malformed DLQ payload is quarantined without recording raw content', async () => {
+  const writes = [];
+  let acks = 0, retries = 0;
+  const body = { version: 1, token: 'jb_live_PRIVATE', attackerSupplied: 'secret content' };
+  const msg = { id: crypto.randomUUID(), body, ack() { acks++; }, retry() { retries++; } };
+  const env = { KEY_USAGE_DLQ_ARCHIVE: { async put(key, data) { writes.push([key, data]); } } };
+  const batch = { queue: 'jsonbin-key-usage-dlq-staging', messages: [msg] };
+  await archiveKeyUsageDeadLetters(batch, env);
+  assert.equal(acks, 1);
+  assert.equal(retries, 0);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0][0], /^internal\\/key-usage-quarantine\\/v1\\/\\d{4}-\\d{2}-\\d{2}\\/[0-9a-f]{64}\\.json$/);
+  assert.deepEqual(JSON.parse(writes[0][1]), {
+    version: 1, category: 'invalid_usage_event', sourceQueue: batch.queue,
+  });
+  assert.ok(!writes[0][1].includes('PRIVATE'));
+  assert.ok(!writes[0][1].includes('secret content'));
+  await archiveKeyUsageDeadLetters(batch, env);
+  assert.equal(writes[0][0], writes[1][0], 'same Queue ID must have deterministic quarantine path');
+});
+
+test('P24b private R2 archive failures are retried without acknowledging messages', async () => {
+  const e = event();
+  let acks = 0, retries = 0;
+  const msg = { id: crypto.randomUUID(), body: e, ack() { acks++; },
+    retry({ delaySeconds }) { retries++; assert.equal(delaySeconds, 60); } };
+  const batch = { queue: 'jsonbin-key-usage-dlq-staging', messages: [msg] };
+  await archiveKeyUsageDeadLetters(batch, { KEY_USAGE_DLQ_ARCHIVE: {
+    async put() { throw new Error('sensitive storage error not allowed in logs'); },
+  } });
+  assert.equal(acks, 0);
+  assert.equal(retries, 1);
+});
+
+test('P24b manually replayed archived event uses its original UUID and never recounts', async t => {
+  const h = await createSystemHarness('usage-queue-replay-' + crypto.randomUUID());
+  t.after(() => h.close());
+  const { replayArchivedKeyUsageEvent } = await import('../src/worker/storage/key-usage-queue.ts');
+  const e = event();
+  const key = archiveKeyForEvent(e);
+  const env = { ...h.env, KEY_USAGE_DLQ_ARCHIVE: {
+    async get(path) { return path === key ? { text: async () => JSON.stringify(e) } : null; },
+  } };
+  assert.equal(await replayArchivedKeyUsageEvent(env, key), true);
+  assert.equal(await replayArchivedKeyUsageEvent(env, key), true);
+  assert.equal(await replayArchivedKeyUsageEvent(env, key.replace(e.keyId, 'abcdefab-1234-4234-8234-123456789012')), false);
+  assert.equal((await readKeyUsageShadow(
+    { ...h.env, KEY_USAGE_DO_SHADOW: '1' }, keyId, e.timestamp.slice(0, 10))).count, 1);
 });
