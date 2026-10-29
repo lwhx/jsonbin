@@ -1,4 +1,5 @@
 import { auditRequest } from "../activity";
+import { publicCurrentJsonResponse } from "../lib/public-bin-response";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { requireAccess } from "../middleware/auth";
@@ -43,6 +44,7 @@ type Variables = {
   };
   apiKey?: ApiKey;
   authorizedBinEtag?: string;
+  publicBinSnapshot?: NonNullable<Awaited<ReturnType<typeof getBinMetadata>>>;
 };
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -84,6 +86,17 @@ const readCurrent: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
       c.header("ETag", metadata.etag);
       c.header("X-JSONBin-Version", String(metadata.value.currentVersion));
       c.res = c.body(null, 304);
+      return;
+    }
+    // The anonymous current-JSON route can serve the immutable R2 value as a
+    // stream. Authorization, anonymous DO quota, and live metadata checks have
+    // already completed; all other representations retain the existing path.
+    if (metadata && isCurrentRecord && c.req.method === "GET" &&
+        metadata.value.visibility === "public" && !c.get("user") &&
+        !c.req.raw.headers.has("Authorization") &&
+        detectFormat(c.req.url, c.req.header("Accept")) === "json") {
+      c.set("publicBinSnapshot", metadata);
+      await next();
       return;
     }
     c.set("bin", metadata ? await getBin(c.env, id, metadata) : null);
@@ -585,6 +598,12 @@ app.post("/", requireAccess("bin:create"), async (c) => {
 });
 
 app.get("/:id", readCurrent, async (c) => {
+  const snapshot = c.get("publicBinSnapshot");
+  if (snapshot) {
+    let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+    try { waitUntil = promise => c.executionCtx.waitUntil(promise); } catch { /* local invocation */ }
+    return publicCurrentJsonResponse(c.env, c.req.raw, snapshot, waitUntil);
+  }
   const record = c.get("bin");
   if (!record) return c.json({ error: "not_found" }, 404);
 
