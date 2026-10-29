@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createSystemHarness } from './support/system-harness.mjs';
 import { readKeyUsageShadow } from '../src/worker/storage/key-usage-do-shadow.ts';
+import stagingWorker from '../src/worker/usage-staging-entry.ts';
 import {
   parseQueuedKeyUsageEvent, archiveKeyForEvent, enqueueKeyUsageShadow,
   consumeKeyUsageEvents, archiveKeyUsageDeadLetters,
@@ -70,8 +71,15 @@ test('P24b staging configuration isolates all resources and is explicitly disabl
   assert.equal(stage.vars.KEY_USAGE_CONSUMER_ENABLED, '0');
   assert.equal(stage.vars.KEY_USAGE_DO_SHADOW, '0');
   assert.equal(prod.queues, undefined, 'no Cloudflare Queue may be configured on production');
-  assert.ok(stage.r2_buckets.every(bucket => bucket.bucket_name.includes('staging')));
-  assert.notEqual(stage.r2_buckets[0].bucket_name, stage.r2_buckets[1].bucket_name);
+  assert.equal(stage.main, 'src/worker/usage-staging-entry.ts');
+  assert.equal(stage.vars.KEY_USAGE_STAGING_MODE, '0');
+  assert.equal(stage.kv_namespaces, undefined);
+  assert.equal(stage.assets, undefined);
+  assert.equal(stage.triggers, undefined);
+  assert.deepEqual(stage.r2_buckets.map(x => x.binding), ['KEY_USAGE_DLQ_ARCHIVE']);
+  assert.ok(stage.r2_buckets[0].bucket_name.includes('staging'));
+  assert.deepEqual(stage.durable_objects.bindings.map(x => x.name), ['KEY_USAGE_COUNTER']);
+  assert.ok(!('STAGING_PROBE_TOKEN' in stage.vars));
   const [main, dlq] = stage.queues.consumers;
   assert.equal(main.dead_letter_queue, dlq.queue);
   assert.notEqual(dlq.dead_letter_queue, main.queue);
@@ -165,4 +173,71 @@ test('P24b manually replayed archived event uses its original UUID and never rec
   assert.equal(await replayArchivedKeyUsageEvent(env, key.replace(e.keyId, 'abcdefab-1234-4234-8234-123456789012')), false);
   assert.equal((await readKeyUsageShadow(
     { ...h.env, KEY_USAGE_DO_SHADOW: '1' }, keyId, e.timestamp.slice(0, 10))).count, 1);
+});
+
+
+test('P24b standalone staging routes require a strong token and expose no business APIs', async () => {
+  const token = 'a'.repeat(64);
+  const env = { KEY_USAGE_STAGING_MODE: '1', STAGING_PROBE_TOKEN: token,
+    KEY_USAGE_QUEUE_SHADOW: '1', KEY_USAGE_CONSUMER_ENABLED: '1',
+    KEY_USAGE_EVENTS_QUEUE: { async send() {} }, KEY_USAGE_COUNTER: {} };
+  const get = (path, headers = {}) =>
+    stagingWorker.fetch(new Request('https://staging.example.test' + path, { headers }), env);
+  const absent = await get('/__staging/usage/status');
+  assert.equal(absent.status, 401);
+  assert.equal(absent.headers.get('Cache-Control'), 'no-store');
+  assert.equal((await get('/api/v1/system/health', { Authorization: 'Bearer ' + token })).status, 404);
+  assert.equal((await stagingWorker.fetch(
+    new Request('https://staging.example.test/__staging/usage/status', {
+      headers: { Authorization: 'Bearer ' + token },
+    }), { ...env, KEY_USAGE_STAGING_MODE: '0' })).status, 404);
+  const status = await get('/__staging/usage/status', { Authorization: 'Bearer ' + token });
+  assert.equal(status.status, 200);
+  assert.equal((await status.json()).producerEnabled, true);
+  const bad = await get('/__staging/usage/status?unexpected=1', { Authorization: 'Bearer ' + token });
+  assert.equal(bad.status, 400);
+});
+
+test('P24b staging HTTP emits only valid synthetic events and exposes SQLite count', async t => {
+  const h = await createSystemHarness('usage-staging-entry-' + crypto.randomUUID());
+  t.after(() => h.close());
+  const writes = [];
+  const token = '0'.repeat(64);
+  const env = { ...h.env, KEY_USAGE_STAGING_MODE: '1', STAGING_PROBE_TOKEN: token,
+    KEY_USAGE_QUEUE_SHADOW: '1', KEY_USAGE_CONSUMER_ENABLED: '1',
+    KEY_USAGE_EVENTS_QUEUE: { async send(body) { writes.push(body); } } };
+  const headers = { Authorization: 'Bearer ' + token };
+  const e = event();
+  const day = e.timestamp.slice(0, 10);
+  const path = '/__staging/usage/day?keyId=' + encodeURIComponent(e.keyId) + '&day=' + day;
+  const get = p => stagingWorker.fetch(new Request('https://staging.example.test' + p, { headers }), env);
+  const emit = body => stagingWorker.fetch(new Request('https://staging.example.test/__staging/usage/emit', {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }), env);
+  const baseline = await get(path);
+  assert.equal(baseline.status, 200);
+  assert.equal((await baseline.json()).count, 0);
+  assert.equal((await emit(e)).status, 202);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0], e);
+  assert.equal((await emit({ ...e, token: 'jb_live_SECRET' })).status, 400);
+  assert.equal(writes.length, 1, 'injected payload must never enqueue');
+  assert.equal((await emit({ ...e, timestamp: new Date(Date.now() - 36 * 86400000).toISOString() })).status, 422);
+
+  let acked = 0;
+  const msg = { id: crypto.randomUUID(), body: writes[0], ack() { acked++; }, retry() {} };
+  const batch = { queue: 'jsonbin-key-usage-events-staging', messages: [msg] };
+  await stagingWorker.queue(batch, env);
+  await stagingWorker.queue(batch, env);
+  assert.equal(acked, 2);
+  const result = await get(path);
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).count, 1);
+  await assert.rejects(stagingWorker.queue(batch, {
+    ...env, KEY_USAGE_CONSUMER_ENABLED: '0',
+  }), /usage_staging_consumer_disabled/);
+  await assert.rejects(stagingWorker.queue({
+    queue: 'jsonbin-key-usage-events-prod', messages: [msg],
+  }, env), /unsupported_usage_staging_queue/);
 });
