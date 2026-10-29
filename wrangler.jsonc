@@ -35,11 +35,19 @@
       {
         "name": "RATE_LIMITER",
         "class_name": "ApiRateLimiter"
+      },
+      {
+        "name": "KEY_USAGE_COUNTER",
+        "class_name": "ApiKeyUsageCounter"
       }
     ]
   },
   "exports": {
     "ApiRateLimiter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ApiKeyUsageCounter": {
       "type": "durable-object",
       "storage": "sqlite"
     }
@@ -50,6 +58,10 @@
         {
           "name": "RATE_LIMITER",
           "class_name": "ApiRateLimiter"
+        },
+        {
+          "name": "KEY_USAGE_COUNTER",
+          "class_name": "ApiKeyUsageCounter"
         }
       ]
     },
