@@ -60,6 +60,7 @@ const KNOWN_ROUTES = new Set([
   "/",
   "/activity",
   "/analytics/overview",
+  "/analytics/shadow-compare",
   "/auth/config",
   "/auth/github",
   "/auth/github/callback",
