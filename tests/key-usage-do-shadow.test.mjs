@@ -44,7 +44,9 @@ test('P22 shadow is disabled by default; unauthorized/anonymous/invalid Key even
   assert.equal(type, 'request');
   assert.equal(new URL(url).pathname, '/usage/increment');
   assert.equal(init.method, 'POST');
-  assert.deepEqual(JSON.parse(init.body), { timestamp: STAMP });
+  const payload = JSON.parse(init.body);
+  assert.equal(payload.timestamp, STAMP);
+  assert.match(payload.eventId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   for (const sensitive of [KEY_A, 'Bearer', 'Cookie', 'token', 'requestBody']) {
     assert.equal(init.body.includes(sensitive), false, 'shadow RPC body must carry timestamps only');
   }
@@ -58,34 +60,40 @@ test('P22 SQLite DO serializes concurrent per-Key increments with UTC day separa
   const stub = namespace.get(namespace.idFromName('jsonbin:key-usage:v1:' + KEY_A));
   const other = namespace.get(namespace.idFromName('jsonbin:key-usage:v1:' + KEY_B));
   const post = (target, body) => target.fetch('https://key-usage.internal/usage/increment', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body && 'timestamp' in body && !('eventId' in body)
+      ? { ...body, eventId: crypto.randomUUID() } : body),
   });
   const count = async (target, day) => (await target.fetch('https://key-usage.internal/usage/day/' + day)).json();
 
-  const times = Array.from({ length: 48 }, (_, i) => new Date(Date.parse('2026-10-08T23:58:00.000Z') + i * 1000).toISOString());
+  const day = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  const nextDay = new Date(Date.parse(day + 'T00:00:00.000Z') + 86400000).toISOString().slice(0, 10);
+  const late = day + 'T23:59:50.000Z';
+  const next = nextDay + 'T00:00:01.000Z';
+  const times = Array.from({ length: 48 }, (_, i) => new Date(Date.parse(day + 'T23:58:00.000Z') + i * 1000).toISOString());
   const responses = await Promise.all(times.map(timestamp => post(stub, { timestamp })));
   assert.ok(responses.every(r => r.status === 200), 'all concurrent SQLite UPSERTs must commit');
-  assert.deepEqual(await count(stub, '2026-10-08'), {
-    day: '2026-10-08', count: 48, lastUsedAt: times.at(-1),
+  assert.deepEqual(await count(stub, day), {
+    day, count: 48, lastUsedAt: times.at(-1),
   });
-  assert.deepEqual(await count(other, '2026-10-08'), {
-    day: '2026-10-08', count: 0, lastUsedAt: null,
+  assert.deepEqual(await count(other, day), {
+    day, count: 0, lastUsedAt: null,
   }, 'usage counters must be isolated per Key');
 
-  assert.equal((await post(stub, { timestamp: '2026-10-09T00:00:01.000Z' })).status, 200);
-  assert.deepEqual(await count(stub, '2026-10-09'), {
-    day: '2026-10-09', count: 1, lastUsedAt: '2026-10-09T00:00:01.000Z',
+  assert.equal((await post(stub, { timestamp: next })).status, 200);
+  assert.deepEqual(await count(stub, nextDay), {
+    day: nextDay, count: 1, lastUsedAt: next,
   });
-  assert.equal((await post(stub, { timestamp: STAMP })).status, 200);
-  assert.equal((await count(stub, '2026-10-08')).count, 49);
-  assert.equal((await count(stub, '2026-10-08')).lastUsedAt, STAMP);
+  assert.equal((await post(stub, { timestamp: late })).status, 200);
+  assert.equal((await count(stub, day)).count, 49);
+  assert.equal((await count(stub, day)).lastUsedAt, late);
 
   for (const bad of [
     {}, { timestamp: '2026-10-08' }, { timestamp: 1234 },
-    { timestamp: STAMP, keyId: KEY_A }, { timestamp: STAMP, count: 1000 },
+    { timestamp: late, keyId: KEY_A }, { timestamp: late, count: 1000 },
     { timestamp: '2026-99-08T23:59:50.000Z' },
   ]) assert.equal((await post(stub, bad)).status, 400, 'invalid body must not mutate usage');
-  assert.equal((await count(stub, '2026-10-08')).count, 49);
+  assert.equal((await count(stub, day)).count, 49);
   assert.equal((await stub.fetch('https://key-usage.internal/usage/day/2026-02-30')).status, 400);
   assert.equal((await stub.fetch('https://key-usage.internal/usage/increment')).status, 405);
   assert.equal((await stub.fetch('https://key-usage.internal/usage/other', { method: 'POST' })).status, 405);
