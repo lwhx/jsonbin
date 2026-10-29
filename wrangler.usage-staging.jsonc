@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jsonbin-usage-staging",
+  "main": "src/worker/usage-staging-entry.ts",
+  "compatibility_date": "2026-10-03",
+  "keep_vars": true,
+  "observability": {
+    "enabled": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "KEY_USAGE_DLQ_ARCHIVE",
+      "bucket_name": "jsonbin-usage-staging-deadletters"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "KEY_USAGE_COUNTER",
+        "class_name": "ApiKeyUsageCounter"
+      }
+    ]
+  },
+  "exports": {
+    "ApiKeyUsageCounter": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "KEY_USAGE_EVENTS_QUEUE",
+        "queue": "jsonbin-key-usage-events-staging"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "jsonbin-key-usage-events-staging",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 4,
+        "retry_delay": 30,
+        "max_concurrency": 2,
+        "dead_letter_queue": "jsonbin-key-usage-dlq-staging"
+      },
+      {
+        "queue": "jsonbin-key-usage-dlq-staging",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 10,
+        "retry_delay": 60,
+        "max_concurrency": 2,
+        "dead_letter_queue": "jsonbin-key-usage-quarantine-staging"
+      }
+    ]
+  },
+  "vars": {
+    "KEY_USAGE_QUEUE_SHADOW": "0",
+    "KEY_USAGE_CONSUMER_ENABLED": "0",
+    "KEY_USAGE_DO_SHADOW": "0",
+    "KEY_USAGE_STAGING_MODE": "0"
+  },
+  "workers_dev": true
+}

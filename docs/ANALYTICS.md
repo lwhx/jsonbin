@@ -288,3 +288,88 @@ P22 的 SQLite DO 已能对每次成功提交的事件原子累加，但 **RPC �
 **明确限制：这仍不是零丢失或财务级 exactly-once。** `waitUntil()` 有执行截止期限；如果 Worker 在把第一条事件可靠投递前终止，简单重试无法找回数据。下一小阶段必须引入可持久化的队列/Outbox（例如 Cloudflare Queues，并明确启用成本及消费端）和可观测 DLQ，完成“写入已持久化 → 可重放 → 按 Key 结算”全链路验证后才可替代 KV 的 API Key 用量来源。
 
 - **上线检查**：GitHub Node+Playwright 全套、Wrangler dry-run、Cloudflare Preview 构建全部通过；真实 Preview 双写压测必须验证同 Key 并发、重放、强制失败、跨日边界、R2 日结保持不变。若未真正开启 Preview 影子开关，测试只能证明本地 Miniflare 行为而不是 Cloudflare 平台端真实写入。
+
+
+### P24b：持久化 Queue 与独立 Staging 消费验收（默认关闭）
+
+本阶段新增 Queue.send 成功确认、消息级 ACK/retry、DLQ 私有 R2 归档和无效消息脱敏隔离。**生产原有 `wrangler.jsonc` 不含 Queue binding；KV `authorizedUses`、R2 日结、鉴权、限流和公开路由均不切换。** PR #25 未通过真实 Staging/成本验收前保持 Draft。
+
+**Cloudflare 官方限制（2026-10）**：Workers Previews **可以发送** Queue 消息，但**无法注册为 Queue consumer**。不能通过 PR Preview 的部署成功来宣称 Queue 处理链路可用。真实消费者必须部署到一个 **独立命名的 Staging Worker**。参考：
+- https://developers.cloudflare.com/workers/previews/resources/
+- https://developers.cloudflare.com/queues/configuration/dead-letter-queues/
+
+#### 投递与消费
+
+- `KEY_USAGE_QUEUE_SHADOW=1` 且 `KEY_USAGE_EVENTS_QUEUE` 已绑定：符合条件的请求在返回 HTTP 响应前等待 `Queue.send()` 成功；发送失败保留原业务响应，且只有显式同时开启原 `KEY_USAGE_DO_SHADOW=1` 时才回退原有 best-effort DO 影子计数。同一服务端 UUIDv4、UTC timestamp 始终复用。
+- `KEY_USAGE_CONSUMER_ENABLED=1` 是**另一独立开关**。关闭生产方并不意味着已有消息可丢弃；但新连接的 consumer 缺少显式启用时会失败、触发 Queue 重试，而非悄悄 ACK。正常消费端按每条消息 ACK 或 retry，不因为其他消息成功而误确认失败事件。
+- 主 Queue 消息固定为 `{version:1,keyId,eventId,timestamp}`，Key ID 为内部 UUID，不传 Token、请求体、Cookie、IP、路由或任意用户标签。对应 Key 的 SQLite DO 根据 eventId 幂等，重复消费不增加计数。
+- 超过消费失败重试次数进入 DLQ。有效消息写入**独立私有 R2** 的 `internal/key-usage-dlq/v1/<UTC day>/<Key UUID>/<event UUID>.json`，保留人工重放所需最少字段；无效或注入敏感字段的消息**不保存原始内容**，只产生 `internal/key-usage-quarantine/v1/...` 固定类别的脱敏墓碑记录。归档失败会重试，不会主动 ACK。
+- Staging 配置把 DLQ 归档失败的消息继续转到第三个 `jsonbin-key-usage-quarantine-staging` 队列（无 consumer，供故障时人工介入）。**这不是永久备份**，到达保留期仍会删除，必须设置积压/重试/归档异常告警；没有完成监控之前严禁升级为权威计数路径。
+
+#### 独立 Staging 最小权限 Worker（已准备配置，不自动部署）
+
+`wrangler.usage-staging.jsonc` 的入口现在是独立 `src/worker/usage-staging-entry.ts`，**不再挂载完整业务 Worker**。Staging 仅绑定独立的 SQLite 用量 DO、三条专用 Queue 和私有 R2 死信归档桶。没有生产 KV、业务 DATA R2、登录/Session、正式 API 路由或 Cron。三个开关均默认 `0`。
+
+受强随机 `STAGING_PROBE_TOKEN` Secret 保护、且只有 `KEY_USAGE_STAGING_MODE=1` 才能访问的测试 API：
+
+- `GET /__staging/usage/status`：只读取绑定和开关状态；
+- `POST /__staging/usage/emit`：仅允许合成 Key UUID、事件 UUID 和 UTC 时间戳，返回 Queue 持久化接收确认；
+- `GET /__staging/usage/day?keyId=...&day=YYYY-MM-DD`：只读该合成 Key 的 DO 日计数，用于验证 Queue 重放去重。
+
+#### 离线检查（零云端写入）
+
+```bash
+npm ci
+npm run typecheck
+npm run test:usage-staging:check
+npx wrangler deploy --config wrangler.usage-staging.jsonc --dry-run
+```
+
+#### 独立 Staging 云资源准备（仅核实账户、额度和费用后手动执行）
+
+```bash
+npx wrangler queues create jsonbin-key-usage-events-staging
+npx wrangler queues create jsonbin-key-usage-dlq-staging
+npx wrangler queues create jsonbin-key-usage-quarantine-staging
+npx wrangler r2 bucket create jsonbin-usage-staging-deadletters
+npx wrangler deploy --config wrangler.usage-staging.jsonc
+```
+
+三个 Queue 必须在相同 jurisdiction；末端 quarantine Queue 没有 consumer，必须监控积压和消息保留期（无活跃 consumer 的 DLQ 通常 4 天后清理）。
+
+为独立 Staging 设置一次性生成的强 Secret（仅在终端环境，不提交到仓库）：
+
+```bash
+export STAGING_PROBE_TOKEN="$(openssl rand -hex 32)"
+printf '%s' "$STAGING_PROBE_TOKEN" | npx wrangler secret put STAGING_PROBE_TOKEN --config wrangler.usage-staging.jsonc
+```
+
+确认资源隔离和费用后，**仅在专用 Staging Worker 上**显式启用：
+
+```bash
+npx wrangler deploy --config wrangler.usage-staging.jsonc \
+  --var KEY_USAGE_STAGING_MODE:1 \
+  --var KEY_USAGE_QUEUE_SHADOW:1 \
+  --var KEY_USAGE_CONSUMER_ENABLED:1 \
+  --var KEY_USAGE_DO_SHADOW:0
+```
+
+然后用 Cloudflare 控制台显示的真实 Staging workers.dev 域名运行合成事件实测（地址必须属于 `jsonbin-usage-staging`，不得输入生产域名）：
+
+```bash
+export STAGING_URL="https://jsonbin-usage-staging.<account>.workers.dev"
+node scripts/usage-staging-smoke.mjs --run
+```
+
+脚本发送两条相同的**合成**事件，验证 Queue 实际消费且单 Key 的 SQLite DO 计数仍为 1。若加 Cloudflare Access，可在本机额外设置 `CF_ACCESS_CLIENT_ID`、`CF_ACCESS_CLIENT_SECRET`；脚本和日志不输出凭据。CLI 实测之后，还需单独进行 DO 503、连续失败至 DLQ、归档失败、隔离队列积压、跨 UTC 日和成本/延迟故障注入。生产、普通 PR Preview 和权威 Key 日结均不参与这些测试。
+
+关闭测试时，先设置 `KEY_USAGE_QUEUE_SHADOW:0` 且保持 consumer 为 `1` 清空已收消息；确认主 Queue、DLQ 积压和 R2 归档完毕，再以默认 `0` 配置关闭 consumer。绝不能因节省 KV 成本直接切换生产 Key 计数。
+
+#### 持续验收与回退
+
+1. GitHub Node、Playwright、TypeScript、默认及 Staging Wrangler dry-run；分支 Preview 仅校验不含 Queue 的 HTTP/DO 构建。
+2. 独立 Staging Worker 验证消息真正进入 Queue 并被其独立 DO 消费，确认每条消息状态与 R2 归档一致；测试 Queue.sends、消费者重试、DLQ backlog、费用、延迟、用户端 P95。
+3. 观测报警：主 Queue 最老消息年龄、DLQ/隔离队列积压、R2 归档错误数、DO 409/422、重放次数。明确责任人、应急手册和短保留期内的人工介入方式。
+4. 当需要停止新事件时，仅关闭 `KEY_USAGE_QUEUE_SHADOW`；先确认并处理队列 backlog，再考虑关闭 `KEY_USAGE_CONSUMER_ENABLED`。保留既有 KV/R2 权威日结，**不能为了降本直接关闭 KV 写入**。
+
+**剩余一致性限制**：业务请求成功与 Queue.send 不能组成同一个数据库原子事务，Worker 在持久化发送前终止仍可能漏报；R2 中超过 35 天的事件会被 DO 拒绝（422），无法无限期重放；此外 Cloudflare Queue 保留期与重试次数有限，DLQ 末端故障仍可能丢失。此阶段既不是全程 exactly-once，也不是财务级准确结算。正式切换还需要跨日封账、KV 历史衔接、可靠对账及故障恢复方案。

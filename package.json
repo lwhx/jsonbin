@@ -19,7 +19,8 @@
     "test": "npm run build && npm run build:sdk && npm run build:mcp && npm run test:only",
     "test:browser": "playwright test",
     "cf:types": "wrangler types",
-    "test:only": "node --test tests/*.test.mjs"
+    "test:only": "node --test tests/*.test.mjs",
+    "test:usage-staging:check": "node scripts/usage-staging-smoke.mjs --check"
   },
   "dependencies": {
     "@cfworker/json-schema": "4.1.1",

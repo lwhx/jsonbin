@@ -22,6 +22,7 @@ import { dispatchWebhooks, sweepWebhookDeliveries } from "./storage/webhooks";
 import { recordAnalytics, normalizeRoute, type AnalyticsDataPoint } from "./storage/analytics";
 import { shadowAnalyticsEvent } from "./storage/analytics-engine-shadow";
 import { recordKeyUsageShadow } from "./storage/key-usage-do-shadow";
+import { enqueueKeyUsageShadow, consumeKeyUsageEvents, archiveKeyUsageDeadLetters } from "./storage/key-usage-queue";
 import { settleRecentKeyUsage } from "./storage/key-usage";
 import { pruneExpiredPasswordGuards } from "./storage/login-guard";
 import { version } from "../../package.json";
@@ -88,7 +89,13 @@ app.use("/api/*", async (c, next) => {
   // P22: independent SQLite shadow writes ONLY for permitted API Key use.
   // No flag means no DO RPC, no extra cost and no behavioral change. A shadow
   // error cannot change the response or existing KV/R2 usage bookkeeping.
-  const shadowUsage = c.req.method !== "OPTIONS" && c.env.KEY_USAGE_DO_SHADOW === "1" &&
+  // Optional Queue transport is awaited, not deferred to waitUntil. This makes
+  // successful enqueue durable before returning, while leaving API results intact.
+  const queued = c.req.method !== "OPTIONS" && c.env.KEY_USAGE_QUEUE_SHADOW === "1" &&
+    point.authType === "api_key" && point.qualifiedKeyUse
+    ? await enqueueKeyUsageShadow(c.env, point, requestId)
+    : false;
+  const shadowUsage = !queued && c.req.method !== "OPTIONS" && c.env.KEY_USAGE_DO_SHADOW === "1" &&
     point.authType === "api_key" && point.qualifiedKeyUse
     ? recordKeyUsageShadow(c.env, point, requestId)
     : null;
@@ -188,6 +195,16 @@ app.onError((error, c) => {
 
 export default {
   fetch: app.fetch,
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    // Separate consumer gate; producer shutdown must not implicitly drop an
+    // existing backlog, and a stray production binding must fail closed.
+    if (env.KEY_USAGE_CONSUMER_ENABLED !== "1") throw new Error("usage_queue_consumer_disabled");
+    if (batch.queue.startsWith("jsonbin-key-usage-dlq-")) {
+      await archiveKeyUsageDeadLetters(batch, env);
+    } else {
+      await consumeKeyUsageEvents(batch, env);
+    }
+  },
   async scheduled(controller: ScheduledController, env: Env) {
     const requestId = crypto.randomUUID();
     const [sweep] = await Promise.allSettled([sweepBins(env, Date.now(), async ({ action, id }) => {
